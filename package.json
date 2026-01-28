@@ -24,6 +24,7 @@
   },
   "homepage": "https://github.com/GoHighLevel/ghl-marketplace-app-template#readme",
   "dependencies": {
+    "@supabase/supabase-js": "^2.93.2",
     "axios": "^1.5.1",
     "body-parser": "^1.20.2",
     "crypto-js": "^4.1.1",
