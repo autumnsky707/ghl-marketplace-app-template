@@ -30,12 +30,12 @@ export interface FreeSlotsRequest {
 
 export interface BookAppointmentRequest {
   locationId: string;
-  contactId: string;
-  startTime: string;       // ISO 8601 datetime
-  endTime: string;
+  calendarId?: string;      // optional override, falls back to installation default
+  startTime: string;        // ISO 8601 datetime
+  customerName: string;
+  customerEmail: string;
+  customerPhone?: string;
   title?: string;
-  appointmentStatus?: string;
-  assignedUserId?: string;
   notes?: string;
 }
 

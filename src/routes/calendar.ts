@@ -64,59 +64,105 @@ router.post("/free-slots", async (req: Request, res: Response) => {
 
 /**
  * POST /api/calendar/book
- * Book an appointment.
+ * Create or upsert a GHL contact, then book an appointment.
  *
- * Body: { locationId, contactId, startTime, endTime, title?, appointmentStatus?, assignedUserId?, notes? }
+ * Body: { locationId, calendarId?, startTime, customerName, customerEmail, customerPhone?, title?, notes? }
  */
 router.post("/book", async (req: Request, res: Response) => {
   try {
     const {
       locationId,
-      contactId,
+      calendarId,
       startTime,
-      endTime,
+      customerName,
+      customerEmail,
+      customerPhone,
       title,
-      appointmentStatus,
-      assignedUserId,
       notes,
     } = req.body as BookAppointmentRequest;
 
-    if (!locationId || !contactId || !startTime || !endTime) {
+    if (!locationId || !startTime || !customerName || !customerEmail) {
       return res.status(400).json({
         success: false,
-        error: "Missing required fields: locationId, contactId, startTime, endTime",
+        error: "Missing required fields: locationId, startTime, customerName, customerEmail",
       });
     }
 
+    // 1. Look up installation
     const installation = await getInstallation(locationId);
     if (!installation) {
       return res.status(404).json({ success: false, error: "Installation not found" });
     }
 
-    if (!installation.calendar_id) {
+    const resolvedCalendarId = calendarId || installation.calendar_id;
+    if (!resolvedCalendarId) {
       return res.status(400).json({ success: false, error: "No calendar configured for this location" });
     }
 
+    // 2. Get authenticated client (refreshes token if expired)
     const client = await ghl.requests(locationId);
-    const resp = await client.post(
+
+    // 3. Create or upsert contact in GHL
+    const nameParts = customerName.trim().split(/\s+/);
+    const firstName = nameParts[0];
+    const lastName = nameParts.slice(1).join(" ") || "";
+
+    const contactPayload: Record<string, string> = {
+      locationId,
+      email: customerEmail,
+      firstName,
+    };
+    if (lastName) contactPayload.lastName = lastName;
+    if (customerPhone) contactPayload.phone = customerPhone;
+
+    let contactId: string;
+    try {
+      const contactResp = await client.post("/contacts/upsert", contactPayload, {
+        headers: { Version: "2021-07-28" },
+      });
+      contactId = contactResp.data?.contact?.id;
+      if (!contactId) {
+        throw new Error("No contact ID returned from upsert");
+      }
+      console.log(`[Calendar] Contact upserted: ${contactId} (${customerEmail})`);
+    } catch (err: any) {
+      console.error("[Calendar] Contact upsert failed:", err?.response?.data || err.message);
+      return res.status(500).json({
+        success: false,
+        error: "Failed to create/upsert contact: " + (err?.response?.data?.message || err.message),
+      });
+    }
+
+    // 4. Book the appointment
+    const startISO = new Date(startTime).toISOString();
+    // Default to 1 hour duration
+    const endISO = new Date(new Date(startTime).getTime() + 60 * 60 * 1000).toISOString();
+
+    const appointmentResp = await client.post(
       "/calendars/events/appointments",
       {
-        calendarId: installation.calendar_id,
+        calendarId: resolvedCalendarId,
         locationId,
         contactId,
-        startTime: new Date(startTime).toISOString(),
-        endTime: new Date(endTime).toISOString(),
+        startTime: startISO,
+        endTime: endISO,
         title: title || "Appointment",
-        appointmentStatus: appointmentStatus || "confirmed",
-        assignedUserId: assignedUserId || undefined,
+        appointmentStatus: "confirmed",
         notes: notes || undefined,
       },
       { headers: { Version: "2021-07-28" } }
     );
 
+    const appointmentId = appointmentResp.data?.id || appointmentResp.data?.event?.id || null;
+
+    console.log(`[Calendar] Appointment booked: ${appointmentId} for contact ${contactId}`);
+
+    // 5. Return success
     return res.json({
       success: true,
-      data: resp.data,
+      appointmentId,
+      contactId,
+      data: appointmentResp.data,
     });
   } catch (error: any) {
     console.error("[Calendar] book error:", error?.response?.data || error.message);
