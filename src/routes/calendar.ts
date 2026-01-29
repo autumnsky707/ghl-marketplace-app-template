@@ -77,6 +77,7 @@ router.post("/book", async (req: Request, res: Response) => {
       customerName,
       customerEmail,
       customerPhone,
+      serviceType,
       title,
       notes,
     } = req.body as BookAppointmentRequest;
@@ -138,6 +139,21 @@ router.post("/book", async (req: Request, res: Response) => {
     // Default to 1 hour duration
     const endISO = new Date(new Date(startTime).getTime() + 60 * 60 * 1000).toISOString();
 
+    // Build title: "Service Type - Customer Name" or fallback
+    let appointmentTitle = title || "Appointment";
+    if (serviceType) {
+      appointmentTitle = `${serviceType} - ${customerName}`;
+    }
+
+    // Build notes: prepend service type, then any extra notes
+    let appointmentNotes = "";
+    if (serviceType) {
+      appointmentNotes = `Service: ${serviceType}`;
+    }
+    if (notes) {
+      appointmentNotes = appointmentNotes ? `${appointmentNotes}\n${notes}` : notes;
+    }
+
     const appointmentResp = await client.post(
       "/calendars/events/appointments",
       {
@@ -146,9 +162,9 @@ router.post("/book", async (req: Request, res: Response) => {
         contactId,
         startTime: startISO,
         endTime: endISO,
-        title: title || "Appointment",
+        title: appointmentTitle,
         appointmentStatus: "confirmed",
-        notes: notes || undefined,
+        notes: appointmentNotes || undefined,
       },
       { headers: { Version: "2021-07-28" } }
     );
