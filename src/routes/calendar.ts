@@ -151,24 +151,50 @@ router.post("/book", async (req: Request, res: Response) => {
       appointmentNotes = appointmentNotes ? `${appointmentNotes}\n${notes}` : notes;
     }
 
+    const appointmentPayload = {
+      calendarId: resolvedCalendarId,
+      locationId,
+      contactId,
+      startTime: startISO,
+      endTime: endISO,
+      title: appointmentTitle,
+      appointmentStatus: "confirmed",
+      notes: appointmentNotes || undefined,
+    };
+
+    console.log("[Calendar] ===== CREATE APPOINTMENT REQUEST =====");
+    console.log("[Calendar] Endpoint: POST /calendars/events/appointments");
+    console.log("[Calendar] Payload:", JSON.stringify(appointmentPayload, null, 2));
+
     const appointmentResp = await client.post(
       "/calendars/events/appointments",
-      {
-        calendarId: resolvedCalendarId,
-        locationId,
-        contactId,
-        startTime: startISO,
-        endTime: endISO,
-        title: appointmentTitle,
-        appointmentStatus: "confirmed",
-        notes: appointmentNotes || undefined,
-      },
+      appointmentPayload,
       { headers: { Version: "2021-07-28" } }
     );
+
+    console.log("[Calendar] ===== CREATE APPOINTMENT RESPONSE =====");
+    console.log("[Calendar] Response:", JSON.stringify(appointmentResp.data, null, 2));
 
     const appointmentId = appointmentResp.data?.id || appointmentResp.data?.event?.id || null;
 
     console.log(`[Calendar] Appointment booked: ${appointmentId} for contact ${contactId}`);
+
+    // Also create an Appointment Note via the separate Notes API
+    // (the notes field on create may not show in GHL UI)
+    if (appointmentNotes && appointmentId) {
+      try {
+        console.log(`[Calendar] Creating appointment note via Notes API for ${appointmentId}`);
+        const noteResp = await client.post(
+          `/calendars/events/appointments/${appointmentId}/notes`,
+          { body: appointmentNotes },
+          { headers: { Version: "2021-07-28" } }
+        );
+        console.log("[Calendar] Note created:", JSON.stringify(noteResp.data, null, 2));
+      } catch (noteErr: any) {
+        // Non-blocking: log but don't fail the booking
+        console.error("[Calendar] Failed to create appointment note:", noteErr?.response?.data || noteErr.message);
+      }
+    }
 
     // 5. Return success
     return res.json({
