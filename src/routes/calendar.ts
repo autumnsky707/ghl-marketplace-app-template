@@ -139,11 +139,8 @@ router.post("/book", async (req: Request, res: Response) => {
     // Default to 1 hour duration
     const endISO = new Date(new Date(startTime).getTime() + 60 * 60 * 1000).toISOString();
 
-    // Build title: "Service Type - Customer Name" or fallback
-    let appointmentTitle = title || "Appointment";
-    if (serviceType) {
-      appointmentTitle = `${serviceType} - ${customerName}`;
-    }
+    // Build title from serviceType or fallback
+    const appointmentTitle = serviceType || title || "Appointment";
 
     // Build notes: prepend service type, then any extra notes
     let appointmentNotes = "";
