@@ -43,6 +43,87 @@ function normalizePhone(raw: string): string {
   return "+" + digits;
 }
 
+const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+// ---------------------------------------------------------------------------
+// Shared helper: determine which days-of-week a calendar is actually open.
+// Fetches a reference week (next Mon–Sun) of free-slots from GHL and caches
+// the result per calendar so every free-slots call doesn't double-fetch.
+// ---------------------------------------------------------------------------
+
+interface DayScheduleInfo {
+  earliest: string; // first slot ISO string
+  latest: string;   // last slot ISO string
+  slotCount: number;
+}
+
+interface CalendarSchedule {
+  openDays: Set<number>;               // day-of-week numbers (0=Sun … 6=Sat)
+  dayInfo: Map<number, DayScheduleInfo>;
+}
+
+const scheduleCache: Map<string, { schedule: CalendarSchedule; fetchedAt: number }> = new Map();
+const SCHEDULE_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+async function getCalendarSchedule(
+  client: any,
+  calendarId: string,
+  timezone: string,
+): Promise<CalendarSchedule> {
+  const cached = scheduleCache.get(calendarId);
+  if (cached && Date.now() - cached.fetchedAt < SCHEDULE_CACHE_TTL) {
+    console.log(`[Calendar] Schedule cache HIT for ${calendarId}`);
+    return cached.schedule;
+  }
+
+  console.log(`[Calendar] Schedule cache MISS for ${calendarId} — fetching reference week`);
+
+  // Next Monday → Sunday
+  const now = new Date();
+  const dow = now.getDay(); // 0=Sun
+  const daysUntilMon = dow === 0 ? 1 : dow === 1 ? 7 : 8 - dow;
+  const refStart = new Date(now);
+  refStart.setDate(now.getDate() + daysUntilMon);
+  refStart.setHours(0, 0, 0, 0);
+  const refEnd = new Date(refStart);
+  refEnd.setDate(refStart.getDate() + 6);
+  refEnd.setHours(23, 59, 59, 999);
+
+  const resp = await client.get(
+    `/calendars/${calendarId}/free-slots?startDate=${refStart.getTime()}&endDate=${refEnd.getTime()}&timezone=${encodeURIComponent(timezone)}`,
+    { headers: { Version: "2021-07-28" } },
+  );
+
+  const rawData = resp.data || {};
+  const dateKeys = Object.keys(rawData).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k));
+
+  const openDays = new Set<number>();
+  const dayInfo = new Map<number, DayScheduleInfo>();
+
+  for (const dateKey of dateKeys) {
+    const entry = rawData[dateKey];
+    const slots: string[] = Array.isArray(entry) ? entry : (entry?.slots || []);
+    if (slots.length === 0) continue;
+
+    const d = new Date(dateKey + "T00:00:00");
+    const dayNum = d.getDay();
+    openDays.add(dayNum);
+
+    if (!dayInfo.has(dayNum)) {
+      dayInfo.set(dayNum, { earliest: slots[0], latest: slots[slots.length - 1], slotCount: slots.length });
+    }
+  }
+
+  const schedule: CalendarSchedule = { openDays, dayInfo };
+  scheduleCache.set(calendarId, { schedule, fetchedAt: Date.now() });
+
+  console.log(
+    `[Calendar] Open days for ${calendarId}: ${Array.from(openDays).sort().map((d) => DAY_NAMES[d]).join(", ") || "(none)"}`,
+  );
+
+  return schedule;
+}
+
 /**
  * POST /api/calendar/free-slots
  * Check available time slots for a calendar.
@@ -92,6 +173,10 @@ router.post("/free-slots", async (req: Request, res: Response) => {
     console.log("[Calendar] nowPlusBuffer:", new Date(nowPlusBuffer).toISOString());
 
     const client = await ghl.requests(locationId);
+
+    // Determine which days-of-week the business is actually open
+    const { openDays } = await getCalendarSchedule(client, installation.calendar_id, tz);
+
     const resp = await client.get(slotsUrl, {
       headers: { Version: "2021-07-28" },
     });
@@ -99,28 +184,28 @@ router.post("/free-slots", async (req: Request, res: Response) => {
     const rawData = resp.data;
     console.log("[Calendar] Response keys:", Object.keys(rawData));
 
-    // Filter out any slots that have already passed (with 15-min buffer)
-    // GHL may still return some past slots depending on how it handles startDate
+    // Filter: remove past slots and slots on days the business is closed
     const filtered: Record<string, any> = {};
-    const cutoff = new Date(nowPlusBuffer);
 
     if (typeof rawData === "object" && rawData !== null) {
       const dateKeys = Object.keys(rawData).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
       console.log(`[Calendar] Dates returned: ${dateKeys.length}`);
 
       for (const dateKey of dateKeys) {
+        const d = new Date(dateKey + "T00:00:00");
+        const dow = d.getDay();
+        const dayName = DAY_NAMES[dow];
+        const isClosedDay = !openDays.has(dow);
+
         const entry = rawData[dateKey];
         // Handle both { slots: [...] } and direct array formats
         const daySlots: string[] = Array.isArray(entry) ? entry : (entry?.slots || []);
         const futureSlots = daySlots.filter((slot) => new Date(slot).getTime() >= nowPlusBuffer);
 
-        const dayOfWeek = new Date(dateKey).toLocaleDateString("en-US", { weekday: "long", timeZone: tz });
-        const isWeekend = ["Saturday", "Sunday"].includes(dayOfWeek);
         const removedCount = daySlots.length - futureSlots.length;
-        console.log(`[Calendar]   ${dateKey} (${dayOfWeek})${isWeekend ? " *** WEEKEND *** SKIPPED" : ""}: ${daySlots.length} total, ${removedCount} past, ${futureSlots.length} available`);
+        console.log(`[Calendar]   ${dateKey} (${dayName})${isClosedDay ? " *** CLOSED DAY *** SKIPPED" : ""}: ${daySlots.length} total, ${removedCount} past, ${futureSlots.length} available`);
 
-        // Skip weekends — calendar is Mon-Fri only
-        if (isWeekend) continue;
+        if (isClosedDay) continue;
 
         if (futureSlots.length > 0) {
           // Preserve the original structure format
@@ -179,69 +264,12 @@ router.get("/business-hours", async (req: Request, res: Response) => {
     }
 
     const client = await ghl.requests(locationId);
-
-    // GHL's centralized Schedules system doesn't expose hours via a
-    // reliable API path for service_booking calendars.  Instead, infer
-    // business hours from the free-slots response for the next 7 days.
     const tz = installation.timezone || "America/New_York";
-    const now = new Date();
-    // Start from next Monday to get a clean week
-    const dayOfWeek = now.getDay(); // 0=Sun
-    const daysUntilMon = dayOfWeek === 0 ? 1 : dayOfWeek === 1 ? 7 : 8 - dayOfWeek;
-    const startDate = new Date(now);
-    startDate.setDate(now.getDate() + daysUntilMon);
-    startDate.setHours(0, 0, 0, 0);
-    const endDate = new Date(startDate);
-    endDate.setDate(startDate.getDate() + 6); // Mon-Sun
 
-    const startMs = startDate.getTime();
+    // Uses the same cached reference-week logic as free-slots filtering
+    const { openDays, dayInfo } = await getCalendarSchedule(client, calId, tz);
 
-    // Extend endDate to end-of-day so GHL includes the last day's slots
-    endDate.setHours(23, 59, 59, 999);
-    const endMs = endDate.getTime();
-
-    console.log(`[Calendar] Inferring hours from free-slots: ${startDate.toISOString()} to ${endDate.toISOString()}`);
-    console.log(`[Calendar] startMs=${startMs}, endMs=${endMs}, tz=${tz}, calId=${calId}`);
-
-    const slotsUrl = `/calendars/${calId}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
-    console.log(`[Calendar] Free-slots URL: ${slotsUrl}`);
-
-    const slotsResp = await client.get(slotsUrl, {
-      headers: { Version: "2021-07-28" },
-    });
-
-    console.log(`[Calendar] Raw free-slots response keys:`, Object.keys(slotsResp.data || {}));
-    console.log(`[Calendar] Raw free-slots response (first 1000 chars):`, JSON.stringify(slotsResp.data).slice(0, 1000));
-
-    // GHL returns either { "date": { slots: [...] }, ... } or { "date": [...], ... }
-    const rawData = slotsResp.data || {};
-    // Filter out non-date keys like "traceId"
-    const dateKeys = Object.keys(rawData).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
-
-    console.log(`[Calendar] Date keys found: ${dateKeys.length}`, dateKeys);
-
-    // Analyze: which days have slots, and what's the earliest/latest time?
-    const dayHours: Map<number, { earliest: string; latest: string }> = new Map();
-
-    for (const dateKey of dateKeys) {
-      const entry = rawData[dateKey];
-      // Handle both { slots: [...] } and direct array formats
-      const daySlots: string[] = Array.isArray(entry) ? entry : (entry?.slots || []);
-      if (daySlots.length === 0) continue;
-
-      const d = new Date(dateKey + "T00:00:00");
-      const dow = d.getDay();
-      const earliest = daySlots[0];
-      const latest = daySlots[daySlots.length - 1];
-
-      console.log(`[Calendar]   ${dateKey} (${DAY_NAMES[dow]}): ${daySlots.length} slots, first=${earliest}, last=${latest}`);
-
-      if (!dayHours.has(dow)) {
-        dayHours.set(dow, { earliest, latest });
-      }
-    }
-
-    if (dayHours.size === 0) {
+    if (openDays.size === 0) {
       return res.json({
         success: true,
         formatted: "No availability found for the coming week.",
@@ -251,9 +279,9 @@ router.get("/business-hours", async (req: Request, res: Response) => {
 
     // Group days with the same hours (use time portion only, not full ISO date)
     const hourGroups: Map<string, number[]> = new Map();
-    for (const [dow, times] of dayHours) {
-      const earliestTime = times.earliest.match(/T(\d{2}:\d{2})/)?.[1] || times.earliest;
-      const latestTime = times.latest.match(/T(\d{2}:\d{2})/)?.[1] || times.latest;
+    for (const [dow, info] of dayInfo) {
+      const earliestTime = info.earliest.match(/T(\d{2}:\d{2})/)?.[1] || info.earliest;
+      const latestTime = info.latest.match(/T(\d{2}:\d{2})/)?.[1] || info.latest;
       const groupKey = `${earliestTime}|${latestTime}`;
       if (!hourGroups.has(groupKey)) hourGroups.set(groupKey, []);
       hourGroups.get(groupKey)!.push(dow);
@@ -281,7 +309,7 @@ router.get("/business-hours", async (req: Request, res: Response) => {
     return res.json({
       success: true,
       formatted,
-      daysAvailable: Array.from(dayHours.keys()).sort().map((d) => DAY_NAMES[d]),
+      daysAvailable: Array.from(openDays).sort().map((d) => DAY_NAMES[d]),
     });
   } catch (error: any) {
     console.error("[Calendar] business-hours error:", error?.response?.data || error.message);
@@ -292,22 +320,7 @@ router.get("/business-hours", async (req: Request, res: Response) => {
   }
 });
 
-// --- Business hours formatting helpers ---
-
-interface OpenHoursEntry {
-  daysOfTheWeek: number[];
-  hours: { openHour: number; openMinute: number; closeHour: number; closeMinute: number }[];
-}
-
-const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-
-function formatTime(hour: number, minute: number): string {
-  const period = hour >= 12 ? "PM" : "AM";
-  const h = hour % 12 || 12;
-  if (minute === 0) return `${h} ${period}`;
-  const m = minute.toString().padStart(2, "0");
-  return `${h}:${m} ${period}`;
-}
+// --- Formatting helpers ---
 
 function formatTimeForSpeech(hour: number, minute: number): string {
   const period = hour >= 12 ? "PM" : "AM";
@@ -347,20 +360,6 @@ function formatDayRange(days: number[]): string {
   const names = sorted.map((d) => DAY_NAMES[d]);
   if (names.length === 2) return `${names[0]} and ${names[1]}`;
   return names.slice(0, -1).join(", ") + ", and " + names[names.length - 1];
-}
-
-function formatBusinessHoursForSpeech(openHours: OpenHoursEntry[]): string {
-  const parts: string[] = [];
-
-  for (const entry of openHours) {
-    const dayRange = formatDayRange(entry.daysOfTheWeek);
-    const timeRanges = entry.hours.map(
-      (h) => `${formatTimeForSpeech(h.openHour, h.openMinute)} to ${formatTimeForSpeech(h.closeHour, h.closeMinute)}`
-    );
-    parts.push(`${dayRange}, ${timeRanges.join(" and ")}`);
-  }
-
-  return parts.join(". ");
 }
 
 /**
