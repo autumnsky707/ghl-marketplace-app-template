@@ -209,7 +209,7 @@ router.post("/book", async (req: Request, res: Response) => {
       if (!appointmentId) {
         console.error("[Calendar] CANNOT create note: no appointmentId extracted from response");
       } else {
-        const noteUrl = `/calendars/events/appointments/${appointmentId}/notes`;
+        const noteUrl = `/calendars/appointments/${appointmentId}/notes`;
         const noteBody = { body: appointmentNotes };
 
         console.log("[Calendar] ===== CREATE NOTE REQUEST =====");
