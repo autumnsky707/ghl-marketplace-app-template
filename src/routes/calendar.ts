@@ -75,15 +75,47 @@ router.post("/free-slots", async (req: Request, res: Response) => {
     const startMs = new Date(startDate).getTime();
     const endMs = new Date(endDate).getTime();
 
+    const slotsUrl = `/calendars/${installation.calendar_id}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
+
+    console.log("[Calendar] ===== FREE SLOTS REQUEST =====");
+    console.log("[Calendar] URL:", slotsUrl);
+    console.log("[Calendar] calendarId:", installation.calendar_id);
+    console.log("[Calendar] startDate:", startDate, "->", startMs);
+    console.log("[Calendar] endDate:", endDate, "->", endMs);
+    console.log("[Calendar] timezone:", tz);
+
     const client = await ghl.requests(locationId);
-    const resp = await client.get(
-      `/calendars/${installation.calendar_id}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`,
-      { headers: { Version: "2021-07-28" } }
-    );
+    const resp = await client.get(slotsUrl, {
+      headers: { Version: "2021-07-28" },
+    });
+
+    // Log raw GHL response to see exactly what slots are returned
+    const rawData = resp.data;
+    console.log("[Calendar] ===== FREE SLOTS RAW RESPONSE =====");
+    console.log("[Calendar] Response keys:", Object.keys(rawData));
+
+    // Log each date and its slots to identify weekend slots
+    const slots = rawData?.slots || rawData;
+    if (typeof slots === "object" && slots !== null) {
+      const dateKeys = Object.keys(slots).sort();
+      console.log(`[Calendar] Dates returned: ${dateKeys.length}`);
+      for (const dateKey of dateKeys) {
+        const daySlots = slots[dateKey];
+        const slotCount = Array.isArray(daySlots) ? daySlots.length : "N/A";
+        const dayOfWeek = new Date(dateKey).toLocaleDateString("en-US", { weekday: "long", timeZone: tz });
+        const isWeekend = ["Saturday", "Sunday"].includes(dayOfWeek);
+        console.log(`[Calendar]   ${dateKey} (${dayOfWeek})${isWeekend ? " *** WEEKEND ***" : ""}: ${slotCount} slots`);
+        if (isWeekend && Array.isArray(daySlots) && daySlots.length > 0) {
+          console.log(`[Calendar]   ^^^ WEEKEND SLOTS RETURNED BY GHL:`, JSON.stringify(daySlots.slice(0, 3)));
+        }
+      }
+    } else {
+      console.log("[Calendar] Raw response (not object):", JSON.stringify(rawData).slice(0, 500));
+    }
 
     return res.json({
       success: true,
-      data: resp.data,
+      data: rawData,
     });
   } catch (error: any) {
     console.error("[Calendar] free-slots error:", error?.response?.data || error.message);
@@ -233,7 +265,21 @@ router.post("/book", async (req: Request, res: Response) => {
 
     console.log(`[Calendar] Appointment booked: ${appointmentId} for contact ${contactId}`);
 
-    // 5. Return success
+    // 5. Create Internal Note via Appointment Notes API
+    if (appointmentNotes && appointmentId) {
+      try {
+        const noteResp = await client.post(
+          `/calendars/appointments/${appointmentId}/notes`,
+          { body: appointmentNotes },
+          { headers: { Version: "2021-07-28" } }
+        );
+        console.log(`[Calendar] Note created for ${appointmentId}:`, JSON.stringify(noteResp.data));
+      } catch (noteErr: any) {
+        console.error("[Calendar] Note creation failed:", noteErr?.response?.status, noteErr?.response?.data || noteErr.message);
+      }
+    }
+
+    // 6. Return success
     return res.json({
       success: true,
       appointmentId,
