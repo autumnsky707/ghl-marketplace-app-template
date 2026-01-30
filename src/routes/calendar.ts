@@ -193,8 +193,13 @@ router.post("/free-slots", async (req: Request, res: Response) => {
     const rawData = resp.data;
     console.log("[Calendar] Response keys:", Object.keys(rawData));
 
-    // Filter: remove past slots and slots on days the business is closed
-    const filtered: Record<string, any> = {};
+    // Filter: remove past slots, closed days, and format for the voice agent
+    const availableDates: Array<{
+      date: string;
+      dayOfWeek: string;
+      formattedSlots: string[];
+      slots: string[];
+    }> = [];
 
     if (typeof rawData === "object" && rawData !== null) {
       const dateKeys = Object.keys(rawData).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
@@ -207,7 +212,6 @@ router.post("/free-slots", async (req: Request, res: Response) => {
         const isClosedDay = !openDays.has(dow);
 
         const entry = rawData[dateKey];
-        // Handle both { slots: [...] } and direct array formats
         const daySlots: string[] = Array.isArray(entry) ? entry : (entry?.slots || []);
         const futureSlots = daySlots.filter((slot) => new Date(slot).getTime() >= nowPlusBuffer);
 
@@ -215,28 +219,31 @@ router.post("/free-slots", async (req: Request, res: Response) => {
         console.log(`[Calendar]   ${dateKey} (${dayName})${isClosedDay ? " *** CLOSED DAY *** SKIPPED" : ""}: ${daySlots.length} total, ${removedCount} past, ${futureSlots.length} available`);
 
         if (isClosedDay) continue;
+        if (futureSlots.length === 0) continue;
 
-        if (futureSlots.length > 0) {
-          // Preserve the original structure format
-          if (Array.isArray(entry)) {
-            filtered[dateKey] = futureSlots;
-          } else {
-            filtered[dateKey] = { ...entry, slots: futureSlots };
-          }
-        }
-      }
+        // Format each slot time for easy reading by the voice agent
+        const formattedSlots = futureSlots.map((iso) => {
+          const match = iso.match(/T(\d{2}):(\d{2})/);
+          if (!match) return iso;
+          const h = parseInt(match[1], 10);
+          const m = parseInt(match[2], 10);
+          const period = h >= 12 ? "PM" : "AM";
+          const hour12 = h % 12 || 12;
+          return m === 0 ? `${hour12}:00 ${period}` : `${hour12}:${m.toString().padStart(2, "0")} ${period}`;
+        });
 
-      // Preserve non-date keys like traceId
-      for (const key of Object.keys(rawData)) {
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) {
-          filtered[key] = rawData[key];
-        }
+        availableDates.push({
+          date: dateKey,
+          dayOfWeek: dayName,
+          formattedSlots,
+          slots: futureSlots,
+        });
       }
     }
 
     return res.json({
       success: true,
-      data: filtered,
+      data: availableDates,
     });
   } catch (error: any) {
     console.error("[Calendar] free-slots error:", error?.response?.data || error.message);
