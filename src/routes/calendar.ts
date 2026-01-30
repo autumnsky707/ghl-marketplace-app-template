@@ -19,6 +19,30 @@ function toTitleCase(str: string): string {
     .join(" ");
 }
 
+const wordToDigit: Record<string, string> = {
+  zero: "0", oh: "0", o: "0",
+  one: "1", two: "2", three: "3", four: "4", five: "5",
+  six: "6", seven: "7", eight: "8", nine: "9",
+};
+
+function normalizePhone(raw: string): string {
+  // Replace spoken word numbers with digits, then strip non-digit chars
+  const converted = raw
+    .toLowerCase()
+    .split(/[\s\-,.]+/)
+    .map((token) => wordToDigit[token] ?? token)
+    .join("");
+  const digits = converted.replace(/\D/g, "");
+  // Strip leading 1 for US numbers if 11 digits
+  if (digits.length === 11 && digits.startsWith("1")) {
+    return "+" + digits;
+  }
+  if (digits.length === 10) {
+    return "+1" + digits;
+  }
+  return "+" + digits;
+}
+
 /**
  * POST /api/calendar/free-slots
  * Check available time slots for a calendar.
@@ -118,13 +142,18 @@ router.post("/book", async (req: Request, res: Response) => {
     const firstName = nameParts[0];
     const lastName = nameParts.slice(1).join(" ") || "";
 
+    const normalizedPhone = customerPhone ? normalizePhone(customerPhone) : null;
+    if (customerPhone) {
+      console.log(`[Calendar] Phone normalization: "${customerPhone}" -> "${normalizedPhone}"`);
+    }
+
     const contactPayload: Record<string, string> = {
       locationId,
       email: customerEmail,
       firstName,
     };
     if (lastName) contactPayload.lastName = lastName;
-    if (customerPhone) contactPayload.phone = customerPhone;
+    if (normalizedPhone) contactPayload.phone = normalizedPhone;
 
     let contactId: string;
     try {
