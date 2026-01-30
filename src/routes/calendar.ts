@@ -165,46 +165,68 @@ router.get("/business-hours", async (req: Request, res: Response) => {
     console.log("[Calendar] calData keys:", Object.keys(calData || {}));
     console.log("[Calendar] Full calData:", JSON.stringify(calData, null, 2).slice(0, 2000));
 
-    // Try multiple possible locations for hours data
-    const openHours: OpenHoursEntry[] = Array.isArray(calData?.openHours)
+    // openHours on the calendar object is often an empty {} -- hours
+    // live on the team member's user schedule instead.
+    let openHours: OpenHoursEntry[] = Array.isArray(calData?.openHours)
       ? calData.openHours
-      : Array.isArray(calData?.availability?.openHours)
-        ? calData.availability.openHours
-        : [];
+      : [];
 
-    console.log("[Calendar] Resolved openHours:", JSON.stringify(openHours));
-
-    // If no openHours on the calendar, try fetching the schedule
+    // If no hours on calendar, look up the team member's schedule
     if (openHours.length === 0) {
-      console.log("[Calendar] No openHours on calendar object, trying schedule endpoint...");
-      try {
-        const schedResp = await client.get(`/calendars/schedules/event-calendar/${calId}`, {
-          headers: { Version: "2021-07-28" },
-        });
-        console.log("[Calendar] ===== SCHEDULE RAW RESPONSE =====");
-        console.log("[Calendar] Schedule data:", JSON.stringify(schedResp.data, null, 2).slice(0, 2000));
+      const teamMembers: any[] = calData?.teamMembers || [];
+      const userId = teamMembers[0]?.userId;
 
-        const schedData = schedResp.data?.data || schedResp.data?.schedule || schedResp.data;
-        const schedHours: OpenHoursEntry[] = Array.isArray(schedData?.openHours)
-          ? schedData.openHours
-          : Array.isArray(schedData?.rules)
-            ? schedData.rules
-            : [];
+      if (userId) {
+        console.log(`[Calendar] No openHours on calendar, fetching schedule for userId: ${userId}`);
+        try {
+          // List schedules filtered by location and userId
+          const schedResp = await client.get(
+            `/calendars/schedules?locationId=${locationId}&userId=${userId}`,
+            { headers: { Version: "2021-07-28" } }
+          );
+          const schedules = schedResp.data?.schedules || schedResp.data?.data || [];
+          console.log(`[Calendar] Found ${Array.isArray(schedules) ? schedules.length : 0} schedule(s)`);
 
-        if (schedHours.length > 0) {
-          const formatted = formatBusinessHoursForSpeech(schedHours);
-          return res.json({ success: true, formatted, raw: schedHours });
+          if (Array.isArray(schedules) && schedules.length > 0) {
+            const schedule = schedules[0];
+            console.log("[Calendar] Schedule:", JSON.stringify(schedule, null, 2).slice(0, 2000));
+
+            openHours = Array.isArray(schedule?.openHours)
+              ? schedule.openHours
+              : Array.isArray(schedule?.rules)
+                ? schedule.rules
+                : [];
+          }
+        } catch (schedErr: any) {
+          console.error("[Calendar] Schedule lookup failed:", schedErr?.response?.status, schedErr?.response?.data || schedErr.message);
         }
-      } catch (schedErr: any) {
-        console.error("[Calendar] Schedule endpoint failed:", schedErr?.response?.status, schedErr?.response?.data || schedErr.message);
       }
 
+      // Fallback: try the event-calendar schedule endpoint
+      if (openHours.length === 0) {
+        try {
+          const ecResp = await client.get(`/calendars/schedules/event-calendar/${calId}`, {
+            headers: { Version: "2021-07-28" },
+          });
+          const ecData = ecResp.data?.data || ecResp.data?.schedule || ecResp.data;
+          console.log("[Calendar] Event-calendar schedule:", JSON.stringify(ecData, null, 2).slice(0, 2000));
+
+          openHours = Array.isArray(ecData?.openHours)
+            ? ecData.openHours
+            : Array.isArray(ecData?.rules)
+              ? ecData.rules
+              : [];
+        } catch (ecErr: any) {
+          console.error("[Calendar] Event-calendar schedule failed:", ecErr?.response?.status, ecErr?.response?.data || ecErr.message);
+        }
+      }
+    }
+
+    if (openHours.length === 0) {
       return res.json({
         success: true,
         formatted: "Business hours are not configured for this calendar.",
         raw: [],
-        _debug_calendarKeys: Object.keys(calData || {}),
-        _debug_calendar: calData,
       });
     }
 
