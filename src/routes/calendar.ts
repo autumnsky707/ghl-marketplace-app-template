@@ -168,17 +168,28 @@ router.get("/business-hours", async (req: Request, res: Response) => {
     endDate.setDate(startDate.getDate() + 6); // Mon-Sun
 
     const startMs = startDate.getTime();
+
+    // Extend endDate to end-of-day so GHL includes the last day's slots
+    endDate.setHours(23, 59, 59, 999);
     const endMs = endDate.getTime();
 
     console.log(`[Calendar] Inferring hours from free-slots: ${startDate.toISOString()} to ${endDate.toISOString()}`);
+    console.log(`[Calendar] startMs=${startMs}, endMs=${endMs}, tz=${tz}, calId=${calId}`);
 
-    const slotsResp = await client.get(
-      `/calendars/${calId}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`,
-      { headers: { Version: "2021-07-28" } }
-    );
+    const slotsUrl = `/calendars/${calId}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
+    console.log(`[Calendar] Free-slots URL: ${slotsUrl}`);
+
+    const slotsResp = await client.get(slotsUrl, {
+      headers: { Version: "2021-07-28" },
+    });
+
+    console.log(`[Calendar] Raw free-slots response keys:`, Object.keys(slotsResp.data || {}));
+    console.log(`[Calendar] Raw free-slots response (first 1000 chars):`, JSON.stringify(slotsResp.data).slice(0, 1000));
 
     const slotsData = slotsResp.data?.slots || slotsResp.data || {};
     const dateKeys = Object.keys(slotsData).sort();
+
+    console.log(`[Calendar] Date keys found: ${dateKeys.length}`, dateKeys);
 
     // Analyze: which days have slots, and what's the earliest/latest time?
     const dayHours: Map<number, { earliest: string; latest: string }> = new Map();
@@ -192,6 +203,8 @@ router.get("/business-hours", async (req: Request, res: Response) => {
       const earliest = daySlots[0];
       const latest = daySlots[daySlots.length - 1];
 
+      console.log(`[Calendar]   ${dateKey} (${DAY_NAMES[dow]}): ${daySlots.length} slots, first=${earliest}, last=${latest}`);
+
       if (!dayHours.has(dow)) {
         dayHours.set(dow, { earliest, latest });
       }
@@ -202,6 +215,17 @@ router.get("/business-hours", async (req: Request, res: Response) => {
         success: true,
         formatted: "No availability found for the coming week.",
         raw: [],
+        _debug: {
+          calendarId: calId,
+          timezone: tz,
+          startDate: startDate.toISOString(),
+          endDate: endDate.toISOString(),
+          startMs,
+          endMs: endMs,
+          rawResponseKeys: Object.keys(slotsResp.data || {}),
+          rawResponse: slotsResp.data,
+          dateKeysFound: dateKeys,
+        },
       });
     }
 
