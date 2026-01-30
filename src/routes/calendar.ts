@@ -153,104 +153,106 @@ router.get("/business-hours", async (req: Request, res: Response) => {
 
     const client = await ghl.requests(locationId);
 
-    // Fetch the calendar object which contains openHours
-    console.log(`[Calendar] Fetching business hours for calendar: ${calId}`);
-    const calResp = await client.get(`/calendars/${calId}`, {
-      headers: { Version: "2021-07-28" },
-    });
+    // GHL's centralized Schedules system doesn't expose hours via a
+    // reliable API path for service_booking calendars.  Instead, infer
+    // business hours from the free-slots response for the next 7 days.
+    const tz = installation.timezone || "America/New_York";
+    const now = new Date();
+    // Start from next Monday to get a clean week
+    const dayOfWeek = now.getDay(); // 0=Sun
+    const daysUntilMon = dayOfWeek === 0 ? 1 : dayOfWeek === 1 ? 7 : 8 - dayOfWeek;
+    const startDate = new Date(now);
+    startDate.setDate(now.getDate() + daysUntilMon);
+    startDate.setHours(0, 0, 0, 0);
+    const endDate = new Date(startDate);
+    endDate.setDate(startDate.getDate() + 6); // Mon-Sun
 
-    const calData = calResp.data?.calendar || calResp.data;
-    console.log("[Calendar] ===== CALENDAR RAW RESPONSE =====");
-    console.log("[Calendar] Top-level keys:", Object.keys(calResp.data || {}));
-    console.log("[Calendar] calData keys:", Object.keys(calData || {}));
-    console.log("[Calendar] Full calData:", JSON.stringify(calData, null, 2).slice(0, 2000));
+    const startMs = startDate.getTime();
+    const endMs = endDate.getTime();
 
-    // openHours on the calendar object is often an empty {} -- hours
-    // live on the team member's user schedule instead.
-    let openHours: OpenHoursEntry[] = Array.isArray(calData?.openHours)
-      ? calData.openHours
-      : [];
+    console.log(`[Calendar] Inferring hours from free-slots: ${startDate.toISOString()} to ${endDate.toISOString()}`);
 
-    // If no hours on calendar, look up the team member's schedule
-    if (openHours.length === 0) {
-      const teamMembers: any[] = calData?.teamMembers || [];
-      const userId = teamMembers[0]?.userId;
+    const slotsResp = await client.get(
+      `/calendars/${calId}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`,
+      { headers: { Version: "2021-07-28" } }
+    );
 
-      if (userId) {
-        console.log(`[Calendar] No openHours on calendar, fetching schedule for userId: ${userId}`);
-        try {
-          // List schedules filtered by location and userId
-          const schedResp = await client.get(
-            `/calendars/schedules?locationId=${locationId}&userId=${userId}`,
-            { headers: { Version: "2021-07-28" } }
-          );
-          // Store full response for debug
-          (calData as any)._scheduleResponse = schedResp.data;
-          const schedules = schedResp.data?.schedules || schedResp.data?.data || [];
-          console.log(`[Calendar] Found ${Array.isArray(schedules) ? schedules.length : 0} schedule(s)`);
+    const slotsData = slotsResp.data?.slots || slotsResp.data || {};
+    const dateKeys = Object.keys(slotsData).sort();
 
-          if (Array.isArray(schedules) && schedules.length > 0) {
-            const schedule = schedules[0];
-            console.log("[Calendar] Schedule keys:", Object.keys(schedule));
-            console.log("[Calendar] Schedule:", JSON.stringify(schedule, null, 2).slice(0, 3000));
+    // Analyze: which days have slots, and what's the earliest/latest time?
+    const dayHours: Map<number, { earliest: string; latest: string }> = new Map();
 
-            openHours = Array.isArray(schedule?.openHours)
-              ? schedule.openHours
-              : Array.isArray(schedule?.rules)
-                ? schedule.rules
-                : [];
-          }
-        } catch (schedErr: any) {
-          console.error("[Calendar] Schedule lookup failed:", schedErr?.response?.status, schedErr?.response?.data || schedErr.message);
-          (calData as any)._scheduleError = { status: schedErr?.response?.status, data: schedErr?.response?.data, message: schedErr.message };
-        }
-      }
+    for (const dateKey of dateKeys) {
+      const daySlots: string[] = slotsData[dateKey];
+      if (!Array.isArray(daySlots) || daySlots.length === 0) continue;
 
-      // Fallback: try the event-calendar schedule endpoint
-      if (openHours.length === 0) {
-        try {
-          const ecResp = await client.get(`/calendars/schedules/event-calendar/${calId}`, {
-            headers: { Version: "2021-07-28" },
-          });
-          const ecData = ecResp.data?.data || ecResp.data?.schedule || ecResp.data;
-          console.log("[Calendar] Event-calendar schedule:", JSON.stringify(ecData, null, 2).slice(0, 2000));
+      const d = new Date(dateKey + "T00:00:00");
+      const dow = d.getDay();
+      const earliest = daySlots[0];
+      const latest = daySlots[daySlots.length - 1];
 
-          openHours = Array.isArray(ecData?.openHours)
-            ? ecData.openHours
-            : Array.isArray(ecData?.rules)
-              ? ecData.rules
-              : [];
-        } catch (ecErr: any) {
-          console.error("[Calendar] Event-calendar schedule failed:", ecErr?.response?.status, ecErr?.response?.data || ecErr.message);
-          (calData as any)._eventCalScheduleError = { status: ecErr?.response?.status, data: ecErr?.response?.data, message: ecErr.message };
-        }
+      if (!dayHours.has(dow)) {
+        dayHours.set(dow, { earliest, latest });
       }
     }
 
-    if (openHours.length === 0) {
+    if (dayHours.size === 0) {
       return res.json({
         success: true,
-        formatted: "Business hours are not configured for this calendar.",
+        formatted: "No availability found for the coming week.",
         raw: [],
-        _debug: {
-          calendarId: calId,
-          userId: (calData?.teamMembers || [])[0]?.userId || null,
-          calendarOpenHours: calData?.openHours,
-          calendarOpenHoursType: typeof calData?.openHours,
-          availabilities: calData?.availabilities,
-          scheduleResponse: (calData as any)?._scheduleResponse,
-          scheduleError: (calData as any)?._scheduleError,
-          eventCalScheduleError: (calData as any)?._eventCalScheduleError,
-        },
       });
     }
 
-    const formatted = formatBusinessHoursForSpeech(openHours);
+    // Group days with the same hours
+    const hourGroups: Map<string, number[]> = new Map();
+    for (const [dow, times] of dayHours) {
+      const key = `${times.earliest}|${times.latest}`;
+      if (!hourGroups.has(key)) hourGroups.set(key, []);
+      hourGroups.get(key)!.push(dow);
+    }
+
+    // Format for speech
+    const parts: string[] = [];
+    for (const [key, days] of hourGroups) {
+      const [earliest, latest] = key.split("|");
+      const dayRange = formatDayRange(days);
+
+      // Parse times — slots are ISO strings or "HH:mm" strings
+      const openDate = new Date(earliest);
+      const closeDate = new Date(latest);
+      let openStr: string;
+      let closeStr: string;
+
+      if (!isNaN(openDate.getTime())) {
+        // ISO datetime — extract hours in the calendar timezone
+        // Use simple hour extraction (slots are already in local tz)
+        const openH = openDate.getHours();
+        const openM = openDate.getMinutes();
+        const closeH = closeDate.getHours();
+        const closeM = closeDate.getMinutes();
+        // The last slot is the START of the last slot, add slot duration (1hr) for close
+        openStr = formatTimeForSpeech(openH, openM);
+        closeStr = formatTimeForSpeech(closeH + 1, closeM);
+      } else {
+        // "HH:mm" format
+        const [oH, oM] = earliest.split(":").map(Number);
+        const [cH, cM] = latest.split(":").map(Number);
+        openStr = formatTimeForSpeech(oH, oM);
+        closeStr = formatTimeForSpeech(cH + 1, cM);
+      }
+
+      parts.push(`${dayRange}, ${openStr} to ${closeStr}`);
+    }
+
+    const formatted = parts.join(". ");
+    console.log(`[Calendar] Inferred hours: ${formatted}`);
 
     return res.json({
       success: true,
       formatted,
-      raw: openHours,
+      daysAvailable: Array.from(dayHours.keys()).sort().map((d) => DAY_NAMES[d]),
     });
   } catch (error: any) {
     console.error("[Calendar] business-hours error:", error?.response?.data || error.message);
