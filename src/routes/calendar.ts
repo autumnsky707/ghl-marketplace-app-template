@@ -161,16 +161,48 @@ router.get("/business-hours", async (req: Request, res: Response) => {
 
     const calData = calResp.data?.calendar || calResp.data;
     console.log("[Calendar] ===== CALENDAR RAW RESPONSE =====");
-    console.log("[Calendar] Keys:", Object.keys(calData));
-    console.log("[Calendar] openHours:", JSON.stringify(calData?.openHours, null, 2));
+    console.log("[Calendar] Top-level keys:", Object.keys(calResp.data || {}));
+    console.log("[Calendar] calData keys:", Object.keys(calData || {}));
+    console.log("[Calendar] Full calData:", JSON.stringify(calData, null, 2).slice(0, 2000));
 
-    const openHours: OpenHoursEntry[] = calData?.openHours || [];
+    // Try multiple possible locations for hours data
+    const openHours: OpenHoursEntry[] = Array.isArray(calData?.openHours)
+      ? calData.openHours
+      : Array.isArray(calData?.availability?.openHours)
+        ? calData.availability.openHours
+        : [];
 
+    console.log("[Calendar] Resolved openHours:", JSON.stringify(openHours));
+
+    // If no openHours on the calendar, try fetching the schedule
     if (openHours.length === 0) {
+      console.log("[Calendar] No openHours on calendar object, trying schedule endpoint...");
+      try {
+        const schedResp = await client.get(`/calendars/schedules/event-calendar/${calId}`, {
+          headers: { Version: "2021-07-28" },
+        });
+        console.log("[Calendar] ===== SCHEDULE RAW RESPONSE =====");
+        console.log("[Calendar] Schedule data:", JSON.stringify(schedResp.data, null, 2).slice(0, 2000));
+
+        const schedData = schedResp.data?.data || schedResp.data?.schedule || schedResp.data;
+        const schedHours: OpenHoursEntry[] = Array.isArray(schedData?.openHours)
+          ? schedData.openHours
+          : Array.isArray(schedData?.rules)
+            ? schedData.rules
+            : [];
+
+        if (schedHours.length > 0) {
+          const formatted = formatBusinessHoursForSpeech(schedHours);
+          return res.json({ success: true, formatted, raw: schedHours });
+        }
+      } catch (schedErr: any) {
+        console.error("[Calendar] Schedule endpoint failed:", schedErr?.response?.status, schedErr?.response?.data || schedErr.message);
+      }
+
       return res.json({
         success: true,
         formatted: "Business hours are not configured for this calendar.",
-        raw: openHours,
+        raw: [],
       });
     }
 
