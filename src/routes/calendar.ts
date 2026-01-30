@@ -127,6 +127,141 @@ router.post("/free-slots", async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/calendar/business-hours
+ * Fetch the calendar's availability schedule and return it formatted for speech.
+ *
+ * Query: ?locationId=xxx or ?calendarId=xxx&locationId=xxx
+ */
+router.get("/business-hours", async (req: Request, res: Response) => {
+  try {
+    const locationId = req.query.locationId as string;
+    const calendarIdParam = req.query.calendarId as string | undefined;
+
+    if (!locationId) {
+      return res.status(400).json({ success: false, error: "Missing required query param: locationId" });
+    }
+
+    const installation = await getInstallation(locationId);
+    if (!installation) {
+      return res.status(404).json({ success: false, error: "Installation not found" });
+    }
+
+    const calId = calendarIdParam || installation.calendar_id;
+    if (!calId) {
+      return res.status(400).json({ success: false, error: "No calendar configured for this location" });
+    }
+
+    const client = await ghl.requests(locationId);
+
+    // Fetch the calendar object which contains openHours
+    console.log(`[Calendar] Fetching business hours for calendar: ${calId}`);
+    const calResp = await client.get(`/calendars/${calId}`, {
+      headers: { Version: "2021-07-28" },
+    });
+
+    const calData = calResp.data?.calendar || calResp.data;
+    console.log("[Calendar] ===== CALENDAR RAW RESPONSE =====");
+    console.log("[Calendar] Keys:", Object.keys(calData));
+    console.log("[Calendar] openHours:", JSON.stringify(calData?.openHours, null, 2));
+
+    const openHours: OpenHoursEntry[] = calData?.openHours || [];
+
+    if (openHours.length === 0) {
+      return res.json({
+        success: true,
+        formatted: "Business hours are not configured for this calendar.",
+        raw: openHours,
+      });
+    }
+
+    const formatted = formatBusinessHoursForSpeech(openHours);
+
+    return res.json({
+      success: true,
+      formatted,
+      raw: openHours,
+    });
+  } catch (error: any) {
+    console.error("[Calendar] business-hours error:", error?.response?.data || error.message);
+    return res.status(500).json({
+      success: false,
+      error: error?.response?.data?.message || error.message,
+    });
+  }
+});
+
+// --- Business hours formatting helpers ---
+
+interface OpenHoursEntry {
+  daysOfTheWeek: number[];
+  hours: { openHour: number; openMinute: number; closeHour: number; closeMinute: number }[];
+}
+
+const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function formatTime(hour: number, minute: number): string {
+  const period = hour >= 12 ? "PM" : "AM";
+  const h = hour % 12 || 12;
+  if (minute === 0) return `${h} ${period}`;
+  const m = minute.toString().padStart(2, "0");
+  return `${h}:${m} ${period}`;
+}
+
+function formatTimeForSpeech(hour: number, minute: number): string {
+  const period = hour >= 12 ? "PM" : "AM";
+  const h = hour % 12 || 12;
+  const wordNums: Record<number, string> = {
+    1: "one", 2: "two", 3: "three", 4: "four", 5: "five",
+    6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten",
+    11: "eleven", 12: "twelve",
+  };
+  const hourWord = wordNums[h] || String(h);
+  if (minute === 0) return `${hourWord} ${period}`;
+  if (minute === 30) return `${hourWord} thirty ${period}`;
+  if (minute === 15) return `${hourWord} fifteen ${period}`;
+  if (minute === 45) return `${hourWord} forty-five ${period}`;
+  return `${hourWord} ${minute} ${period}`;
+}
+
+function formatDayRange(days: number[]): string {
+  if (days.length === 0) return "";
+  if (days.length === 1) return DAY_NAMES[days[0]];
+
+  // Check if days are consecutive
+  const sorted = [...days].sort((a, b) => a - b);
+  let isConsecutive = true;
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i] !== sorted[i - 1] + 1) {
+      isConsecutive = false;
+      break;
+    }
+  }
+
+  if (isConsecutive && sorted.length >= 3) {
+    return `${DAY_NAMES[sorted[0]]} through ${DAY_NAMES[sorted[sorted.length - 1]]}`;
+  }
+
+  // List individually
+  const names = sorted.map((d) => DAY_NAMES[d]);
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return names.slice(0, -1).join(", ") + ", and " + names[names.length - 1];
+}
+
+function formatBusinessHoursForSpeech(openHours: OpenHoursEntry[]): string {
+  const parts: string[] = [];
+
+  for (const entry of openHours) {
+    const dayRange = formatDayRange(entry.daysOfTheWeek);
+    const timeRanges = entry.hours.map(
+      (h) => `${formatTimeForSpeech(h.openHour, h.openMinute)} to ${formatTimeForSpeech(h.closeHour, h.closeMinute)}`
+    );
+    parts.push(`${dayRange}, ${timeRanges.join(" and ")}`);
+  }
+
+  return parts.join(". ");
+}
+
+/**
  * POST /api/calendar/book
  * Create or upsert a GHL contact, then book an appointment.
  *
