@@ -86,6 +86,8 @@ router.post("/book", async (req: Request, res: Response) => {
       customerEmail,
       customerPhone,
       serviceType,
+      therapistPreference,
+      occasion,
       title,
       notes,
     } = req.body as BookAppointmentRequest;
@@ -153,14 +155,21 @@ router.post("/book", async (req: Request, res: Response) => {
     // Build title from serviceType or fallback
     const appointmentTitle = formattedServiceType || title || "Appointment";
 
-    // Build notes: prepend service type, then any extra notes
-    let appointmentNotes = "";
+    // Build notes: e.g. "Deep Tissue Massage - One Hour. Therapist preference: Female. Occasion: Birthday"
+    const noteParts: string[] = [];
     if (formattedServiceType) {
-      appointmentNotes = `Service: ${formattedServiceType}`;
+      noteParts.push(formattedServiceType);
+    }
+    if (therapistPreference) {
+      noteParts.push(`Therapist preference: ${therapistPreference}`);
+    }
+    if (occasion) {
+      noteParts.push(`Occasion: ${occasion}`);
     }
     if (notes) {
-      appointmentNotes = appointmentNotes ? `${appointmentNotes}\n${notes}` : notes;
+      noteParts.push(notes);
     }
+    const appointmentNotes = noteParts.join(". ");
 
     const appointmentPayload = {
       calendarId: resolvedCalendarId,

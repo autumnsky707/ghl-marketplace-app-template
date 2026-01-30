@@ -35,7 +35,9 @@ export interface BookAppointmentRequest {
   customerName: string;
   customerEmail: string;
   customerPhone?: string;
-  serviceType?: string;     // e.g. "Deep Tissue Massage"
+  serviceType?: string;          // e.g. "Deep Tissue Massage"
+  therapistPreference?: string;  // e.g. "Female"
+  occasion?: string;             // e.g. "Birthday"
   title?: string;
   notes?: string;
 }
