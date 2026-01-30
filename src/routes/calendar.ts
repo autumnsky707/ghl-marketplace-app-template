@@ -175,7 +175,14 @@ router.post("/free-slots", async (req: Request, res: Response) => {
     const client = await ghl.requests(locationId);
 
     // Determine which days-of-week the business is actually open
-    const { openDays } = await getCalendarSchedule(client, installation.calendar_id, tz);
+    // Wrapped in try/catch — if this fails, skip day filtering rather than breaking the endpoint
+    let openDays: Set<number> | null = null;
+    try {
+      const schedule = await getCalendarSchedule(client, installation.calendar_id, tz);
+      openDays = schedule.openDays;
+    } catch (schedErr: any) {
+      console.error("[Calendar] Schedule lookup failed, skipping closed-day filter:", schedErr?.message);
+    }
 
     const resp = await client.get(slotsUrl, {
       headers: { Version: "2021-07-28" },
@@ -195,7 +202,7 @@ router.post("/free-slots", async (req: Request, res: Response) => {
         const d = new Date(dateKey + "T00:00:00");
         const dow = d.getDay();
         const dayName = DAY_NAMES[dow];
-        const isClosedDay = !openDays.has(dow);
+        const isClosedDay = openDays ? !openDays.has(dow) : false;
 
         const entry = rawData[dateKey];
         // Handle both { slots: [...] } and direct array formats
