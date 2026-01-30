@@ -184,12 +184,15 @@ router.get("/business-hours", async (req: Request, res: Response) => {
             `/calendars/schedules?locationId=${locationId}&userId=${userId}`,
             { headers: { Version: "2021-07-28" } }
           );
+          // Store full response for debug
+          (calData as any)._scheduleResponse = schedResp.data;
           const schedules = schedResp.data?.schedules || schedResp.data?.data || [];
           console.log(`[Calendar] Found ${Array.isArray(schedules) ? schedules.length : 0} schedule(s)`);
 
           if (Array.isArray(schedules) && schedules.length > 0) {
             const schedule = schedules[0];
-            console.log("[Calendar] Schedule:", JSON.stringify(schedule, null, 2).slice(0, 2000));
+            console.log("[Calendar] Schedule keys:", Object.keys(schedule));
+            console.log("[Calendar] Schedule:", JSON.stringify(schedule, null, 2).slice(0, 3000));
 
             openHours = Array.isArray(schedule?.openHours)
               ? schedule.openHours
@@ -199,6 +202,7 @@ router.get("/business-hours", async (req: Request, res: Response) => {
           }
         } catch (schedErr: any) {
           console.error("[Calendar] Schedule lookup failed:", schedErr?.response?.status, schedErr?.response?.data || schedErr.message);
+          (calData as any)._scheduleError = { status: schedErr?.response?.status, data: schedErr?.response?.data, message: schedErr.message };
         }
       }
 
@@ -218,6 +222,7 @@ router.get("/business-hours", async (req: Request, res: Response) => {
               : [];
         } catch (ecErr: any) {
           console.error("[Calendar] Event-calendar schedule failed:", ecErr?.response?.status, ecErr?.response?.data || ecErr.message);
+          (calData as any)._eventCalScheduleError = { status: ecErr?.response?.status, data: ecErr?.response?.data, message: ecErr.message };
         }
       }
     }
@@ -227,6 +232,16 @@ router.get("/business-hours", async (req: Request, res: Response) => {
         success: true,
         formatted: "Business hours are not configured for this calendar.",
         raw: [],
+        _debug: {
+          calendarId: calId,
+          userId: (calData?.teamMembers || [])[0]?.userId || null,
+          calendarOpenHours: calData?.openHours,
+          calendarOpenHoursType: typeof calData?.openHours,
+          availabilities: calData?.availabilities,
+          scheduleResponse: (calData as any)?._scheduleResponse,
+          scheduleError: (calData as any)?._scheduleError,
+          eventCalScheduleError: (calData as any)?._eventCalScheduleError,
+        },
       });
     }
 
