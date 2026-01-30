@@ -224,13 +224,6 @@ router.post("/book", async (req: Request, res: Response) => {
     console.log("[Calendar] ===== CREATE APPOINTMENT RESPONSE =====");
     console.log("[Calendar] Response:", JSON.stringify(appointmentResp.data, null, 2));
 
-    // Extract appointment ID - log all possible locations
-    console.log("[Calendar] ===== EXTRACTING APPOINTMENT ID =====");
-    console.log("[Calendar] resp.data.id:", appointmentResp.data?.id);
-    console.log("[Calendar] resp.data.event?.id:", appointmentResp.data?.event?.id);
-    console.log("[Calendar] resp.data.eventId:", appointmentResp.data?.eventId);
-    console.log("[Calendar] resp.data.appointment?.id:", appointmentResp.data?.appointment?.id);
-
     const appointmentId =
       appointmentResp.data?.id ||
       appointmentResp.data?.event?.id ||
@@ -238,40 +231,7 @@ router.post("/book", async (req: Request, res: Response) => {
       appointmentResp.data?.appointment?.id ||
       null;
 
-    console.log(`[Calendar] Resolved appointmentId: ${appointmentId}`);
     console.log(`[Calendar] Appointment booked: ${appointmentId} for contact ${contactId}`);
-
-    // Create an Appointment Note via the separate Notes API
-    // (the "notes" field on create-appointment does NOT show in GHL UI)
-    if (appointmentNotes) {
-      if (!appointmentId) {
-        console.error("[Calendar] CANNOT create note: no appointmentId extracted from response");
-      } else {
-        const noteUrl = `/calendars/appointments/${appointmentId}/notes`;
-        const noteBody = { body: appointmentNotes };
-
-        console.log("[Calendar] ===== CREATE NOTE REQUEST =====");
-        console.log("[Calendar] Note URL: POST", noteUrl);
-        console.log("[Calendar] Note body:", JSON.stringify(noteBody));
-
-        try {
-          const noteResp = await client.post(noteUrl, noteBody, {
-            headers: { Version: "2021-07-28" },
-          });
-          console.log("[Calendar] ===== CREATE NOTE RESPONSE =====");
-          console.log("[Calendar] Note status:", noteResp.status);
-          console.log("[Calendar] Note data:", JSON.stringify(noteResp.data, null, 2));
-        } catch (noteErr: any) {
-          console.error("[Calendar] ===== CREATE NOTE FAILED =====");
-          console.error("[Calendar] Note error status:", noteErr?.response?.status);
-          console.error("[Calendar] Note error data:", JSON.stringify(noteErr?.response?.data, null, 2));
-          console.error("[Calendar] Note error message:", noteErr.message);
-          console.error("[Calendar] Note full error:", noteErr?.response?.headers ? `Content-Type: ${noteErr.response.headers["content-type"]}` : "no response");
-        }
-      }
-    } else {
-      console.log("[Calendar] No notes to create (appointmentNotes is empty)");
-    }
 
     // 5. Return success
     return res.json({
