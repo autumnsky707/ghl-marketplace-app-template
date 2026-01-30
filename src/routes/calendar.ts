@@ -117,7 +117,10 @@ router.post("/free-slots", async (req: Request, res: Response) => {
         const dayOfWeek = new Date(dateKey).toLocaleDateString("en-US", { weekday: "long", timeZone: tz });
         const isWeekend = ["Saturday", "Sunday"].includes(dayOfWeek);
         const removedCount = daySlots.length - futureSlots.length;
-        console.log(`[Calendar]   ${dateKey} (${dayOfWeek})${isWeekend ? " *** WEEKEND ***" : ""}: ${daySlots.length} total, ${removedCount} past, ${futureSlots.length} available`);
+        console.log(`[Calendar]   ${dateKey} (${dayOfWeek})${isWeekend ? " *** WEEKEND *** SKIPPED" : ""}: ${daySlots.length} total, ${removedCount} past, ${futureSlots.length} available`);
+
+        // Skip weekends — calendar is Mon-Fri only
+        if (isWeekend) continue;
 
         if (futureSlots.length > 0) {
           // Preserve the original structure format
