@@ -186,8 +186,10 @@ router.get("/business-hours", async (req: Request, res: Response) => {
     console.log(`[Calendar] Raw free-slots response keys:`, Object.keys(slotsResp.data || {}));
     console.log(`[Calendar] Raw free-slots response (first 1000 chars):`, JSON.stringify(slotsResp.data).slice(0, 1000));
 
-    const slotsData = slotsResp.data?.slots || slotsResp.data || {};
-    const dateKeys = Object.keys(slotsData).sort();
+    // GHL returns either { "date": { slots: [...] }, ... } or { "date": [...], ... }
+    const rawData = slotsResp.data || {};
+    // Filter out non-date keys like "traceId"
+    const dateKeys = Object.keys(rawData).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
 
     console.log(`[Calendar] Date keys found: ${dateKeys.length}`, dateKeys);
 
@@ -195,8 +197,10 @@ router.get("/business-hours", async (req: Request, res: Response) => {
     const dayHours: Map<number, { earliest: string; latest: string }> = new Map();
 
     for (const dateKey of dateKeys) {
-      const daySlots: string[] = slotsData[dateKey];
-      if (!Array.isArray(daySlots) || daySlots.length === 0) continue;
+      const entry = rawData[dateKey];
+      // Handle both { slots: [...] } and direct array formats
+      const daySlots: string[] = Array.isArray(entry) ? entry : (entry?.slots || []);
+      if (daySlots.length === 0) continue;
 
       const d = new Date(dateKey + "T00:00:00");
       const dow = d.getDay();
@@ -243,24 +247,24 @@ router.get("/business-hours", async (req: Request, res: Response) => {
       const [earliest, latest] = key.split("|");
       const dayRange = formatDayRange(days);
 
-      // Parse times — slots are ISO strings or "HH:mm" strings
-      const openDate = new Date(earliest);
-      const closeDate = new Date(latest);
+      // Extract local hours from ISO strings like "2026-02-02T08:00:00-10:00"
+      // The time portion (T08:00:00) is already in the calendar's local timezone
+      const openMatch = earliest.match(/T(\d{2}):(\d{2})/);
+      const closeMatch = latest.match(/T(\d{2}):(\d{2})/);
+
       let openStr: string;
       let closeStr: string;
 
-      if (!isNaN(openDate.getTime())) {
-        // ISO datetime — extract hours in the calendar timezone
-        // Use simple hour extraction (slots are already in local tz)
-        const openH = openDate.getHours();
-        const openM = openDate.getMinutes();
-        const closeH = closeDate.getHours();
-        const closeM = closeDate.getMinutes();
-        // The last slot is the START of the last slot, add slot duration (1hr) for close
+      if (openMatch && closeMatch) {
+        const openH = parseInt(openMatch[1], 10);
+        const openM = parseInt(openMatch[2], 10);
+        const closeH = parseInt(closeMatch[1], 10);
+        const closeM = parseInt(closeMatch[2], 10);
+        // The last slot is the START of the last appointment slot, add 1hr for closing time
         openStr = formatTimeForSpeech(openH, openM);
         closeStr = formatTimeForSpeech(closeH + 1, closeM);
       } else {
-        // "HH:mm" format
+        // Fallback: "HH:mm" format
         const [oH, oM] = earliest.split(":").map(Number);
         const [cH, cM] = latest.split(":").map(Number);
         openStr = formatTimeForSpeech(oH, oM);
