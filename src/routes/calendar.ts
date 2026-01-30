@@ -203,6 +203,8 @@ router.get("/business-hours", async (req: Request, res: Response) => {
         success: true,
         formatted: "Business hours are not configured for this calendar.",
         raw: [],
+        _debug_calendarKeys: Object.keys(calData || {}),
+        _debug_calendar: calData,
       });
     }
 
