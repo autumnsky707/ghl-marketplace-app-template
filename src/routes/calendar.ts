@@ -233,7 +233,24 @@ router.post("/book", async (req: Request, res: Response) => {
 
     console.log(`[Calendar] Appointment booked: ${appointmentId} for contact ${contactId}`);
 
-    // 5. Return success
+    // 5. Create Internal Note via Appointment Notes API
+    // The "notes" field on create-appointment is silently ignored by GHL.
+    // POST /calendars/appointments/{id}/notes (no /events/) creates an
+    // Internal Note visible in the appointment modal's Notes tab.
+    if (appointmentNotes && appointmentId) {
+      try {
+        const noteResp = await client.post(
+          `/calendars/appointments/${appointmentId}/notes`,
+          { body: appointmentNotes },
+          { headers: { Version: "2021-07-28" } }
+        );
+        console.log(`[Calendar] Note created for ${appointmentId}:`, JSON.stringify(noteResp.data));
+      } catch (noteErr: any) {
+        console.error("[Calendar] Note creation failed:", noteErr?.response?.status, noteErr?.response?.data || noteErr.message);
+      }
+    }
+
+    // 6. Return success
     return res.json({
       success: true,
       appointmentId,
