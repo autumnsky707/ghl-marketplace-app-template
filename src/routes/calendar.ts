@@ -219,57 +219,31 @@ router.get("/business-hours", async (req: Request, res: Response) => {
         success: true,
         formatted: "No availability found for the coming week.",
         raw: [],
-        _debug: {
-          calendarId: calId,
-          timezone: tz,
-          startDate: startDate.toISOString(),
-          endDate: endDate.toISOString(),
-          startMs,
-          endMs: endMs,
-          rawResponseKeys: Object.keys(slotsResp.data || {}),
-          rawResponse: slotsResp.data,
-          dateKeysFound: dateKeys,
-        },
       });
     }
 
-    // Group days with the same hours
+    // Group days with the same hours (use time portion only, not full ISO date)
     const hourGroups: Map<string, number[]> = new Map();
     for (const [dow, times] of dayHours) {
-      const key = `${times.earliest}|${times.latest}`;
-      if (!hourGroups.has(key)) hourGroups.set(key, []);
-      hourGroups.get(key)!.push(dow);
+      const earliestTime = times.earliest.match(/T(\d{2}:\d{2})/)?.[1] || times.earliest;
+      const latestTime = times.latest.match(/T(\d{2}:\d{2})/)?.[1] || times.latest;
+      const groupKey = `${earliestTime}|${latestTime}`;
+      if (!hourGroups.has(groupKey)) hourGroups.set(groupKey, []);
+      hourGroups.get(groupKey)!.push(dow);
     }
 
     // Format for speech
     const parts: string[] = [];
-    for (const [key, days] of hourGroups) {
-      const [earliest, latest] = key.split("|");
+    for (const [groupKey, days] of hourGroups) {
+      const [earliestTime, latestTime] = groupKey.split("|");
       const dayRange = formatDayRange(days);
 
-      // Extract local hours from ISO strings like "2026-02-02T08:00:00-10:00"
-      // The time portion (T08:00:00) is already in the calendar's local timezone
-      const openMatch = earliest.match(/T(\d{2}):(\d{2})/);
-      const closeMatch = latest.match(/T(\d{2}):(\d{2})/);
-
-      let openStr: string;
-      let closeStr: string;
-
-      if (openMatch && closeMatch) {
-        const openH = parseInt(openMatch[1], 10);
-        const openM = parseInt(openMatch[2], 10);
-        const closeH = parseInt(closeMatch[1], 10);
-        const closeM = parseInt(closeMatch[2], 10);
-        // The last slot is the START of the last appointment slot, add 1hr for closing time
-        openStr = formatTimeForSpeech(openH, openM);
-        closeStr = formatTimeForSpeech(closeH + 1, closeM);
-      } else {
-        // Fallback: "HH:mm" format
-        const [oH, oM] = earliest.split(":").map(Number);
-        const [cH, cM] = latest.split(":").map(Number);
-        openStr = formatTimeForSpeech(oH, oM);
-        closeStr = formatTimeForSpeech(cH + 1, cM);
-      }
+      // earliestTime/latestTime are "HH:mm" extracted from ISO strings
+      const [oH, oM] = earliestTime.split(":").map(Number);
+      const [cH, cM] = latestTime.split(":").map(Number);
+      // The last slot is the START of the last appointment slot, add 1hr for closing time
+      const openStr = formatTimeForSpeech(oH, oM);
+      const closeStr = formatTimeForSpeech(cH + 1, cM);
 
       parts.push(`${dayRange}, ${openStr} to ${closeStr}`);
     }
