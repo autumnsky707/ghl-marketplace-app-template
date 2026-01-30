@@ -71,8 +71,14 @@ router.post("/free-slots", async (req: Request, res: Response) => {
 
     const tz = timezone || installation.timezone || "America/New_York";
 
+    // 15-minute buffer so we don't offer slots that are about to pass
+    const BUFFER_MS = 15 * 60 * 1000;
+    const nowPlusBuffer = Date.now() + BUFFER_MS;
+
     // Convert dates to Unix milliseconds for GHL API
-    const startMs = new Date(startDate).getTime();
+    // Use the later of the requested start or "now + 15 min" so past slots aren't fetched
+    const requestedStartMs = new Date(startDate).getTime();
+    const startMs = Math.max(requestedStartMs, nowPlusBuffer);
     const endMs = new Date(endDate).getTime();
 
     const slotsUrl = `/calendars/${installation.calendar_id}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
@@ -80,42 +86,60 @@ router.post("/free-slots", async (req: Request, res: Response) => {
     console.log("[Calendar] ===== FREE SLOTS REQUEST =====");
     console.log("[Calendar] URL:", slotsUrl);
     console.log("[Calendar] calendarId:", installation.calendar_id);
-    console.log("[Calendar] startDate:", startDate, "->", startMs);
+    console.log("[Calendar] startDate:", startDate, "-> requested:", requestedStartMs, "-> actual:", startMs);
     console.log("[Calendar] endDate:", endDate, "->", endMs);
     console.log("[Calendar] timezone:", tz);
+    console.log("[Calendar] nowPlusBuffer:", new Date(nowPlusBuffer).toISOString());
 
     const client = await ghl.requests(locationId);
     const resp = await client.get(slotsUrl, {
       headers: { Version: "2021-07-28" },
     });
 
-    // Log raw GHL response to see exactly what slots are returned
     const rawData = resp.data;
-    console.log("[Calendar] ===== FREE SLOTS RAW RESPONSE =====");
     console.log("[Calendar] Response keys:", Object.keys(rawData));
 
-    // Log each date and its slots to identify weekend slots
-    const slots = rawData?.slots || rawData;
-    if (typeof slots === "object" && slots !== null) {
-      const dateKeys = Object.keys(slots).sort();
+    // Filter out any slots that have already passed (with 15-min buffer)
+    // GHL may still return some past slots depending on how it handles startDate
+    const filtered: Record<string, any> = {};
+    const cutoff = new Date(nowPlusBuffer);
+
+    if (typeof rawData === "object" && rawData !== null) {
+      const dateKeys = Object.keys(rawData).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
       console.log(`[Calendar] Dates returned: ${dateKeys.length}`);
+
       for (const dateKey of dateKeys) {
-        const daySlots = slots[dateKey];
-        const slotCount = Array.isArray(daySlots) ? daySlots.length : "N/A";
+        const entry = rawData[dateKey];
+        // Handle both { slots: [...] } and direct array formats
+        const daySlots: string[] = Array.isArray(entry) ? entry : (entry?.slots || []);
+        const futureSlots = daySlots.filter((slot) => new Date(slot).getTime() >= nowPlusBuffer);
+
         const dayOfWeek = new Date(dateKey).toLocaleDateString("en-US", { weekday: "long", timeZone: tz });
         const isWeekend = ["Saturday", "Sunday"].includes(dayOfWeek);
-        console.log(`[Calendar]   ${dateKey} (${dayOfWeek})${isWeekend ? " *** WEEKEND ***" : ""}: ${slotCount} slots`);
-        if (isWeekend && Array.isArray(daySlots) && daySlots.length > 0) {
-          console.log(`[Calendar]   ^^^ WEEKEND SLOTS RETURNED BY GHL:`, JSON.stringify(daySlots.slice(0, 3)));
+        const removedCount = daySlots.length - futureSlots.length;
+        console.log(`[Calendar]   ${dateKey} (${dayOfWeek})${isWeekend ? " *** WEEKEND ***" : ""}: ${daySlots.length} total, ${removedCount} past, ${futureSlots.length} available`);
+
+        if (futureSlots.length > 0) {
+          // Preserve the original structure format
+          if (Array.isArray(entry)) {
+            filtered[dateKey] = futureSlots;
+          } else {
+            filtered[dateKey] = { ...entry, slots: futureSlots };
+          }
         }
       }
-    } else {
-      console.log("[Calendar] Raw response (not object):", JSON.stringify(rawData).slice(0, 500));
+
+      // Preserve non-date keys like traceId
+      for (const key of Object.keys(rawData)) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) {
+          filtered[key] = rawData[key];
+        }
+      }
     }
 
     return res.json({
       success: true,
-      data: rawData,
+      data: filtered,
     });
   } catch (error: any) {
     console.error("[Calendar] free-slots error:", error?.response?.data || error.message);
