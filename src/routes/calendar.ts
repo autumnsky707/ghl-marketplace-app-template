@@ -128,20 +128,56 @@ async function getCalendarSchedule(
  * POST /api/calendar/free-slots
  * Check available time slots for a calendar.
  *
- * Body: { locationId, startDate, endDate, timezone? }
+ * Body: { locationId, time_preference?, duration_minutes?, timezone? }
+ *   - time_preference: "morning" (before 12pm), "afternoon" (12pm+), "any" (default)
+ *   - duration_minutes: how many days ahead to search (default 7)
+ *   - Also accepts legacy startDate/endDate for backwards compatibility
  */
 router.post("/free-slots", async (req: Request, res: Response) => {
   try {
-    const { locationId, startDate, endDate, timezone } = req.body as FreeSlotsRequest;
+    const {
+      locationId,
+      location_id,
+      time_preference,
+      duration_minutes,
+      startDate,
+      endDate,
+      timezone
+    } = req.body;
 
-    if (!locationId || !startDate || !endDate) {
+    // Accept both camelCase and snake_case for locationId
+    const resolvedLocationId = locationId || location_id;
+
+    if (!resolvedLocationId) {
       return res.status(400).json({
         success: false,
-        error: "Missing required fields: locationId, startDate, endDate",
+        error: "Missing required field: locationId",
       });
     }
 
-    const installation = await getInstallation(locationId);
+    // Calculate dates automatically if not provided
+    const now = new Date();
+    const daysAhead = duration_minutes ? Math.ceil(duration_minutes / (24 * 60)) : 7; // Default 7 days
+
+    let calculatedStartDate: string;
+    let calculatedEndDate: string;
+
+    if (startDate && endDate) {
+      // Use legacy params if provided
+      calculatedStartDate = startDate;
+      calculatedEndDate = endDate;
+    } else {
+      // Auto-calculate: today through X days ahead
+      calculatedStartDate = now.toISOString().split('T')[0];
+      const endDateObj = new Date(now);
+      endDateObj.setDate(endDateObj.getDate() + daysAhead);
+      calculatedEndDate = endDateObj.toISOString().split('T')[0];
+    }
+
+    // Normalize time_preference
+    const timePreference = (time_preference || "any").toLowerCase();
+
+    const installation = await getInstallation(resolvedLocationId);
     if (!installation) {
       return res.status(404).json({ success: false, error: "Installation not found" });
     }
@@ -158,21 +194,22 @@ router.post("/free-slots", async (req: Request, res: Response) => {
 
     // Convert dates to Unix milliseconds for GHL API
     // Use the later of the requested start or "now + 15 min" so past slots aren't fetched
-    const requestedStartMs = new Date(startDate).getTime();
+    const requestedStartMs = new Date(calculatedStartDate).getTime();
     const startMs = Math.max(requestedStartMs, nowPlusBuffer);
-    const endMs = new Date(endDate).getTime();
+    const endMs = new Date(calculatedEndDate).getTime();
 
     const slotsUrl = `/calendars/${installation.calendar_id}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
 
     console.log("[Calendar] ===== FREE SLOTS REQUEST =====");
     console.log("[Calendar] URL:", slotsUrl);
     console.log("[Calendar] calendarId:", installation.calendar_id);
-    console.log("[Calendar] startDate:", startDate, "-> requested:", requestedStartMs, "-> actual:", startMs);
-    console.log("[Calendar] endDate:", endDate, "->", endMs);
+    console.log("[Calendar] time_preference:", timePreference);
+    console.log("[Calendar] startDate:", calculatedStartDate, "-> requested:", requestedStartMs, "-> actual:", startMs);
+    console.log("[Calendar] endDate:", calculatedEndDate, "->", endMs);
     console.log("[Calendar] timezone:", tz);
     console.log("[Calendar] nowPlusBuffer:", new Date(nowPlusBuffer).toISOString());
 
-    const client = await ghl.requests(locationId);
+    const client = await ghl.requests(resolvedLocationId);
 
     // Determine which days-of-week the business is actually open
     // Default to weekdays (Mon-Fri) if schedule lookup fails
@@ -184,6 +221,19 @@ router.post("/free-slots", async (req: Request, res: Response) => {
       console.log(`[Calendar] Schedule lookup OK — open days: ${Array.from(openDays).sort().map((d) => DAY_NAMES[d]).join(", ")}`);
     } catch (schedErr: any) {
       console.error("[Calendar] Schedule lookup failed, defaulting to Mon-Fri:", schedErr?.message);
+    }
+
+    // Helper to filter slots by time preference
+    function filterByTimePreference(slots: string[], preference: string): string[] {
+      if (preference === "any") return slots;
+      return slots.filter((iso) => {
+        const match = iso.match(/T(\d{2}):/);
+        if (!match) return true;
+        const hour = parseInt(match[1], 10);
+        if (preference === "morning") return hour < 12;
+        if (preference === "afternoon") return hour >= 12;
+        return true;
+      });
     }
 
     const resp = await client.get(slotsUrl, {
@@ -214,15 +264,18 @@ router.post("/free-slots", async (req: Request, res: Response) => {
         const entry = rawData[dateKey];
         const daySlots: string[] = Array.isArray(entry) ? entry : (entry?.slots || []);
         const futureSlots = daySlots.filter((slot) => new Date(slot).getTime() >= nowPlusBuffer);
+        // Apply time preference filter (morning/afternoon/any)
+        const filteredSlots = filterByTimePreference(futureSlots, timePreference);
 
         const removedCount = daySlots.length - futureSlots.length;
-        console.log(`[Calendar]   ${dateKey} (${dayName})${isClosedDay ? " *** CLOSED DAY *** SKIPPED" : ""}: ${daySlots.length} total, ${removedCount} past, ${futureSlots.length} available`);
+        const prefRemovedCount = futureSlots.length - filteredSlots.length;
+        console.log(`[Calendar]   ${dateKey} (${dayName})${isClosedDay ? " *** CLOSED DAY *** SKIPPED" : ""}: ${daySlots.length} total, ${removedCount} past, ${prefRemovedCount} filtered by ${timePreference}, ${filteredSlots.length} available`);
 
         if (isClosedDay) continue;
-        if (futureSlots.length === 0) continue;
+        if (filteredSlots.length === 0) continue;
 
         // Format each slot time for easy reading by the voice agent
-        const formattedSlots = futureSlots.map((iso) => {
+        const formattedSlots = filteredSlots.map((iso) => {
           const match = iso.match(/T(\d{2}):(\d{2})/);
           if (!match) return iso;
           const h = parseInt(match[1], 10);
@@ -236,7 +289,7 @@ router.post("/free-slots", async (req: Request, res: Response) => {
           date: dateKey,
           dayOfWeek: dayName,
           formattedSlots,
-          slots: futureSlots,
+          slots: filteredSlots,
         });
       }
     }
@@ -382,23 +435,35 @@ function formatDayRange(days: number[]): string {
  * POST /api/calendar/book
  * Create or upsert a GHL contact, then book an appointment.
  *
- * Body: { locationId, calendarId?, startTime, customerName, customerEmail, customerPhone?, title?, notes? }
+ * Accepts both camelCase and snake_case field names:
+ *   - locationId / location_id
+ *   - calendarId / calendar_id
+ *   - startTime / start_time
+ *   - customerName / customer_name
+ *   - customerEmail / customer_email
+ *   - customerPhone / customer_phone
+ *   - serviceType / service_type
+ *   - therapistPreference / therapist_preference
+ *
+ * The 'action' field from ElevenLabs is ignored.
  */
 router.post("/book", async (req: Request, res: Response) => {
   try {
-    const {
-      locationId,
-      calendarId,
-      startTime,
-      customerName,
-      customerEmail,
-      customerPhone,
-      serviceType,
-      therapistPreference,
-      occasion,
-      title,
-      notes,
-    } = req.body as BookAppointmentRequest;
+    const body = req.body;
+
+    // Accept both camelCase and snake_case (camelCase takes priority)
+    const locationId = body.locationId || body.location_id;
+    const calendarId = body.calendarId || body.calendar_id;
+    const startTime = body.startTime || body.start_time;
+    const customerName = body.customerName || body.customer_name;
+    const customerEmail = body.customerEmail || body.customer_email;
+    const customerPhone = body.customerPhone || body.customer_phone;
+    const serviceType = body.serviceType || body.service_type;
+    const therapistPreference = body.therapistPreference || body.therapist_preference;
+    const occasion = body.occasion;
+    const title = body.title;
+    const notes = body.notes;
+    // 'action' field from ElevenLabs is intentionally ignored
 
     if (!locationId || !startTime || !customerName || !customerEmail) {
       return res.status(400).json({
@@ -406,6 +471,14 @@ router.post("/book", async (req: Request, res: Response) => {
         error: "Missing required fields: locationId, startTime, customerName, customerEmail",
       });
     }
+
+    console.log("[Calendar] ===== BOOK REQUEST (normalized) =====");
+    console.log("[Calendar] locationId:", locationId);
+    console.log("[Calendar] startTime:", startTime);
+    console.log("[Calendar] customerName:", customerName);
+    console.log("[Calendar] customerEmail:", customerEmail);
+    console.log("[Calendar] customerPhone:", customerPhone);
+    console.log("[Calendar] serviceType:", serviceType);
 
     // 1. Look up installation
     const installation = await getInstallation(locationId);
