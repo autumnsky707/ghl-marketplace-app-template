@@ -193,8 +193,11 @@ export class GHL {
 
   /**
    * Exchange authorization code for tokens and save to Supabase.
+   * Includes user_type=Location as required by GHL OAuth.
    */
   private async generateAccessTokenRefreshTokenPair(code: string): Promise<GHLTokenResponse> {
+    console.log("[GHL] Exchanging authorization code for tokens...");
+
     const resp = await axios.post(
       `${process.env.GHL_API_DOMAIN}/oauth/token`,
       qs.stringify({
@@ -202,9 +205,12 @@ export class GHL {
         client_secret: process.env.GHL_APP_CLIENT_SECRET,
         grant_type: "authorization_code",
         code,
+        user_type: "Location",
       }),
       { headers: { "content-type": "application/x-www-form-urlencoded" } }
     );
+
+    console.log("[GHL] Token exchange successful, locationId:", resp.data.locationId);
 
     const tokenData: GHLTokenResponse = resp.data;
     await upsertInstallation(tokenData);

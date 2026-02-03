@@ -20,18 +20,26 @@ const SETTINGS_PANEL_URL = "https://booknexaai.com/widget-settings";
 
 /**
  * OAuth Initiation - Redirects user to GHL's OAuth authorization page
- * Uses leadconnectorhq.com domain (the backend domain for GHL marketplace)
+ * Uses the exact URL format required by GHL marketplace
  */
 app.get("/initiate-auth", (req: Request, res: Response) => {
   const clientId = process.env.GHL_APP_CLIENT_ID;
-  const redirectUri = "https://booknexaai-oauth.onrender.com/authorize-handler";
-  const scope = "calendars.readonly calendars.write calendars/events.readonly calendars/events.write contacts.readonly contacts.write locations.readonly";
 
-  // Use leadconnectorhq.com domain for OAuth (GHL's backend domain)
-  const authUrl = `https://marketplace.leadconnectorhq.com/oauth/chooselocation?response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&client_id=${clientId}&scope=${encodeURIComponent(scope)}`;
+  if (!clientId) {
+    console.error("[OAuth] GHL_APP_CLIENT_ID is not set in environment variables");
+    return res.status(500).send("OAuth not configured - missing client_id");
+  }
 
-  console.log(`[OAuth] Initiating auth, redirecting to: ${authUrl}`);
+  // Exact URL format for GHL OAuth with properly encoded parameters
+  const redirectUri = "https%3A%2F%2Fbooknexaai-oauth.onrender.com%2Fauthorize-handler";
+  const scope = "calendars.readonly+calendars.write+calendars%2Fevents.readonly+calendars%2Fevents.write+contacts.readonly+contacts.write+locations.readonly";
+
+  const authUrl = `https://marketplace.leadconnectorhq.com/oauth/chooselocation?response_type=code&redirect_uri=${redirectUri}&client_id=${clientId}&scope=${scope}`;
+
+  console.log(`[OAuth] Initiating auth flow`);
   console.log(`[OAuth] Client ID: ${clientId}`);
+  console.log(`[OAuth] Redirect URL: ${authUrl}`);
+
   res.redirect(authUrl);
 });
 
