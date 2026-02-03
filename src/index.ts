@@ -15,6 +15,23 @@ app.use(express.static(path));
 const ghl = new GHL();
 const port = process.env.PORT;
 
+// Settings panel URL for redirect after OAuth
+const SETTINGS_PANEL_URL = "https://booknexaai.com/widget-settings";
+
+/**
+ * OAuth Initiation - Redirects user to GHL's OAuth authorization page
+ */
+app.get("/initiate-auth", (req: Request, res: Response) => {
+  const clientId = process.env.GHL_APP_CLIENT_ID;
+  const redirectUri = "https://booknexaai-oauth.onrender.com/authorize-handler";
+  const scope = "calendars.readonly calendars.write calendars/events.readonly calendars/events.write contacts.readonly contacts.write locations.readonly";
+
+  const authUrl = `https://marketplace.gohighlevel.com/oauth/chooselocation?response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&client_id=${clientId}&scope=${encodeURIComponent(scope)}`;
+
+  console.log(`[OAuth] Initiating auth, redirecting to: ${authUrl}`);
+  res.redirect(authUrl);
+});
+
 /**
  * OAuth Authorization Handler
  * 1. Exchange code for tokens (saved to Supabase automatically)
@@ -33,7 +50,7 @@ app.get("/authorize-handler", async (req: Request, res: Response) => {
 
     if (!locationId) {
       console.warn("[OAuth] No locationId in token response, skipping calendar setup");
-      return res.redirect("https://app.gohighlevel.com/");
+      return res.redirect(`${SETTINGS_PANEL_URL}?connected=true`);
     }
 
     console.log(`[OAuth] Token exchange successful for location: ${locationId}`);
@@ -79,7 +96,8 @@ app.get("/authorize-handler", async (req: Request, res: Response) => {
     console.error("[OAuth] Authorization failed:", error?.response?.data || error.message);
   }
 
-  res.redirect("https://app.gohighlevel.com/");
+  // Redirect back to settings panel with connected=true
+  res.redirect(`${SETTINGS_PANEL_URL}?connected=true`);
 });
 
 // Mount calendar API routes
