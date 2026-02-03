@@ -1,5 +1,6 @@
 import express, { Express, Request, Response } from "express";
 import dotenv from "dotenv";
+import axios from "axios";
 import { GHL } from "./ghl";
 import { json } from "body-parser";
 import { updateCalendarInfo } from "./db";
@@ -110,6 +111,103 @@ app.get("/authorize-handler", async (req: Request, res: Response) => {
 
   // Redirect back to settings panel with connected=true
   res.redirect(`${SETTINGS_PANEL_URL}?connected=true`);
+});
+
+/**
+ * Reconnect endpoint - Re-establishes OAuth connection for a location
+ * 1. Calls GHL /oauth/reconnect to get a new authorization code
+ * 2. Exchanges code for tokens
+ * 3. Saves tokens to Supabase
+ */
+app.get("/reconnect", async (req: Request, res: Response) => {
+  const locationId = "NNFCwckEhjBk90UtMRSp";
+  const clientKey = "69781ba5abd7383fdc8d8d30-mkyfiexk";
+  const clientSecret = process.env.GHL_APP_CLIENT_SECRET;
+
+  if (!clientSecret) {
+    console.error("[Reconnect] GHL_APP_CLIENT_SECRET is not set");
+    return res.status(500).json({ success: false, error: "Missing client secret" });
+  }
+
+  try {
+    console.log(`[Reconnect] Starting reconnect for location: ${locationId}`);
+
+    // Step 1: Call /oauth/reconnect to get authorization code
+    const reconnectResp = await axios.post(
+      "https://services.leadconnectorhq.com/oauth/reconnect",
+      {
+        clientKey,
+        clientSecret,
+        locationId,
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    const authorizationCode = reconnectResp.data?.authorizationCode;
+    if (!authorizationCode) {
+      console.error("[Reconnect] No authorizationCode in response:", reconnectResp.data);
+      return res.status(400).json({ success: false, error: "No authorization code returned", data: reconnectResp.data });
+    }
+
+    console.log(`[Reconnect] Got authorization code, exchanging for tokens...`);
+
+    // Step 2: Exchange code for tokens (uses the same handler as normal OAuth)
+    const tokenData = await ghl.authorizationHandler(authorizationCode);
+
+    console.log(`[Reconnect] Token exchange successful for location: ${tokenData.locationId}`);
+
+    // Step 3: Fetch and update calendar info
+    let timezone = "America/New_York";
+    let calendarId: string | null = null;
+
+    try {
+      const client = await ghl.requests(locationId);
+      const locationResp = await client.get(`/locations/${locationId}`, {
+        headers: { Version: "2021-07-28" },
+      });
+      timezone = locationResp.data?.location?.timezone || timezone;
+    } catch (err: any) {
+      console.error("[Reconnect] Failed to fetch timezone:", err?.response?.data || err.message);
+    }
+
+    try {
+      const client = await ghl.requests(locationId);
+      const calResp = await client.get(`/calendars/?locationId=${locationId}`, {
+        headers: { Version: "2021-07-28" },
+      });
+      const calendars = calResp.data?.calendars || [];
+      if (calendars.length > 0) {
+        calendarId = calendars[0].id;
+      }
+    } catch (err: any) {
+      console.error("[Reconnect] Failed to fetch calendars:", err?.response?.data || err.message);
+    }
+
+    if (calendarId) {
+      await updateCalendarInfo(locationId, calendarId, timezone);
+    }
+
+    console.log(`[Reconnect] Reconnection complete for ${locationId}`);
+
+    return res.json({
+      success: true,
+      message: "Reconnection successful",
+      locationId: tokenData.locationId,
+      calendarId,
+      timezone,
+    });
+  } catch (error: any) {
+    console.error("[Reconnect] Failed:", error?.response?.data || error.message);
+    return res.status(500).json({
+      success: false,
+      error: error?.response?.data?.message || error.message,
+      details: error?.response?.data,
+    });
+  }
 });
 
 // Mount calendar API routes
