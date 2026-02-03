@@ -20,15 +20,18 @@ const SETTINGS_PANEL_URL = "https://booknexaai.com/widget-settings";
 
 /**
  * OAuth Initiation - Redirects user to GHL's OAuth authorization page
+ * Uses leadconnectorhq.com domain (the backend domain for GHL marketplace)
  */
 app.get("/initiate-auth", (req: Request, res: Response) => {
   const clientId = process.env.GHL_APP_CLIENT_ID;
   const redirectUri = "https://booknexaai-oauth.onrender.com/authorize-handler";
   const scope = "calendars.readonly calendars.write calendars/events.readonly calendars/events.write contacts.readonly contacts.write locations.readonly";
 
-  const authUrl = `https://marketplace.gohighlevel.com/oauth/chooselocation?response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&client_id=${clientId}&scope=${encodeURIComponent(scope)}`;
+  // Use leadconnectorhq.com domain for OAuth (GHL's backend domain)
+  const authUrl = `https://marketplace.leadconnectorhq.com/oauth/chooselocation?response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&client_id=${clientId}&scope=${encodeURIComponent(scope)}`;
 
   console.log(`[OAuth] Initiating auth, redirecting to: ${authUrl}`);
+  console.log(`[OAuth] Client ID: ${clientId}`);
   res.redirect(authUrl);
 });
 
