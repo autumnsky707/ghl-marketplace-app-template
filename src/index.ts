@@ -21,6 +21,7 @@ const SETTINGS_PANEL_URL = "https://booknexaai.com/widget-settings";
 /**
  * OAuth Initiation - Redirects user to GHL's OAuth authorization page
  * Uses the exact URL format required by GHL marketplace
+ * URL includes: response_type, redirect_uri, client_id, and scope
  */
 app.get("/initiate-auth", (req: Request, res: Response) => {
   const clientId = process.env.GHL_APP_CLIENT_ID;
