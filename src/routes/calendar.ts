@@ -156,7 +156,11 @@ router.post("/free-slots", async (req: Request, res: Response) => {
     }
 
     // Calculate dates automatically if not provided
-    const now = new Date();
+    // Use Hawaii time (Pacific/Honolulu) for all "now" calculations
+    const HAWAII_TZ = "Pacific/Honolulu";
+    const hawaiiNowStr = new Date().toLocaleString("en-US", { timeZone: HAWAII_TZ });
+    const hawaiiNow = new Date(hawaiiNowStr);
+
     const daysAhead = duration_minutes ? Math.ceil(duration_minutes / (24 * 60)) : 7; // Default 7 days
 
     let calculatedStartDate: string;
@@ -167,11 +171,17 @@ router.post("/free-slots", async (req: Request, res: Response) => {
       calculatedStartDate = startDate;
       calculatedEndDate = endDate;
     } else {
-      // Auto-calculate: today through X days ahead
-      calculatedStartDate = now.toISOString().split('T')[0];
-      const endDateObj = new Date(now);
+      // Auto-calculate: today (Hawaii time) through X days ahead
+      const yyyy = hawaiiNow.getFullYear();
+      const mm = String(hawaiiNow.getMonth() + 1).padStart(2, "0");
+      const dd = String(hawaiiNow.getDate()).padStart(2, "0");
+      calculatedStartDate = `${yyyy}-${mm}-${dd}`;
+      const endDateObj = new Date(hawaiiNow);
       endDateObj.setDate(endDateObj.getDate() + daysAhead);
-      calculatedEndDate = endDateObj.toISOString().split('T')[0];
+      const ey = endDateObj.getFullYear();
+      const em = String(endDateObj.getMonth() + 1).padStart(2, "0");
+      const ed = String(endDateObj.getDate()).padStart(2, "0");
+      calculatedEndDate = `${ey}-${em}-${ed}`;
     }
 
     // Normalize time_preference
@@ -188,9 +198,9 @@ router.post("/free-slots", async (req: Request, res: Response) => {
 
     const tz = timezone || installation.timezone || "America/New_York";
 
-    // 15-minute buffer so we don't offer slots that are about to pass
+    // 15-minute buffer so we don't offer slots that are about to pass (in Hawaii time)
     const BUFFER_MS = 15 * 60 * 1000;
-    const nowPlusBuffer = Date.now() + BUFFER_MS;
+    const nowPlusBuffer = hawaiiNow.getTime() + BUFFER_MS;
 
     // Convert dates to Unix milliseconds for GHL API
     // Use the later of the requested start or "now + 15 min" so past slots aren't fetched
@@ -207,7 +217,8 @@ router.post("/free-slots", async (req: Request, res: Response) => {
     console.log("[Calendar] startDate:", calculatedStartDate, "-> requested:", requestedStartMs, "-> actual:", startMs);
     console.log("[Calendar] endDate:", calculatedEndDate, "->", endMs);
     console.log("[Calendar] timezone:", tz);
-    console.log("[Calendar] nowPlusBuffer:", new Date(nowPlusBuffer).toISOString());
+    console.log("[Calendar] Hawaii now:", hawaiiNowStr);
+    console.log("[Calendar] nowPlusBuffer (Hawaii):", new Date(nowPlusBuffer).toLocaleString("en-US", { timeZone: HAWAII_TZ }));
 
     const client = await ghl.requests(resolvedLocationId);
 
@@ -263,7 +274,12 @@ router.post("/free-slots", async (req: Request, res: Response) => {
 
         const entry = rawData[dateKey];
         const daySlots: string[] = Array.isArray(entry) ? entry : (entry?.slots || []);
-        const futureSlots = daySlots.filter((slot) => new Date(slot).getTime() >= nowPlusBuffer);
+        // Compare slot times in Hawaii local time to filter out past slots
+        const futureSlots = daySlots.filter((slot) => {
+          const slotHawaiiStr = new Date(slot).toLocaleString("en-US", { timeZone: HAWAII_TZ });
+          const slotHawaiiMs = new Date(slotHawaiiStr).getTime();
+          return slotHawaiiMs >= nowPlusBuffer;
+        });
         // Apply time preference filter (morning/afternoon/any)
         const filteredSlots = filterByTimePreference(futureSlots, timePreference);
 
@@ -294,33 +310,32 @@ router.post("/free-slots", async (req: Request, res: Response) => {
       }
     }
 
-    // Flatten all slots across all days and return the 3 soonest
-    const allSlots: Array<{ date: string; dayOfWeek: string; slot: string; formatted: string }> = [];
+    // Return the 3 soonest slots per day for up to 5 business days
+    const MAX_BUSINESS_DAYS = 5;
+    const result: Record<string, Array<{ startTime: string; formatted: string; dayOfWeek: string }>> = {};
+    let businessDayCount = 0;
+
     for (const day of availableDates) {
-      for (let i = 0; i < day.slots.length; i++) {
-        allSlots.push({
-          date: day.date,
-          dayOfWeek: day.dayOfWeek,
-          slot: day.slots[i],
-          formatted: day.formattedSlots[i],
-        });
+      if (businessDayCount >= MAX_BUSINESS_DAYS) break;
+
+      // Take the 3 soonest slots for this day
+      const soonest = day.slots.slice(0, 3).map((slot, i) => ({
+        startTime: slot,
+        formatted: day.formattedSlots[i],
+        dayOfWeek: day.dayOfWeek,
+      }));
+
+      if (soonest.length > 0) {
+        result[day.date] = soonest;
+        businessDayCount++;
       }
     }
 
-    // Sort by slot time and take the 3 soonest
-    allSlots.sort((a, b) => new Date(a.slot).getTime() - new Date(b.slot).getTime());
-    const soonest3 = allSlots.slice(0, 3);
-
-    console.log(`[Calendar] Returning ${soonest3.length} soonest slots out of ${allSlots.length} total`);
+    console.log(`[Calendar] Returning slots for ${businessDayCount} business days`);
 
     return res.json({
       success: true,
-      data: soonest3.map((s) => ({
-        date: s.date,
-        dayOfWeek: s.dayOfWeek,
-        startTime: s.slot,
-        formatted: s.formatted,
-      })),
+      data: result,
     });
   } catch (error: any) {
     console.error("[Calendar] free-slots error:", error?.response?.data || error.message);
