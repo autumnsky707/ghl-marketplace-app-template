@@ -105,12 +105,13 @@ app.get("/authorize-handler", async (req: Request, res: Response) => {
     }
 
     console.log(`[OAuth] Installation complete for ${locationId}`);
+
+    // Redirect back to settings panel with locationId and success flag
+    return res.redirect(`${SETTINGS_PANEL_URL}?locationId=${encodeURIComponent(locationId)}&connected=true`);
   } catch (error: any) {
     console.error("[OAuth] Authorization failed:", error?.response?.data || error.message);
+    return res.redirect(`${SETTINGS_PANEL_URL}?error=connection_failed`);
   }
-
-  // Redirect back to settings panel with connected=true
-  res.redirect(`${SETTINGS_PANEL_URL}?connected=true`);
 });
 
 /**
