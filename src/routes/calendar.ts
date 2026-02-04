@@ -294,9 +294,33 @@ router.post("/free-slots", async (req: Request, res: Response) => {
       }
     }
 
+    // Flatten all slots across all days and return the 3 soonest
+    const allSlots: Array<{ date: string; dayOfWeek: string; slot: string; formatted: string }> = [];
+    for (const day of availableDates) {
+      for (let i = 0; i < day.slots.length; i++) {
+        allSlots.push({
+          date: day.date,
+          dayOfWeek: day.dayOfWeek,
+          slot: day.slots[i],
+          formatted: day.formattedSlots[i],
+        });
+      }
+    }
+
+    // Sort by slot time and take the 3 soonest
+    allSlots.sort((a, b) => new Date(a.slot).getTime() - new Date(b.slot).getTime());
+    const soonest3 = allSlots.slice(0, 3);
+
+    console.log(`[Calendar] Returning ${soonest3.length} soonest slots out of ${allSlots.length} total`);
+
     return res.json({
       success: true,
-      data: availableDates,
+      data: soonest3.map((s) => ({
+        date: s.date,
+        dayOfWeek: s.dayOfWeek,
+        startTime: s.slot,
+        formatted: s.formatted,
+      })),
     });
   } catch (error: any) {
     console.error("[Calendar] free-slots error:", error?.response?.data || error.message);
@@ -308,21 +332,23 @@ router.post("/free-slots", async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/calendar/business-hours
+ * POST /api/calendar/business-hours
  * Fetch the calendar's availability schedule and return it formatted for speech.
  *
- * Query: ?locationId=xxx or ?calendarId=xxx&locationId=xxx
+ * Body: { locationId }
+ * The 'action' field from ElevenLabs is ignored.
  */
-router.get("/business-hours", async (req: Request, res: Response) => {
+router.post("/business-hours", async (req: Request, res: Response) => {
   try {
-    const locationId = req.query.locationId as string;
-    const calendarIdParam = req.query.calendarId as string | undefined;
+    const { locationId, location_id, calendarId, calendar_id } = req.body;
+    const resolvedLocationId = locationId || location_id;
+    const calendarIdParam = calendarId || calendar_id;
 
-    if (!locationId) {
-      return res.status(400).json({ success: false, error: "Missing required query param: locationId" });
+    if (!resolvedLocationId) {
+      return res.status(400).json({ success: false, error: "Missing required field: locationId" });
     }
 
-    const installation = await getInstallation(locationId);
+    const installation = await getInstallation(resolvedLocationId);
     if (!installation) {
       return res.status(404).json({ success: false, error: "Installation not found" });
     }
@@ -332,7 +358,7 @@ router.get("/business-hours", async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: "No calendar configured for this location" });
     }
 
-    const client = await ghl.requests(locationId);
+    const client = await ghl.requests(resolvedLocationId);
     const tz = installation.timezone || "America/New_York";
 
     // Uses the same cached reference-week logic as free-slots filtering
