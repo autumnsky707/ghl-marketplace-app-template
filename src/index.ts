@@ -17,7 +17,7 @@ const ghl = new GHL();
 const port = process.env.PORT;
 
 // Settings panel URL for redirect after OAuth
-const SETTINGS_PANEL_URL = "https://booknexaai.com/widget-settings";
+const SETTINGS_PANEL_URL = "https://booknexaai.com/spawidget-settings";
 
 /**
  * OAuth Initiation - Redirects user to GHL's OAuth authorization page
