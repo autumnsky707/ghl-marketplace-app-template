@@ -472,27 +472,63 @@ function formatDayRange(days: number[]): string {
   return names.slice(0, -1).join(", ") + ", and " + names[names.length - 1];
 }
 
+// --- Check-availability helpers (defined outside route for cleaner code) ---
+
+function formatSlotTime(iso: string): string {
+  const match = iso.match(/T(\d{2}):(\d{2})/);
+  if (!match) return iso;
+  const h = parseInt(match[1], 10);
+  const m = parseInt(match[2], 10);
+  const period = h >= 12 ? "PM" : "AM";
+  const hour12 = h % 12 || 12;
+  return m === 0 ? `${hour12}:00 ${period}` : `${hour12}:${m.toString().padStart(2, "0")} ${period}`;
+}
+
+function isSlotMorning(iso: string): boolean {
+  const match = iso.match(/T(\d{2}):/);
+  if (!match) return false;
+  return parseInt(match[1], 10) < 12;
+}
+
+function isSlotAfternoon(iso: string): boolean {
+  const match = iso.match(/T(\d{2}):(\d{2})/);
+  if (!match) return false;
+  const h = parseInt(match[1], 10);
+  const m = parseInt(match[2], 10);
+  return h > 12 || (h === 12 && m >= 15);
+}
+
+function getSlotMinutes(iso: string): number {
+  const match = iso.match(/T(\d{2}):(\d{2})/);
+  if (!match) return 0;
+  return parseInt(match[1], 10) * 60 + parseInt(match[2], 10);
+}
+
+function parseTimeToMinutes(timeStr: string): number | null {
+  const normalized = timeStr.toLowerCase().replace(/\s+/g, "");
+  const match12 = normalized.match(/^(\d{1,2}):?(\d{2})?(am|pm)?$/);
+  const match24 = normalized.match(/^(\d{1,2}):(\d{2})$/);
+  let hour = 0, min = 0;
+  if (match12) {
+    hour = parseInt(match12[1], 10);
+    min = match12[2] ? parseInt(match12[2], 10) : 0;
+    if (match12[3] === "pm" && hour !== 12) hour += 12;
+    if (match12[3] === "am" && hour === 12) hour = 0;
+  } else if (match24) {
+    hour = parseInt(match24[1], 10);
+    min = parseInt(match24[2], 10);
+  } else {
+    return null;
+  }
+  return hour * 60 + min;
+}
+
 /**
  * POST /api/calendar/check-availability
  * Smart availability check for voice agents.
  *
- * TWO MODES:
- * 1. Time preference mode (morning/afternoon): Returns 1 slot per day for next 3 available days
- * 2. Specific date/time mode: Checks if requested slot is available, or returns nearby alternatives
- *
- * Body: {
- *   locationId,
- *   time_preference?: "morning" | "afternoon",  // Mode 1
- *   requested_date?: string,                     // Mode 2: "2026-02-07" or "Friday"
- *   requested_time?: string                      // Mode 2: "2:00 PM" or "14:00"
- * }
- *
- * Time ranges:
- *   - Morning = opening time to 12:00 PM
- *   - Afternoon = 12:15 PM to closing time
- *
- * Response: { slots: [{ date, time, label, startTime }] }
- * Labels: "today", "tomorrow", or day name (e.g., "Friday")
+ * Body: { locationId, time_preference?, requested_date?, requested_time? }
+ * Response: { success: true, slots: [{ date, time, label, startTime }] }
  */
 router.post("/check-availability", async (req: Request, res: Response) => {
   try {
@@ -500,330 +536,158 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     const resolvedLocationId = locationId || location_id;
 
     if (!resolvedLocationId) {
-      return res.status(400).json({
-        success: false,
-        error: "Missing required field: locationId",
-      });
+      return res.status(400).json({ success: false, error: "Missing required field: locationId" });
     }
 
     const installation = await getInstallation(resolvedLocationId);
     if (!installation) {
       return res.status(404).json({ success: false, error: "Installation not found" });
     }
-
     if (!installation.calendar_id) {
       return res.status(400).json({ success: false, error: "No calendar configured for this location" });
     }
 
-    // Use Pacific/Honolulu timezone for all calculations
+    // Hawaii timezone for all calculations
     const HAWAII_TZ = "Pacific/Honolulu";
-    const hawaiiNowStr = new Date().toLocaleString("en-US", { timeZone: HAWAII_TZ });
-    const hawaiiNow = new Date(hawaiiNowStr);
+    const hawaiiNow = new Date(new Date().toLocaleString("en-US", { timeZone: HAWAII_TZ }));
+    const todayStr = hawaiiNow.toISOString().split("T")[0];
+    const tomorrowDate = new Date(hawaiiNow);
+    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+    const tomorrowStr = tomorrowDate.toISOString().split("T")[0];
 
-    // Calculate date strings for labeling
-    const yyyy = hawaiiNow.getFullYear();
-    const mm = String(hawaiiNow.getMonth() + 1).padStart(2, "0");
-    const dd = String(hawaiiNow.getDate()).padStart(2, "0");
-    const todayStr = `${yyyy}-${mm}-${dd}`;
+    // Date range: 14 days ahead
+    const endDate = new Date(hawaiiNow);
+    endDate.setDate(endDate.getDate() + 14);
 
-    const tomorrowObj = new Date(hawaiiNow);
-    tomorrowObj.setDate(tomorrowObj.getDate() + 1);
-    const tomorrowStr = `${tomorrowObj.getFullYear()}-${String(tomorrowObj.getMonth() + 1).padStart(2, "0")}-${String(tomorrowObj.getDate()).padStart(2, "0")}`;
-
-    // Calculate date range: today through 14 days ahead (to ensure we find 3 days)
-    const endDateObj = new Date(hawaiiNow);
-    endDateObj.setDate(endDateObj.getDate() + 14);
-    const endDateStr = `${endDateObj.getFullYear()}-${String(endDateObj.getMonth() + 1).padStart(2, "0")}-${String(endDateObj.getDate()).padStart(2, "0")}`;
-
-    // 15-minute buffer so we don't offer slots that are about to pass
     const BUFFER_MS = 15 * 60 * 1000;
     const nowPlusBuffer = hawaiiNow.getTime() + BUFFER_MS;
 
-    const startMs = Math.max(new Date(todayStr).getTime(), nowPlusBuffer);
-    const endMs = new Date(endDateStr).getTime();
-
     const client = await ghl.requests(resolvedLocationId);
     const tz = installation.timezone || HAWAII_TZ;
-
-    const slotsUrl = `/calendars/${installation.calendar_id}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
+    const startMs = Math.max(new Date(todayStr).getTime(), nowPlusBuffer);
+    const endMs = endDate.getTime();
 
     console.log("[Calendar] ===== CHECK AVAILABILITY =====");
-    console.log("[Calendar] Mode:", time_preference ? `preference (${time_preference})` : requested_date ? "specific date/time" : "general");
-    console.log("[Calendar] URL:", slotsUrl);
+    console.log("[Calendar] time_preference:", time_preference, "requested_time:", requested_time);
 
-    // Get calendar schedule to know which days are open
-    let openDays: Set<number> = new Set([1, 2, 3, 4, 5]); // Default Mon-Fri
+    // Get open days
+    let openDays = new Set([1, 2, 3, 4, 5]);
     try {
       const schedule = await getCalendarSchedule(client, installation.calendar_id, tz);
       openDays = schedule.openDays;
-    } catch (err: any) {
-      console.error("[Calendar] Schedule lookup failed:", err?.message);
+    } catch (e) {}
+
+    // Fetch slots from GHL
+    const resp = await client.get(
+      `/calendars/${installation.calendar_id}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`,
+      { headers: { Version: "2021-07-28" } }
+    );
+
+    // Build availability map
+    const availabilityByDate: Record<string, string[]> = {};
+    const rawData = resp.data || {};
+    for (const dateKey of Object.keys(rawData).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort()) {
+      const d = new Date(dateKey + "T00:00:00");
+      if (!openDays.has(d.getDay())) continue;
+      const entry = rawData[dateKey];
+      const slots: string[] = Array.isArray(entry) ? entry : (entry?.slots || []);
+      const futureSlots = slots.filter(slot => {
+        const slotMs = new Date(new Date(slot).toLocaleString("en-US", { timeZone: HAWAII_TZ })).getTime();
+        return slotMs >= nowPlusBuffer;
+      });
+      if (futureSlots.length > 0) availabilityByDate[dateKey] = futureSlots;
     }
 
-    const resp = await client.get(slotsUrl, {
-      headers: { Version: "2021-07-28" },
-    });
-
-    const rawData = resp.data;
-
-    // Helper: get label for a date
-    function getDateLabel(dateKey: string): string {
+    // Helper: get label
+    const getLabel = (dateKey: string): string => {
       if (dateKey === todayStr) return "today";
       if (dateKey === tomorrowStr) return "tomorrow";
-      const d = new Date(dateKey + "T00:00:00");
-      return DAY_NAMES[d.getDay()];
-    }
+      return DAY_NAMES[new Date(dateKey + "T00:00:00").getDay()];
+    };
 
-    // Helper: format time for display
-    function formatTime(iso: string): string {
-      const match = iso.match(/T(\d{2}):(\d{2})/);
-      if (!match) return iso;
-      const h = parseInt(match[1], 10);
-      const m = parseInt(match[2], 10);
-      const period = h >= 12 ? "PM" : "AM";
-      const hour12 = h % 12 || 12;
-      return m === 0 ? `${hour12}:00 ${period}` : `${hour12}:${m.toString().padStart(2, "0")} ${period}`;
-    }
-
-    // Helper: check if slot is in morning (before 12:00 PM)
-    function isMorning(iso: string): boolean {
-      const match = iso.match(/T(\d{2}):(\d{2})/);
-      if (!match) return false;
-      const h = parseInt(match[1], 10);
-      return h < 12;
-    }
-
-    // Helper: check if slot is in afternoon (12:15 PM or later)
-    function isAfternoon(iso: string): boolean {
-      const match = iso.match(/T(\d{2}):(\d{2})/);
-      if (!match) return false;
-      const h = parseInt(match[1], 10);
-      const m = parseInt(match[2], 10);
-      return h > 12 || (h === 12 && m >= 15);
-    }
-
-    // Helper: filter past slots
-    function filterFutureSlots(slots: string[]): string[] {
-      return slots.filter((slot) => {
-        const slotHawaiiStr = new Date(slot).toLocaleString("en-US", { timeZone: HAWAII_TZ });
-        const slotHawaiiMs = new Date(slotHawaiiStr).getTime();
-        return slotHawaiiMs >= nowPlusBuffer;
-      });
-    }
-
-    // Helper: resolve day name to date string (e.g., "Friday" -> "2026-02-07")
-    function resolveDayName(dayName: string): string | null {
-      const normalized = dayName.toLowerCase().trim();
-      if (normalized === "today") return todayStr;
-      if (normalized === "tomorrow") return tomorrowStr;
-
-      const dayIndex = DAY_NAMES.findIndex((d) => d.toLowerCase() === normalized);
-      if (dayIndex === -1) return null;
-
-      // Find next occurrence of this day
-      const currentDow = hawaiiNow.getDay();
-      let daysAhead = dayIndex - currentDow;
+    // Helper: resolve day name
+    const resolveDayName = (name: string): string | null => {
+      const n = name.toLowerCase().trim();
+      if (n === "today") return todayStr;
+      if (n === "tomorrow") return tomorrowStr;
+      const idx = DAY_NAMES.findIndex(d => d.toLowerCase() === n);
+      if (idx === -1) return null;
+      let daysAhead = idx - hawaiiNow.getDay();
       if (daysAhead <= 0) daysAhead += 7;
+      const target = new Date(hawaiiNow);
+      target.setDate(target.getDate() + daysAhead);
+      return target.toISOString().split("T")[0];
+    };
 
-      const targetDate = new Date(hawaiiNow);
-      targetDate.setDate(targetDate.getDate() + daysAhead);
-      return `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, "0")}-${String(targetDate.getDate()).padStart(2, "0")}`;
-    }
+    const resultSlots: Array<{ date: string; time: string; label: string; startTime: string }> = [];
 
-    // Parse raw data into usable structure
-    const availabilityByDate: Map<string, string[]> = new Map();
-    if (typeof rawData === "object" && rawData !== null) {
-      const dateKeys = Object.keys(rawData).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
-      for (const dateKey of dateKeys) {
-        const d = new Date(dateKey + "T00:00:00");
-        if (!openDays.has(d.getDay())) continue;
-
-        const entry = rawData[dateKey];
-        const daySlots: string[] = Array.isArray(entry) ? entry : (entry?.slots || []);
-        const futureSlots = filterFutureSlots(daySlots);
-        if (futureSlots.length > 0) {
-          availabilityByDate.set(dateKey, futureSlots);
-        }
-      }
-    }
-
-    let resultSlots: Array<{ date: string; time: string; label: string; startTime: string }> = [];
-
-    // Helper: parse time string to minutes since midnight
-    function parseTimeToMinutes(timeStr: string): number | null {
-      const normalized = timeStr.toLowerCase().replace(/\s+/g, "");
-      const match12 = normalized.match(/^(\d{1,2}):?(\d{2})?(am|pm)?$/);
-      const match24 = normalized.match(/^(\d{1,2}):(\d{2})$/);
-
-      let hour = 0;
-      let min = 0;
-
-      if (match12) {
-        hour = parseInt(match12[1], 10);
-        min = match12[2] ? parseInt(match12[2], 10) : 0;
-        if (match12[3] === "pm" && hour !== 12) hour += 12;
-        if (match12[3] === "am" && hour === 12) hour = 0;
-      } else if (match24) {
-        hour = parseInt(match24[1], 10);
-        min = parseInt(match24[2], 10);
-      } else {
-        return null;
-      }
-
-      return hour * 60 + min;
-    }
-
-    // Helper: get slot time in minutes
-    function getSlotMinutes(iso: string): number {
-      const match = iso.match(/T(\d{2}):(\d{2})/);
-      if (!match) return 0;
-      return parseInt(match[1], 10) * 60 + parseInt(match[2], 10);
-    }
-
-    // Helper: find best slot from list (closest to target time, or first if no target)
-    function findBestSlot(slots: string[], targetMinutes: number | null): string | null {
-      if (slots.length === 0) return null;
-      if (targetMinutes === null) return slots[0];
-
-      let bestSlot = slots[0];
-      let bestDiff = Math.abs(getSlotMinutes(slots[0]) - targetMinutes);
-
-      for (const slot of slots) {
-        const diff = Math.abs(getSlotMinutes(slot) - targetMinutes);
-        if (diff < bestDiff) {
-          bestDiff = diff;
-          bestSlot = slot;
-        }
-      }
-      return bestSlot;
-    }
-
-    // MODE 1: Time preference (morning/afternoon) - with optional target time
-    // Find next 3 DAYS with availability in that time range, return 1 slot per day
+    // MODE 1: Time preference
     if (time_preference) {
       const pref = time_preference.toLowerCase();
-      const filterFn = pref === "morning" ? isMorning : isAfternoon;
-      const targetMinutes = requested_time ? parseTimeToMinutes(requested_time) : null;
+      const filterFn = pref === "morning" ? isSlotMorning : isSlotAfternoon;
+      const targetMins = requested_time ? parseTimeToMinutes(requested_time) : null;
       let daysFound = 0;
 
-      console.log(`[Calendar] Time preference: ${pref}, target time: ${requested_time || "none"}`);
-
-      for (const [dateKey, slots] of availabilityByDate) {
+      for (const dateKey of Object.keys(availabilityByDate).sort()) {
         if (daysFound >= 3) break;
-
-        const matchingSlots = slots.filter(filterFn);
-        if (matchingSlots.length > 0) {
-          // Find the best slot (closest to target time if specified, otherwise first)
-          const bestSlot = findBestSlot(matchingSlots, targetMinutes);
-          if (bestSlot) {
-            resultSlots.push({
-              date: dateKey,
-              time: formatTime(bestSlot),
-              label: getDateLabel(dateKey),
-              startTime: bestSlot,
-            });
-            daysFound++;
-          }
-        }
-      }
-
-      console.log(`[Calendar] Time preference "${pref}": found ${daysFound} days with availability`);
-    }
-    // MODE 2: Specific date/time request (no time_preference)
-    else if (requested_date || requested_time) {
-      // Resolve the requested date
-      let targetDate = requested_date;
-      if (targetDate && !/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
-        const resolved = resolveDayName(targetDate);
-        if (resolved) targetDate = resolved;
-      }
-      if (!targetDate) targetDate = todayStr;
-
-      const daySlots = availabilityByDate.get(targetDate) || [];
-
-      if (requested_time) {
-        const targetMinutes = parseTimeToMinutes(requested_time);
-
-        if (targetMinutes !== null) {
-          // Find exact match or nearby slots
-          let exactMatch: string | null = null;
-          const nearbySlots: Array<{ slot: string; diff: number }> = [];
-
-          for (const slot of daySlots) {
-            const slotMinutes = getSlotMinutes(slot);
-            const diff = Math.abs(slotMinutes - targetMinutes);
-
-            if (diff === 0) {
-              exactMatch = slot;
-            } else if (diff <= 90) {
-              nearbySlots.push({ slot, diff });
+        const matching = availabilityByDate[dateKey].filter(filterFn);
+        if (matching.length > 0) {
+          // Pick best slot (closest to target or first)
+          let best = matching[0];
+          if (targetMins !== null) {
+            let bestDiff = Math.abs(getSlotMinutes(matching[0]) - targetMins);
+            for (const s of matching) {
+              const diff = Math.abs(getSlotMinutes(s) - targetMins);
+              if (diff < bestDiff) { bestDiff = diff; best = s; }
             }
           }
-
-          if (exactMatch) {
-            resultSlots.push({
-              date: targetDate,
-              time: formatTime(exactMatch),
-              label: getDateLabel(targetDate),
-              startTime: exactMatch,
-            });
-            console.log(`[Calendar] Exact match found for ${requested_time} on ${targetDate}`);
-          } else if (nearbySlots.length > 0) {
-            nearbySlots.sort((a, b) => a.diff - b.diff);
-            for (const { slot } of nearbySlots.slice(0, 3)) {
-              resultSlots.push({
-                date: targetDate,
-                time: formatTime(slot),
-                label: getDateLabel(targetDate),
-                startTime: slot,
-              });
-            }
-            console.log(`[Calendar] No exact match, returning ${resultSlots.length} nearby alternatives`);
-          } else {
-            console.log(`[Calendar] No availability on ${targetDate} near ${requested_time}`);
-          }
-        }
-      } else {
-        // No specific time, return first 3 slots for that day
-        for (const slot of daySlots.slice(0, 3)) {
-          resultSlots.push({
-            date: targetDate,
-            time: formatTime(slot),
-            label: getDateLabel(targetDate),
-            startTime: slot,
-          });
-        }
-        console.log(`[Calendar] Returning ${resultSlots.length} slots for ${targetDate}`);
-      }
-    }
-    // DEFAULT MODE: No preference specified, return 1 slot per day for next 3 days
-    else {
-      let daysFound = 0;
-      for (const [dateKey, slots] of availabilityByDate) {
-        if (daysFound >= 3) break;
-        if (slots.length > 0) {
-          resultSlots.push({
-            date: dateKey,
-            time: formatTime(slots[0]),
-            label: getDateLabel(dateKey),
-            startTime: slots[0],
-          });
+          resultSlots.push({ date: dateKey, time: formatSlotTime(best), label: getLabel(dateKey), startTime: best });
           daysFound++;
         }
       }
-      console.log(`[Calendar] Default mode: returning ${daysFound} days`);
+    }
+    // MODE 2: Specific date/time
+    else if (requested_date || requested_time) {
+      let targetDate = requested_date && !/^\d{4}-\d{2}-\d{2}$/.test(requested_date)
+        ? resolveDayName(requested_date)
+        : requested_date;
+      if (!targetDate) targetDate = todayStr;
+
+      const daySlots = availabilityByDate[targetDate] || [];
+      if (requested_time) {
+        const targetMins = parseTimeToMinutes(requested_time);
+        if (targetMins !== null) {
+          const withDiff = daySlots.map(s => ({ slot: s, diff: Math.abs(getSlotMinutes(s) - targetMins) }));
+          withDiff.sort((a, b) => a.diff - b.diff);
+          for (const { slot } of withDiff.slice(0, 3)) {
+            resultSlots.push({ date: targetDate, time: formatSlotTime(slot), label: getLabel(targetDate), startTime: slot });
+          }
+        }
+      } else {
+        for (const slot of daySlots.slice(0, 3)) {
+          resultSlots.push({ date: targetDate, time: formatSlotTime(slot), label: getLabel(targetDate), startTime: slot });
+        }
+      }
+    }
+    // DEFAULT: 1 slot per day for 3 days
+    else {
+      let daysFound = 0;
+      for (const dateKey of Object.keys(availabilityByDate).sort()) {
+        if (daysFound >= 3) break;
+        const slots = availabilityByDate[dateKey];
+        if (slots.length > 0) {
+          resultSlots.push({ date: dateKey, time: formatSlotTime(slots[0]), label: getLabel(dateKey), startTime: slots[0] });
+          daysFound++;
+        }
+      }
     }
 
-    return res.json({
-      success: true,
-      slots: resultSlots,
-    });
+    console.log(`[Calendar] Returning ${resultSlots.length} slots`);
+    return res.json({ success: true, slots: resultSlots });
+
   } catch (error: any) {
     console.error("[Calendar] check-availability error:", error?.response?.data || error.message);
-    return res.status(500).json({
-      success: false,
-      error: error?.response?.data?.message || error.message,
-    });
+    return res.status(500).json({ success: false, error: error?.response?.data?.message || error.message });
   }
 });
 
