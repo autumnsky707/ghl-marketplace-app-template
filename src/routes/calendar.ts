@@ -473,6 +473,181 @@ function formatDayRange(days: number[]): string {
 }
 
 /**
+ * POST /api/calendar/check-availability
+ * Returns the 5 soonest available slots across the next 7 days.
+ * Designed for voice agent prompts like: "I have an opening today at two PM, or tomorrow at eleven AM."
+ *
+ * Body: { locationId }
+ * Response: { slots: [{ date, time, label, startTime }] }
+ */
+router.post("/check-availability", async (req: Request, res: Response) => {
+  try {
+    const { locationId, location_id } = req.body;
+    const resolvedLocationId = locationId || location_id;
+
+    if (!resolvedLocationId) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required field: locationId",
+      });
+    }
+
+    const installation = await getInstallation(resolvedLocationId);
+    if (!installation) {
+      return res.status(404).json({ success: false, error: "Installation not found" });
+    }
+
+    if (!installation.calendar_id) {
+      return res.status(400).json({ success: false, error: "No calendar configured for this location" });
+    }
+
+    // Use Pacific/Honolulu timezone for all calculations
+    const HAWAII_TZ = "Pacific/Honolulu";
+    const hawaiiNowStr = new Date().toLocaleString("en-US", { timeZone: HAWAII_TZ });
+    const hawaiiNow = new Date(hawaiiNowStr);
+
+    // Calculate date range: today through 7 days ahead
+    const yyyy = hawaiiNow.getFullYear();
+    const mm = String(hawaiiNow.getMonth() + 1).padStart(2, "0");
+    const dd = String(hawaiiNow.getDate()).padStart(2, "0");
+    const todayStr = `${yyyy}-${mm}-${dd}`;
+
+    const endDateObj = new Date(hawaiiNow);
+    endDateObj.setDate(endDateObj.getDate() + 7);
+    const ey = endDateObj.getFullYear();
+    const em = String(endDateObj.getMonth() + 1).padStart(2, "0");
+    const ed = String(endDateObj.getDate()).padStart(2, "0");
+    const endDateStr = `${ey}-${em}-${ed}`;
+
+    // 15-minute buffer so we don't offer slots that are about to pass
+    const BUFFER_MS = 15 * 60 * 1000;
+    const nowPlusBuffer = hawaiiNow.getTime() + BUFFER_MS;
+
+    const startMs = Math.max(new Date(todayStr).getTime(), nowPlusBuffer);
+    const endMs = new Date(endDateStr).getTime();
+
+    const client = await ghl.requests(resolvedLocationId);
+    const tz = installation.timezone || HAWAII_TZ;
+
+    const slotsUrl = `/calendars/${installation.calendar_id}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
+
+    console.log("[Calendar] ===== CHECK AVAILABILITY =====");
+    console.log("[Calendar] URL:", slotsUrl);
+    console.log("[Calendar] Hawaii now:", hawaiiNowStr);
+    console.log("[Calendar] Today (Hawaii):", todayStr);
+
+    // Get calendar schedule to know which days are open
+    let openDays: Set<number> = new Set([1, 2, 3, 4, 5]); // Default Mon-Fri
+    try {
+      const schedule = await getCalendarSchedule(client, installation.calendar_id, tz);
+      openDays = schedule.openDays;
+    } catch (err: any) {
+      console.error("[Calendar] Schedule lookup failed:", err?.message);
+    }
+
+    const resp = await client.get(slotsUrl, {
+      headers: { Version: "2021-07-28" },
+    });
+
+    const rawData = resp.data;
+
+    // Collect all slots across all days, then pick the 5 soonest
+    const allSlots: Array<{
+      date: string;
+      time: string;
+      label: string;
+      startTime: string;
+      sortKey: number;
+    }> = [];
+
+    // Calculate tomorrow's date string for labeling
+    const tomorrowObj = new Date(hawaiiNow);
+    tomorrowObj.setDate(tomorrowObj.getDate() + 1);
+    const ty = tomorrowObj.getFullYear();
+    const tm = String(tomorrowObj.getMonth() + 1).padStart(2, "0");
+    const td = String(tomorrowObj.getDate()).padStart(2, "0");
+    const tomorrowStr = `${ty}-${tm}-${td}`;
+
+    if (typeof rawData === "object" && rawData !== null) {
+      const dateKeys = Object.keys(rawData).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
+
+      for (const dateKey of dateKeys) {
+        const d = new Date(dateKey + "T00:00:00");
+        const dow = d.getDay();
+
+        // Skip closed days
+        if (!openDays.has(dow)) continue;
+
+        const entry = rawData[dateKey];
+        const daySlots: string[] = Array.isArray(entry) ? entry : (entry?.slots || []);
+
+        // Filter out past slots (compare in Hawaii time)
+        const futureSlots = daySlots.filter((slot) => {
+          const slotHawaiiStr = new Date(slot).toLocaleString("en-US", { timeZone: HAWAII_TZ });
+          const slotHawaiiMs = new Date(slotHawaiiStr).getTime();
+          return slotHawaiiMs >= nowPlusBuffer;
+        });
+
+        // Determine label for this date
+        let label: string;
+        if (dateKey === todayStr) {
+          label = "today";
+        } else if (dateKey === tomorrowStr) {
+          label = "tomorrow";
+        } else {
+          label = DAY_NAMES[dow];
+        }
+
+        // Format each slot and add to collection
+        for (const iso of futureSlots) {
+          const match = iso.match(/T(\d{2}):(\d{2})/);
+          if (!match) continue;
+
+          const h = parseInt(match[1], 10);
+          const m = parseInt(match[2], 10);
+          const period = h >= 12 ? "PM" : "AM";
+          const hour12 = h % 12 || 12;
+          const timeStr = m === 0 ? `${hour12}:00 ${period}` : `${hour12}:${m.toString().padStart(2, "0")} ${period}`;
+
+          // Sort key: use the slot's timestamp
+          const slotTime = new Date(iso).getTime();
+
+          allSlots.push({
+            date: dateKey,
+            time: timeStr,
+            label,
+            startTime: iso,
+            sortKey: slotTime,
+          });
+        }
+      }
+    }
+
+    // Sort by time and take the 5 soonest
+    allSlots.sort((a, b) => a.sortKey - b.sortKey);
+    const soonestSlots = allSlots.slice(0, 5).map(({ date, time, label, startTime }) => ({
+      date,
+      time,
+      label,
+      startTime,
+    }));
+
+    console.log(`[Calendar] Returning ${soonestSlots.length} soonest slots`);
+
+    return res.json({
+      success: true,
+      slots: soonestSlots,
+    });
+  } catch (error: any) {
+    console.error("[Calendar] check-availability error:", error?.response?.data || error.message);
+    return res.status(500).json({
+      success: false,
+      error: error?.response?.data?.message || error.message,
+    });
+  }
+});
+
+/**
  * POST /api/calendar/book
  * Create or upsert a GHL contact, then book an appointment.
  *
