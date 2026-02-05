@@ -649,115 +649,142 @@ router.post("/check-availability", async (req: Request, res: Response) => {
 
     let resultSlots: Array<{ date: string; time: string; label: string; startTime: string }> = [];
 
-    // MODE 1: Time preference (morning/afternoon)
-    // Find next 3 days with availability in that time range, return 1 slot per day
+    // Helper: parse time string to minutes since midnight
+    function parseTimeToMinutes(timeStr: string): number | null {
+      const normalized = timeStr.toLowerCase().replace(/\s+/g, "");
+      const match12 = normalized.match(/^(\d{1,2}):?(\d{2})?(am|pm)?$/);
+      const match24 = normalized.match(/^(\d{1,2}):(\d{2})$/);
+
+      let hour = 0;
+      let min = 0;
+
+      if (match12) {
+        hour = parseInt(match12[1], 10);
+        min = match12[2] ? parseInt(match12[2], 10) : 0;
+        if (match12[3] === "pm" && hour !== 12) hour += 12;
+        if (match12[3] === "am" && hour === 12) hour = 0;
+      } else if (match24) {
+        hour = parseInt(match24[1], 10);
+        min = parseInt(match24[2], 10);
+      } else {
+        return null;
+      }
+
+      return hour * 60 + min;
+    }
+
+    // Helper: get slot time in minutes
+    function getSlotMinutes(iso: string): number {
+      const match = iso.match(/T(\d{2}):(\d{2})/);
+      if (!match) return 0;
+      return parseInt(match[1], 10) * 60 + parseInt(match[2], 10);
+    }
+
+    // Helper: find best slot from list (closest to target time, or first if no target)
+    function findBestSlot(slots: string[], targetMinutes: number | null): string | null {
+      if (slots.length === 0) return null;
+      if (targetMinutes === null) return slots[0];
+
+      let bestSlot = slots[0];
+      let bestDiff = Math.abs(getSlotMinutes(slots[0]) - targetMinutes);
+
+      for (const slot of slots) {
+        const diff = Math.abs(getSlotMinutes(slot) - targetMinutes);
+        if (diff < bestDiff) {
+          bestDiff = diff;
+          bestSlot = slot;
+        }
+      }
+      return bestSlot;
+    }
+
+    // MODE 1: Time preference (morning/afternoon) - with optional target time
+    // Find next 3 DAYS with availability in that time range, return 1 slot per day
     if (time_preference) {
       const pref = time_preference.toLowerCase();
       const filterFn = pref === "morning" ? isMorning : isAfternoon;
+      const targetMinutes = requested_time ? parseTimeToMinutes(requested_time) : null;
       let daysFound = 0;
+
+      console.log(`[Calendar] Time preference: ${pref}, target time: ${requested_time || "none"}`);
 
       for (const [dateKey, slots] of availabilityByDate) {
         if (daysFound >= 3) break;
 
         const matchingSlots = slots.filter(filterFn);
         if (matchingSlots.length > 0) {
-          // Take the first matching slot for this day
-          const slot = matchingSlots[0];
-          resultSlots.push({
-            date: dateKey,
-            time: formatTime(slot),
-            label: getDateLabel(dateKey),
-            startTime: slot,
-          });
-          daysFound++;
+          // Find the best slot (closest to target time if specified, otherwise first)
+          const bestSlot = findBestSlot(matchingSlots, targetMinutes);
+          if (bestSlot) {
+            resultSlots.push({
+              date: dateKey,
+              time: formatTime(bestSlot),
+              label: getDateLabel(dateKey),
+              startTime: bestSlot,
+            });
+            daysFound++;
+          }
         }
       }
 
       console.log(`[Calendar] Time preference "${pref}": found ${daysFound} days with availability`);
     }
-    // MODE 2: Specific date/time request
+    // MODE 2: Specific date/time request (no time_preference)
     else if (requested_date || requested_time) {
       // Resolve the requested date
       let targetDate = requested_date;
       if (targetDate && !/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
-        // Try to resolve day name
         const resolved = resolveDayName(targetDate);
         if (resolved) targetDate = resolved;
       }
-
-      // If no date specified, assume today
       if (!targetDate) targetDate = todayStr;
 
       const daySlots = availabilityByDate.get(targetDate) || [];
 
       if (requested_time) {
-        // Parse requested time to find exact or nearby match
-        let requestedHour = 0;
-        let requestedMin = 0;
+        const targetMinutes = parseTimeToMinutes(requested_time);
 
-        // Parse various time formats: "2:00 PM", "14:00", "2pm", etc.
-        const timeStr = requested_time.toLowerCase().replace(/\s+/g, "");
-        const match12 = timeStr.match(/^(\d{1,2}):?(\d{2})?(am|pm)$/);
-        const match24 = timeStr.match(/^(\d{1,2}):(\d{2})$/);
+        if (targetMinutes !== null) {
+          // Find exact match or nearby slots
+          let exactMatch: string | null = null;
+          const nearbySlots: Array<{ slot: string; diff: number }> = [];
 
-        if (match12) {
-          requestedHour = parseInt(match12[1], 10);
-          requestedMin = match12[2] ? parseInt(match12[2], 10) : 0;
-          if (match12[3] === "pm" && requestedHour !== 12) requestedHour += 12;
-          if (match12[3] === "am" && requestedHour === 12) requestedHour = 0;
-        } else if (match24) {
-          requestedHour = parseInt(match24[1], 10);
-          requestedMin = parseInt(match24[2], 10);
-        }
+          for (const slot of daySlots) {
+            const slotMinutes = getSlotMinutes(slot);
+            const diff = Math.abs(slotMinutes - targetMinutes);
 
-        const requestedMinutes = requestedHour * 60 + requestedMin;
-
-        // Find exact match or closest slots
-        let exactMatch: string | null = null;
-        const nearbySlots: Array<{ slot: string; diff: number }> = [];
-
-        for (const slot of daySlots) {
-          const slotMatch = slot.match(/T(\d{2}):(\d{2})/);
-          if (!slotMatch) continue;
-
-          const slotHour = parseInt(slotMatch[1], 10);
-          const slotMin = parseInt(slotMatch[2], 10);
-          const slotMinutes = slotHour * 60 + slotMin;
-          const diff = Math.abs(slotMinutes - requestedMinutes);
-
-          if (diff === 0) {
-            exactMatch = slot;
-          } else if (diff <= 90) {
-            // Within 1.5 hours
-            nearbySlots.push({ slot, diff });
+            if (diff === 0) {
+              exactMatch = slot;
+            } else if (diff <= 90) {
+              nearbySlots.push({ slot, diff });
+            }
           }
-        }
 
-        if (exactMatch) {
-          resultSlots.push({
-            date: targetDate,
-            time: formatTime(exactMatch),
-            label: getDateLabel(targetDate),
-            startTime: exactMatch,
-          });
-          console.log(`[Calendar] Exact match found for ${requested_time} on ${targetDate}`);
-        } else if (nearbySlots.length > 0) {
-          // Return up to 3 nearby alternatives
-          nearbySlots.sort((a, b) => a.diff - b.diff);
-          for (const { slot } of nearbySlots.slice(0, 3)) {
+          if (exactMatch) {
             resultSlots.push({
               date: targetDate,
-              time: formatTime(slot),
+              time: formatTime(exactMatch),
               label: getDateLabel(targetDate),
-              startTime: slot,
+              startTime: exactMatch,
             });
+            console.log(`[Calendar] Exact match found for ${requested_time} on ${targetDate}`);
+          } else if (nearbySlots.length > 0) {
+            nearbySlots.sort((a, b) => a.diff - b.diff);
+            for (const { slot } of nearbySlots.slice(0, 3)) {
+              resultSlots.push({
+                date: targetDate,
+                time: formatTime(slot),
+                label: getDateLabel(targetDate),
+                startTime: slot,
+              });
+            }
+            console.log(`[Calendar] No exact match, returning ${resultSlots.length} nearby alternatives`);
+          } else {
+            console.log(`[Calendar] No availability on ${targetDate} near ${requested_time}`);
           }
-          console.log(`[Calendar] No exact match, returning ${resultSlots.length} nearby alternatives`);
-        } else {
-          console.log(`[Calendar] No availability on ${targetDate} near ${requested_time}`);
         }
       } else {
-        // No specific time, just return first 3 slots for that day
+        // No specific time, return first 3 slots for that day
         for (const slot of daySlots.slice(0, 3)) {
           resultSlots.push({
             date: targetDate,
