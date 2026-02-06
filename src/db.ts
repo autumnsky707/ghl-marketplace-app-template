@@ -1,5 +1,5 @@
 import { supabase } from "./supabase";
-import { Installation, GHLTokenResponse, BusinessInfo } from "./types";
+import { Installation, GHLTokenResponse, BusinessInfo, ServiceMapping } from "./types";
 
 const TABLE = "ghl_installations";
 
@@ -176,4 +176,155 @@ export async function updateBusinessInfo(
   }
 
   console.log(`[DB] Updated business info for ${locationId}: ${businessName}`);
+}
+
+const SERVICE_MAPPINGS_TABLE = "service_mappings";
+
+/**
+ * Get all service mappings for a location.
+ */
+export async function getServiceMappings(locationId: string): Promise<ServiceMapping[]> {
+  const { data, error } = await supabase
+    .from(SERVICE_MAPPINGS_TABLE)
+    .select("*")
+    .eq("location_id", locationId);
+
+  if (error) {
+    console.error("[DB] getServiceMappings error:", error);
+    return [];
+  }
+
+  return (data || []) as ServiceMapping[];
+}
+
+/**
+ * Get calendars that offer a specific service.
+ */
+export async function getCalendarsForService(
+  locationId: string,
+  serviceName: string
+): Promise<ServiceMapping[]> {
+  const { data, error } = await supabase
+    .from(SERVICE_MAPPINGS_TABLE)
+    .select("*")
+    .eq("location_id", locationId)
+    .ilike("service_name", `%${serviceName}%`);
+
+  if (error) {
+    console.error("[DB] getCalendarsForService error:", error);
+    return [];
+  }
+
+  return (data || []) as ServiceMapping[];
+}
+
+/**
+ * Get all unique staff/calendars for a location.
+ */
+export async function getStaffCalendars(locationId: string): Promise<ServiceMapping[]> {
+  const { data, error } = await supabase
+    .from(SERVICE_MAPPINGS_TABLE)
+    .select("*")
+    .eq("location_id", locationId);
+
+  if (error) {
+    console.error("[DB] getStaffCalendars error:", error);
+    return [];
+  }
+
+  // Dedupe by calendar_id
+  const seen = new Set<string>();
+  const unique: ServiceMapping[] = [];
+  for (const row of (data || []) as ServiceMapping[]) {
+    if (!seen.has(row.calendar_id)) {
+      seen.add(row.calendar_id);
+      unique.push(row);
+    }
+  }
+
+  return unique;
+}
+
+/**
+ * Upsert a service mapping.
+ */
+export async function upsertServiceMapping(mapping: ServiceMapping): Promise<void> {
+  const { error } = await supabase
+    .from(SERVICE_MAPPINGS_TABLE)
+    .upsert(
+      {
+        location_id: mapping.location_id,
+        service_name: mapping.service_name.toLowerCase(),
+        calendar_id: mapping.calendar_id,
+        staff_name: mapping.staff_name,
+      },
+      { onConflict: "location_id,service_name,calendar_id" }
+    );
+
+  if (error) {
+    console.error("[DB] upsertServiceMapping error:", error);
+    throw error;
+  }
+
+  console.log(`[DB] Upserted service mapping: ${mapping.service_name} → ${mapping.staff_name}`);
+}
+
+/**
+ * Delete all service mappings for a location.
+ */
+export async function deleteServiceMappings(locationId: string): Promise<void> {
+  const { error } = await supabase
+    .from(SERVICE_MAPPINGS_TABLE)
+    .delete()
+    .eq("location_id", locationId);
+
+  if (error) {
+    console.error("[DB] deleteServiceMappings error:", error);
+    throw error;
+  }
+}
+
+/**
+ * Delete a specific service mapping by ID.
+ */
+export async function deleteServiceMappingById(id: string): Promise<void> {
+  const { error } = await supabase
+    .from(SERVICE_MAPPINGS_TABLE)
+    .delete()
+    .eq("id", id);
+
+  if (error) {
+    console.error("[DB] deleteServiceMappingById error:", error);
+    throw error;
+  }
+}
+
+/**
+ * Bulk set service mappings for a location (replaces all existing).
+ */
+export async function setServiceMappings(
+  locationId: string,
+  mappings: Array<{ service_name: string; calendar_id: string; staff_name: string }>
+): Promise<void> {
+  // Delete existing
+  await deleteServiceMappings(locationId);
+
+  // Insert new
+  if (mappings.length > 0) {
+    const rows = mappings.map((m) => ({
+      location_id: locationId,
+      service_name: m.service_name.toLowerCase(),
+      calendar_id: m.calendar_id,
+      staff_name: m.staff_name,
+    }));
+
+    const { error } = await supabase.from(SERVICE_MAPPINGS_TABLE).insert(rows);
+
+    if (error) {
+      console.error("[DB] setServiceMappings error:", error);
+      throw error;
+    }
+  }
+
+  console.log(`[DB] Set ${mappings.length} service mappings for ${locationId}`);
 }

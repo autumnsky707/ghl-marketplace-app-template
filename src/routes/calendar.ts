@@ -1,7 +1,18 @@
 import { Router, Request, Response } from "express";
 import axios from "axios";
 import { GHL } from "../ghl";
-import { getInstallation, getBusinessInfo, updateBusinessInfo } from "../db";
+import {
+  getInstallation,
+  getBusinessInfo,
+  updateBusinessInfo,
+  getServiceMappings,
+  getCalendarsForService,
+  getStaffCalendars,
+  setServiceMappings,
+  upsertServiceMapping,
+  deleteServiceMappings,
+  deleteServiceMappingById,
+} from "../db";
 import {
   FreeSlotsRequest,
   BookAppointmentRequest,
@@ -526,17 +537,17 @@ function parseTimeToMinutes(timeStr: string): number | null {
 
 /**
  * POST /api/calendar/business-info
- * Get or update business info for voice agent greeting.
+ * Get or update business info and service mappings.
  *
  * GET: Body: { locationId }
- * Response: { success: true, business_name, services, greeting }
+ * Response: { success, business_name, services, greeting, service_mappings }
  *
- * SET: Body: { locationId, business_name, services, greeting }
- * Response: { success: true }
+ * SET: Body: { locationId, business_name, services, greeting, service_mappings? }
+ * service_mappings: [{ service_name, calendar_id, staff_name }]
  */
 router.post("/business-info", async (req: Request, res: Response) => {
   try {
-    const { locationId, location_id, business_name, services, greeting } = req.body;
+    const { locationId, location_id, business_name, services, greeting, service_mappings } = req.body;
     const resolvedLocationId = locationId || location_id;
 
     if (!resolvedLocationId) {
@@ -551,19 +562,26 @@ router.post("/business-info", async (req: Request, res: Response) => {
         services || [],
         greeting || `Welcome to ${business_name}`
       );
+
+      // Update service mappings if provided
+      if (service_mappings && Array.isArray(service_mappings)) {
+        await setServiceMappings(resolvedLocationId, service_mappings);
+      }
+
       return res.json({ success: true, message: "Business info updated" });
     }
 
     // Otherwise, GET the business info
     const info = await getBusinessInfo(resolvedLocationId);
+    const mappings = await getServiceMappings(resolvedLocationId);
 
     if (!info) {
-      // Return default if not configured
       return res.json({
         success: true,
         business_name: "Our Spa",
         services: ["massage", "facial", "body treatment"],
-        greeting: "Welcome! How can I help you today?"
+        greeting: "Welcome! How can I help you today?",
+        service_mappings: []
       });
     }
 
@@ -571,7 +589,12 @@ router.post("/business-info", async (req: Request, res: Response) => {
       success: true,
       business_name: info.business_name,
       services: info.services,
-      greeting: info.greeting
+      greeting: info.greeting,
+      service_mappings: mappings.map((m) => ({
+        service_name: m.service_name,
+        calendar_id: m.calendar_id,
+        staff_name: m.staff_name
+      }))
     });
 
   } catch (error: any) {
@@ -581,15 +604,82 @@ router.post("/business-info", async (req: Request, res: Response) => {
 });
 
 /**
- * POST /api/calendar/check-availability
- * Smart availability check for voice agents.
+ * POST /api/calendar/service-mappings
+ * Manage service-to-staff calendar mappings.
  *
- * Body: { locationId, time_preference?, requested_date?, requested_time? }
- * Response: { success: true, slots: [{ date, time, label, startTime }] }
+ * List: { locationId, action: "list" }
+ * Add:  { locationId, action: "add", service_name, calendar_id, staff_name }
+ * Delete: { locationId, action: "delete", id }
+ */
+router.post("/service-mappings", async (req: Request, res: Response) => {
+  try {
+    const { locationId, location_id, action, service_name, calendar_id, staff_name, id } = req.body;
+    const resolvedLocationId = locationId || location_id;
+
+    if (!resolvedLocationId) {
+      return res.status(400).json({ success: false, error: "Missing required field: locationId" });
+    }
+
+    const actionLower = (action || "list").toLowerCase();
+
+    if (actionLower === "list") {
+      const mappings = await getServiceMappings(resolvedLocationId);
+      return res.json({
+        success: true,
+        mappings: mappings.map((m) => ({
+          id: m.id,
+          service_name: m.service_name,
+          calendar_id: m.calendar_id,
+          staff_name: m.staff_name
+        }))
+      });
+    }
+
+    if (actionLower === "add") {
+      if (!service_name || !calendar_id || !staff_name) {
+        return res.status(400).json({
+          success: false,
+          error: "Missing required fields: service_name, calendar_id, staff_name"
+        });
+      }
+
+      await upsertServiceMapping({
+        location_id: resolvedLocationId,
+        service_name,
+        calendar_id,
+        staff_name
+      });
+
+      return res.json({ success: true, message: "Service mapping added" });
+    }
+
+    if (actionLower === "delete") {
+      if (!id) {
+        return res.status(400).json({ success: false, error: "Missing required field: id" });
+      }
+
+      await deleteServiceMappingById(id);
+      return res.json({ success: true, message: "Service mapping deleted" });
+    }
+
+    return res.status(400).json({ success: false, error: `Unknown action: ${action}` });
+
+  } catch (error: any) {
+    console.error("[Calendar] service-mappings error:", error?.message);
+    return res.status(500).json({ success: false, error: error?.message });
+  }
+});
+
+/**
+ * POST /api/calendar/check-availability
+ * Smart availability check for voice agents with multi-calendar support.
+ *
+ * Body: { locationId, service_type?, time_preference?, requested_date?, requested_time? }
+ * Response: { success: true, slots: [{ date, time, label, startTime, staff_name?, calendar_id? }] }
  */
 router.post("/check-availability", async (req: Request, res: Response) => {
   try {
-    const { locationId, location_id, time_preference, requested_date, requested_time } = req.body;
+    const { locationId, location_id, service_type, time_preference, requested_date, requested_time } = req.body;
     const resolvedLocationId = locationId || location_id;
 
     if (!resolvedLocationId) {
@@ -600,8 +690,25 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     if (!installation) {
       return res.status(404).json({ success: false, error: "Installation not found" });
     }
-    if (!installation.calendar_id) {
-      return res.status(400).json({ success: false, error: "No calendar configured for this location" });
+
+    // Determine which calendars to check
+    let calendarsToCheck: Array<{ calendar_id: string; staff_name: string | null }> = [];
+
+    if (service_type) {
+      // Look up calendars that offer this service
+      const mappings = await getCalendarsForService(resolvedLocationId, service_type);
+      if (mappings.length > 0) {
+        calendarsToCheck = mappings.map((m) => ({ calendar_id: m.calendar_id, staff_name: m.staff_name }));
+        console.log(`[Calendar] Found ${calendarsToCheck.length} calendars for service "${service_type}"`);
+      }
+    }
+
+    // Fallback to default calendar if no service mappings found
+    if (calendarsToCheck.length === 0) {
+      if (!installation.calendar_id) {
+        return res.status(400).json({ success: false, error: "No calendar configured for this location" });
+      }
+      calendarsToCheck = [{ calendar_id: installation.calendar_id, staff_name: null }];
     }
 
     // Use the location's configured timezone (fallback to Hawaii)
@@ -633,13 +740,20 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     const nowPlusBuffer = localNow.getTime() + BUFFER_MS;
     const startMs = Math.max(new Date(todayStr).getTime(), nowPlusBuffer);
 
-    // Helper: fetch slots for a given number of days ahead
-    const fetchSlotsForDays = async (daysAhead: number): Promise<Record<string, string[]>> => {
+    // Slot type with staff info
+    type SlotWithStaff = { slot: string; staff_name: string | null; calendar_id: string };
+
+    // Helper: fetch slots for a given calendar and number of days ahead
+    const fetchSlotsForCalendar = async (
+      calendarId: string,
+      staffName: string | null,
+      daysAhead: number
+    ): Promise<Record<string, SlotWithStaff[]>> => {
       const endDate = new Date(localNow);
       endDate.setDate(endDate.getDate() + daysAhead);
       const endMs = endDate.getTime();
 
-      const slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${installation.calendar_id}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
+      const slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${calendarId}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
       let resp;
       try {
         resp = await axios.get(slotsUrl, {
@@ -655,7 +769,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
         }
       }
 
-      const availabilityByDate: Record<string, string[]> = {};
+      const availabilityByDate: Record<string, SlotWithStaff[]> = {};
       const rawData = resp.data || {};
       for (const dateKey of Object.keys(rawData).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort()) {
         const entry = rawData[dateKey];
@@ -664,13 +778,46 @@ router.post("/check-availability", async (req: Request, res: Response) => {
           const slotMs = new Date(new Date(slot).toLocaleString("en-US", { timeZone: tz })).getTime();
           return slotMs >= nowPlusBuffer;
         });
-        if (futureSlots.length > 0) availabilityByDate[dateKey] = futureSlots;
+        if (futureSlots.length > 0) {
+          availabilityByDate[dateKey] = futureSlots.map(slot => ({
+            slot,
+            staff_name: staffName,
+            calendar_id: calendarId
+          }));
+        }
       }
       return availabilityByDate;
     };
 
+    // Fetch slots from all calendars and merge
+    const fetchAllCalendarsForDays = async (daysAhead: number): Promise<Record<string, SlotWithStaff[]>> => {
+      const merged: Record<string, SlotWithStaff[]> = {};
+
+      // Fetch all calendars in parallel
+      const results = await Promise.all(
+        calendarsToCheck.map(({ calendar_id, staff_name }) =>
+          fetchSlotsForCalendar(calendar_id, staff_name, daysAhead)
+        )
+      );
+
+      // Merge results
+      for (const calendarSlots of results) {
+        for (const [dateKey, slots] of Object.entries(calendarSlots)) {
+          if (!merged[dateKey]) merged[dateKey] = [];
+          merged[dateKey].push(...slots);
+        }
+      }
+
+      // Sort slots within each day by time
+      for (const dateKey of Object.keys(merged)) {
+        merged[dateKey].sort((a, b) => a.slot.localeCompare(b.slot));
+      }
+
+      return merged;
+    };
+
     // Start with 7 days (fast path)
-    let availabilityByDate = await fetchSlotsForDays(7);
+    let availabilityByDate = await fetchAllCalendarsForDays(7);
 
     // Debug logging
     const availableDates = Object.keys(availabilityByDate).sort();
@@ -799,8 +946,18 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     // How many slots to return: 5 if specific time requested, otherwise 3
     const maxSlots = targetMins !== null ? 5 : 3;
 
+    // Result slot type
+    type ResultSlot = {
+      date: string;
+      time: string;
+      label: string;
+      startTime: string;
+      staff_name?: string;
+      calendar_id?: string;
+    };
+
     // Helper: collect slots from availability map
-    const collectSlots = (availability: Record<string, string[]>): Array<{ date: string; time: string; label: string; startTime: string }> => {
+    const collectSlots = (availability: Record<string, SlotWithStaff[]>): ResultSlot[] => {
       let filteredDates = Object.keys(availability).sort();
 
       if (dateFilter) {
@@ -809,37 +966,39 @@ router.post("/check-availability", async (req: Request, res: Response) => {
 
       // If specific time requested, collect ALL matching slots and sort by proximity
       if (targetMins !== null) {
-        const allSlots: Array<{ date: string; slot: string; diff: number }> = [];
+        const allSlots: Array<{ date: string; slotInfo: SlotWithStaff; diff: number }> = [];
 
         for (const dateKey of filteredDates) {
           let slots = availability[dateKey];
 
           // Apply time preference filter (morning/afternoon)
           if (timeFilterFn) {
-            slots = slots.filter(timeFilterFn);
+            slots = slots.filter((s) => timeFilterFn!(s.slot));
           }
 
-          for (const slot of slots) {
-            const slotMins = getSlotMinutes(slot);
+          for (const slotInfo of slots) {
+            const slotMins = getSlotMinutes(slotInfo.slot);
             const diff = Math.abs(slotMins - targetMins);
-            allSlots.push({ date: dateKey, slot, diff });
+            allSlots.push({ date: dateKey, slotInfo, diff });
           }
         }
 
         // Sort by proximity to requested time
         allSlots.sort((a, b) => a.diff - b.diff);
 
-        // Return top 5 closest slots
-        return allSlots.slice(0, maxSlots).map(({ date, slot }) => ({
+        // Return top slots
+        return allSlots.slice(0, maxSlots).map(({ date, slotInfo }) => ({
           date,
-          time: formatSlotTime(slot),
+          time: formatSlotTime(slotInfo.slot),
           label: getLabel(date),
-          startTime: slot
+          startTime: slotInfo.slot,
+          ...(slotInfo.staff_name && { staff_name: slotInfo.staff_name }),
+          ...(slotInfo.calendar_id && { calendar_id: slotInfo.calendar_id })
         }));
       }
 
       // Default behavior: 1 slot per day, up to maxSlots days
-      const results: Array<{ date: string; time: string; label: string; startTime: string }> = [];
+      const results: ResultSlot[] = [];
       let daysFound = 0;
 
       for (const dateKey of filteredDates) {
@@ -849,13 +1008,21 @@ router.post("/check-availability", async (req: Request, res: Response) => {
 
         // Apply time preference filter (morning/afternoon)
         if (timeFilterFn) {
-          slots = slots.filter(timeFilterFn);
+          slots = slots.filter((s) => timeFilterFn!(s.slot));
         }
 
         if (slots.length === 0) continue;
 
         // Pick first available slot
-        results.push({ date: dateKey, time: formatSlotTime(slots[0]), label: getLabel(dateKey), startTime: slots[0] });
+        const firstSlot = slots[0];
+        results.push({
+          date: dateKey,
+          time: formatSlotTime(firstSlot.slot),
+          label: getLabel(dateKey),
+          startTime: firstSlot.slot,
+          ...(firstSlot.staff_name && { staff_name: firstSlot.staff_name }),
+          ...(firstSlot.calendar_id && { calendar_id: firstSlot.calendar_id })
+        });
         daysFound++;
       }
       return results;
@@ -866,13 +1033,13 @@ router.post("/check-availability", async (req: Request, res: Response) => {
 
     if (resultSlots.length === 0) {
       console.log("[Calendar] No slots in 7 days, extending to 14 days...");
-      availabilityByDate = await fetchSlotsForDays(14);
+      availabilityByDate = await fetchAllCalendarsForDays(14);
       resultSlots = collectSlots(availabilityByDate);
     }
 
     if (resultSlots.length === 0) {
       console.log("[Calendar] No slots in 14 days, extending to 30 days...");
-      availabilityByDate = await fetchSlotsForDays(30);
+      availabilityByDate = await fetchAllCalendarsForDays(30);
       resultSlots = collectSlots(availabilityByDate);
     }
 

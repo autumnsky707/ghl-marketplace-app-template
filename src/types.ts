@@ -20,6 +20,14 @@ export interface BusinessInfo {
   greeting: string;
 }
 
+export interface ServiceMapping {
+  id?: string;
+  location_id: string;
+  service_name: string;
+  calendar_id: string;
+  staff_name: string;
+}
+
 export interface GHLTokenResponse {
   access_token: string;
   token_type: string;
