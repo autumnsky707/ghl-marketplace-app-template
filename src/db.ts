@@ -1,5 +1,5 @@
 import { supabase } from "./supabase";
-import { Installation, GHLTokenResponse } from "./types";
+import { Installation, GHLTokenResponse, BusinessInfo } from "./types";
 
 const TABLE = "ghl_installations";
 
@@ -133,4 +133,47 @@ export async function updateCalendarInfo(
   }
 
   console.log(`[DB] Updated calendar info for ${locationId}: calendar=${calendarId}, tz=${timezone}`);
+}
+
+/**
+ * Get business info for a location.
+ */
+export async function getBusinessInfo(locationId: string): Promise<BusinessInfo | null> {
+  const installation = await getInstallation(locationId);
+  if (!installation) return null;
+
+  if (!installation.business_name) return null;
+
+  return {
+    business_name: installation.business_name,
+    services: installation.services || [],
+    greeting: installation.greeting || `Welcome to ${installation.business_name}`,
+  };
+}
+
+/**
+ * Update business info for a location.
+ */
+export async function updateBusinessInfo(
+  locationId: string,
+  businessName: string,
+  services: string[],
+  greeting: string
+): Promise<void> {
+  const { error } = await supabase
+    .from(TABLE)
+    .update({
+      business_name: businessName,
+      services: services,
+      greeting: greeting,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("location_id", locationId);
+
+  if (error) {
+    console.error("[DB] updateBusinessInfo error:", error);
+    throw error;
+  }
+
+  console.log(`[DB] Updated business info for ${locationId}: ${businessName}`);
 }

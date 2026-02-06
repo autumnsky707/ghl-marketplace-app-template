@@ -8,6 +8,16 @@ export interface Installation {
   scope: string | null;
   user_type: string | null;
   company_id: string | null;
+  // Business info for voice agent
+  business_name: string | null;
+  services: string[] | null;
+  greeting: string | null;
+}
+
+export interface BusinessInfo {
+  business_name: string;
+  services: string[];
+  greeting: string;
 }
 
 export interface GHLTokenResponse {

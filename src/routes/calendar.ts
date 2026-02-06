@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import axios from "axios";
 import { GHL } from "../ghl";
-import { getInstallation } from "../db";
+import { getInstallation, getBusinessInfo, updateBusinessInfo } from "../db";
 import {
   FreeSlotsRequest,
   BookAppointmentRequest,
@@ -523,6 +523,62 @@ function parseTimeToMinutes(timeStr: string): number | null {
   }
   return hour * 60 + min;
 }
+
+/**
+ * POST /api/calendar/business-info
+ * Get or update business info for voice agent greeting.
+ *
+ * GET: Body: { locationId }
+ * Response: { success: true, business_name, services, greeting }
+ *
+ * SET: Body: { locationId, business_name, services, greeting }
+ * Response: { success: true }
+ */
+router.post("/business-info", async (req: Request, res: Response) => {
+  try {
+    const { locationId, location_id, business_name, services, greeting } = req.body;
+    const resolvedLocationId = locationId || location_id;
+
+    if (!resolvedLocationId) {
+      return res.status(400).json({ success: false, error: "Missing required field: locationId" });
+    }
+
+    // If business_name is provided, this is an UPDATE request
+    if (business_name) {
+      await updateBusinessInfo(
+        resolvedLocationId,
+        business_name,
+        services || [],
+        greeting || `Welcome to ${business_name}`
+      );
+      return res.json({ success: true, message: "Business info updated" });
+    }
+
+    // Otherwise, GET the business info
+    const info = await getBusinessInfo(resolvedLocationId);
+
+    if (!info) {
+      // Return default if not configured
+      return res.json({
+        success: true,
+        business_name: "Our Spa",
+        services: ["massage", "facial", "body treatment"],
+        greeting: "Welcome! How can I help you today?"
+      });
+    }
+
+    return res.json({
+      success: true,
+      business_name: info.business_name,
+      services: info.services,
+      greeting: info.greeting
+    });
+
+  } catch (error: any) {
+    console.error("[Calendar] business-info error:", error?.message);
+    return res.status(500).json({ success: false, error: error?.message });
+  }
+});
 
 /**
  * POST /api/calendar/check-availability
