@@ -616,6 +616,16 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     // Start with 7 days (fast path)
     let availabilityByDate = await fetchSlotsForDays(7);
 
+    // Debug logging
+    const availableDates = Object.keys(availabilityByDate).sort();
+    console.log(`[Calendar] CHECK-AVAILABILITY DEBUG:`);
+    console.log(`[Calendar]   time_preference: "${time_preference}", requested_date: "${requested_date}"`);
+    console.log(`[Calendar]   todayStr: ${todayStr}, available dates: ${availableDates.join(", ")}`);
+    console.log(`[Calendar]   today in availability: ${availableDates.includes(todayStr)}`);
+    if (availableDates.includes(todayStr)) {
+      console.log(`[Calendar]   today's slots: ${availabilityByDate[todayStr].length} total`);
+    }
+
     // Helper: get label
     const getLabel = (dateKey: string): string => {
       if (dateKey === todayStr) return "today";
@@ -783,7 +793,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       resultSlots = collectSlots(availabilityByDate);
     }
 
-    console.log(`[Calendar] Returning ${resultSlots.length} slots for ${todayFormatted} (${tz})`);
+    console.log(`[Calendar] Returning ${resultSlots.length} slots: ${resultSlots.map(s => `${s.label} ${s.time}`).join(", ")}`);
     return res.json({
       success: true,
       today: todayFormatted,
