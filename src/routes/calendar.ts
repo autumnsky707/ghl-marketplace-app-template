@@ -12,7 +12,13 @@ import {
   upsertServiceMapping,
   deleteServiceMappings,
   deleteServiceMappingById,
+  getSyncStatus,
+  getSyncedCalendars,
+  getSyncedCalendarsForService,
+  getSyncedTeamMembers,
+  getUniqueStaffNames,
 } from "../db";
+import { syncLocation } from "../sync";
 import {
   FreeSlotsRequest,
   BookAppointmentRequest,
@@ -536,6 +542,82 @@ function parseTimeToMinutes(timeStr: string): number | null {
 }
 
 /**
+ * POST /api/calendar/sync
+ * Trigger a sync of calendars from GHL.
+ *
+ * Body: { locationId }
+ * Response: { success, calendars, teamMembers }
+ */
+router.post("/sync", async (req: Request, res: Response) => {
+  try {
+    const { locationId, location_id } = req.body;
+    const resolvedLocationId = locationId || location_id;
+
+    if (!resolvedLocationId) {
+      return res.status(400).json({ success: false, error: "Missing required field: locationId" });
+    }
+
+    const result = await syncLocation(resolvedLocationId);
+
+    if (!result.success) {
+      return res.status(500).json({ success: false, error: result.error });
+    }
+
+    return res.json({
+      success: true,
+      calendars: result.calendars,
+      teamMembers: result.teamMembers,
+    });
+  } catch (error: any) {
+    console.error("[Calendar] sync error:", error?.message);
+    return res.status(500).json({ success: false, error: error?.message });
+  }
+});
+
+/**
+ * GET /api/calendar/sync-status
+ * Get the sync status for a location.
+ *
+ * Query: ?locationId=xxx
+ * Response: { success, last_sync_at, calendars_count, team_members_count, error_message }
+ */
+router.get("/sync-status", async (req: Request, res: Response) => {
+  try {
+    const locationId = req.query.locationId as string;
+
+    if (!locationId) {
+      return res.status(400).json({ success: false, error: "Missing required query param: locationId" });
+    }
+
+    const status = await getSyncStatus(locationId);
+
+    if (!status) {
+      return res.json({
+        success: true,
+        last_sync_at: null,
+        calendars_count: 0,
+        team_members_count: 0,
+        sync_in_progress: false,
+        error_message: null,
+        message: "Never synced",
+      });
+    }
+
+    return res.json({
+      success: true,
+      last_sync_at: status.last_sync_at,
+      calendars_count: status.calendars_count,
+      team_members_count: status.team_members_count,
+      sync_in_progress: status.sync_in_progress,
+      error_message: status.error_message,
+    });
+  } catch (error: any) {
+    console.error("[Calendar] sync-status error:", error?.message);
+    return res.status(500).json({ success: false, error: error?.message });
+  }
+});
+
+/**
  * POST /api/calendar/business-info
  * Get or update business info and service mappings.
  *
@@ -573,27 +655,27 @@ router.post("/business-info", async (req: Request, res: Response) => {
 
     // Otherwise, GET the business info
     const info = await getBusinessInfo(resolvedLocationId);
-    const mappings = await getServiceMappings(resolvedLocationId);
 
-    if (!info) {
-      return res.json({
-        success: true,
-        business_name: "Our Spa",
-        services: ["massage", "facial", "body treatment"],
-        greeting: "Welcome! How can I help you today?",
-        service_mappings: []
-      });
-    }
+    // Get services from synced calendars (calendar names are service names)
+    const syncedCalendars = await getSyncedCalendars(resolvedLocationId);
+    const syncedServices = syncedCalendars.map((c) => c.calendar_name);
+
+    // Get staff from synced team members
+    const staffNames = await getUniqueStaffNames(resolvedLocationId);
+
+    // Build services list: prefer synced data, fall back to manual config
+    const servicesList = syncedServices.length > 0 ? syncedServices : (info?.services || ["massage", "facial", "body treatment"]);
 
     return res.json({
       success: true,
-      business_name: info.business_name,
-      services: info.services,
-      greeting: info.greeting,
-      service_mappings: mappings.map((m) => ({
-        service_name: m.service_name,
-        calendar_id: m.calendar_id,
-        staff_name: m.staff_name
+      business_name: info?.business_name || "Our Spa",
+      services: servicesList,
+      staff: staffNames,
+      greeting: info?.greeting || "Welcome! How can I help you today?",
+      synced_calendars: syncedCalendars.map((c) => ({
+        calendar_id: c.calendar_id,
+        calendar_name: c.calendar_name,
+        calendar_type: c.calendar_type,
       }))
     });
 
@@ -691,24 +773,60 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, error: "Installation not found" });
     }
 
-    // Determine which calendars to check
-    let calendarsToCheck: Array<{ calendar_id: string; staff_name: string | null }> = [];
+    // Determine which calendars to check (prefer synced data, fall back to manual mappings)
+    let calendarsToCheck: Array<{ calendar_id: string; calendar_name: string | null; staff_name: string | null }> = [];
 
     if (service_type) {
-      // Look up calendars that offer this service
-      const mappings = await getCalendarsForService(resolvedLocationId, service_type);
-      if (mappings.length > 0) {
-        calendarsToCheck = mappings.map((m) => ({ calendar_id: m.calendar_id, staff_name: m.staff_name }));
-        console.log(`[Calendar] Found ${calendarsToCheck.length} calendars for service "${service_type}"`);
+      // First try synced calendars (calendar name matches service)
+      const syncedCals = await getSyncedCalendarsForService(resolvedLocationId, service_type);
+      if (syncedCals.length > 0) {
+        // Get team members for each calendar
+        for (const cal of syncedCals) {
+          const members = await getSyncedTeamMembers(resolvedLocationId, cal.calendar_id);
+          const primaryMember = members.find((m) => m.is_primary) || members[0];
+          calendarsToCheck.push({
+            calendar_id: cal.calendar_id,
+            calendar_name: cal.calendar_name,
+            staff_name: primaryMember?.user_name || null,
+          });
+        }
+        console.log(`[Calendar] Found ${calendarsToCheck.length} synced calendars for service "${service_type}"`);
+      } else {
+        // Fall back to manual service mappings
+        const mappings = await getCalendarsForService(resolvedLocationId, service_type);
+        if (mappings.length > 0) {
+          calendarsToCheck = mappings.map((m) => ({
+            calendar_id: m.calendar_id,
+            calendar_name: null,
+            staff_name: m.staff_name,
+          }));
+          console.log(`[Calendar] Found ${calendarsToCheck.length} manual mappings for service "${service_type}"`);
+        }
+      }
+    } else {
+      // No service specified - use all synced calendars
+      const syncedCals = await getSyncedCalendars(resolvedLocationId);
+      if (syncedCals.length > 0) {
+        for (const cal of syncedCals) {
+          const members = await getSyncedTeamMembers(resolvedLocationId, cal.calendar_id);
+          const primaryMember = members.find((m) => m.is_primary) || members[0];
+          calendarsToCheck.push({
+            calendar_id: cal.calendar_id,
+            calendar_name: cal.calendar_name,
+            staff_name: primaryMember?.user_name || null,
+          });
+        }
+        console.log(`[Calendar] Using all ${calendarsToCheck.length} synced calendars`);
       }
     }
 
-    // Fallback to default calendar if no service mappings found
+    // Fallback to default calendar if nothing found
     if (calendarsToCheck.length === 0) {
       if (!installation.calendar_id) {
         return res.status(400).json({ success: false, error: "No calendar configured for this location" });
       }
-      calendarsToCheck = [{ calendar_id: installation.calendar_id, staff_name: null }];
+      calendarsToCheck = [{ calendar_id: installation.calendar_id, calendar_name: null, staff_name: null }];
+      console.log(`[Calendar] Falling back to default calendar`);
     }
 
     // Use the location's configured timezone (fallback to Hawaii)
@@ -741,11 +859,12 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     const startMs = Math.max(new Date(todayStr).getTime(), nowPlusBuffer);
 
     // Slot type with staff info
-    type SlotWithStaff = { slot: string; staff_name: string | null; calendar_id: string };
+    type SlotWithStaff = { slot: string; staff_name: string | null; calendar_id: string; calendar_name: string | null };
 
     // Helper: fetch slots for a given calendar and number of days ahead
     const fetchSlotsForCalendar = async (
       calendarId: string,
+      calendarName: string | null,
       staffName: string | null,
       daysAhead: number
     ): Promise<Record<string, SlotWithStaff[]>> => {
@@ -782,7 +901,8 @@ router.post("/check-availability", async (req: Request, res: Response) => {
           availabilityByDate[dateKey] = futureSlots.map(slot => ({
             slot,
             staff_name: staffName,
-            calendar_id: calendarId
+            calendar_id: calendarId,
+            calendar_name: calendarName
           }));
         }
       }
@@ -795,8 +915,8 @@ router.post("/check-availability", async (req: Request, res: Response) => {
 
       // Fetch all calendars in parallel
       const results = await Promise.all(
-        calendarsToCheck.map(({ calendar_id, staff_name }) =>
-          fetchSlotsForCalendar(calendar_id, staff_name, daysAhead)
+        calendarsToCheck.map(({ calendar_id, calendar_name, staff_name }) =>
+          fetchSlotsForCalendar(calendar_id, calendar_name, staff_name, daysAhead)
         )
       );
 
@@ -954,6 +1074,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       startTime: string;
       staff_name?: string;
       calendar_id?: string;
+      calendar_name?: string;
     };
 
     // Helper: collect slots from availability map
@@ -993,7 +1114,8 @@ router.post("/check-availability", async (req: Request, res: Response) => {
           label: getLabel(date),
           startTime: slotInfo.slot,
           ...(slotInfo.staff_name && { staff_name: slotInfo.staff_name }),
-          ...(slotInfo.calendar_id && { calendar_id: slotInfo.calendar_id })
+          ...(slotInfo.calendar_id && { calendar_id: slotInfo.calendar_id }),
+          ...(slotInfo.calendar_name && { calendar_name: slotInfo.calendar_name })
         }));
       }
 
@@ -1021,7 +1143,8 @@ router.post("/check-availability", async (req: Request, res: Response) => {
           label: getLabel(dateKey),
           startTime: firstSlot.slot,
           ...(firstSlot.staff_name && { staff_name: firstSlot.staff_name }),
-          ...(firstSlot.calendar_id && { calendar_id: firstSlot.calendar_id })
+          ...(firstSlot.calendar_id && { calendar_id: firstSlot.calendar_id }),
+          ...(firstSlot.calendar_name && { calendar_name: firstSlot.calendar_name })
         });
         daysFound++;
       }

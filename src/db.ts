@@ -1,5 +1,14 @@
 import { supabase } from "./supabase";
-import { Installation, GHLTokenResponse, BusinessInfo, ServiceMapping } from "./types";
+import {
+  Installation,
+  GHLTokenResponse,
+  BusinessInfo,
+  ServiceMapping,
+  SyncedCalendar,
+  SyncedTeamMember,
+  SyncStatus,
+  GHLCalendar,
+} from "./types";
 
 const TABLE = "ghl_installations";
 
@@ -327,4 +336,271 @@ export async function setServiceMappings(
   }
 
   console.log(`[DB] Set ${mappings.length} service mappings for ${locationId}`);
+}
+
+// =============================================================================
+// SYNC TABLES
+// =============================================================================
+
+const SYNCED_CALENDARS_TABLE = "synced_calendars";
+const SYNCED_TEAM_MEMBERS_TABLE = "synced_team_members";
+const SYNC_STATUS_TABLE = "sync_status";
+
+/**
+ * Get sync status for a location.
+ */
+export async function getSyncStatus(locationId: string): Promise<SyncStatus | null> {
+  const { data, error } = await supabase
+    .from(SYNC_STATUS_TABLE)
+    .select("*")
+    .eq("location_id", locationId)
+    .single();
+
+  if (error) {
+    if (error.code === "PGRST116") return null;
+    console.error("[DB] getSyncStatus error:", error);
+    return null;
+  }
+
+  return data as SyncStatus;
+}
+
+/**
+ * Update sync status.
+ */
+export async function updateSyncStatus(
+  locationId: string,
+  updates: Partial<SyncStatus>
+): Promise<void> {
+  const { error } = await supabase
+    .from(SYNC_STATUS_TABLE)
+    .upsert(
+      {
+        location_id: locationId,
+        ...updates,
+      },
+      { onConflict: "location_id" }
+    );
+
+  if (error) {
+    console.error("[DB] updateSyncStatus error:", error);
+  }
+}
+
+/**
+ * Get all synced calendars for a location.
+ */
+export async function getSyncedCalendars(locationId: string): Promise<SyncedCalendar[]> {
+  const { data, error } = await supabase
+    .from(SYNCED_CALENDARS_TABLE)
+    .select("*")
+    .eq("location_id", locationId)
+    .eq("is_active", true)
+    .order("calendar_name");
+
+  if (error) {
+    console.error("[DB] getSyncedCalendars error:", error);
+    return [];
+  }
+
+  return (data || []) as SyncedCalendar[];
+}
+
+/**
+ * Get synced calendars matching a service name.
+ */
+export async function getSyncedCalendarsForService(
+  locationId: string,
+  serviceName: string
+): Promise<SyncedCalendar[]> {
+  const { data, error } = await supabase
+    .from(SYNCED_CALENDARS_TABLE)
+    .select("*")
+    .eq("location_id", locationId)
+    .eq("is_active", true)
+    .ilike("calendar_name", `%${serviceName}%`);
+
+  if (error) {
+    console.error("[DB] getSyncedCalendarsForService error:", error);
+    return [];
+  }
+
+  return (data || []) as SyncedCalendar[];
+}
+
+/**
+ * Get team members for a calendar.
+ */
+export async function getSyncedTeamMembers(
+  locationId: string,
+  calendarId?: string
+): Promise<SyncedTeamMember[]> {
+  let query = supabase
+    .from(SYNCED_TEAM_MEMBERS_TABLE)
+    .select("*")
+    .eq("location_id", locationId);
+
+  if (calendarId) {
+    query = query.eq("calendar_id", calendarId);
+  }
+
+  const { data, error } = await query.order("priority");
+
+  if (error) {
+    console.error("[DB] getSyncedTeamMembers error:", error);
+    return [];
+  }
+
+  return (data || []) as SyncedTeamMember[];
+}
+
+/**
+ * Get all unique staff names for a location.
+ */
+export async function getUniqueStaffNames(locationId: string): Promise<string[]> {
+  const members = await getSyncedTeamMembers(locationId);
+  const names = new Set<string>();
+  for (const m of members) {
+    if (m.user_name) names.add(m.user_name);
+  }
+  return Array.from(names).sort();
+}
+
+/**
+ * Clear all synced data for a location.
+ */
+export async function clearSyncedData(locationId: string): Promise<void> {
+  await supabase
+    .from(SYNCED_TEAM_MEMBERS_TABLE)
+    .delete()
+    .eq("location_id", locationId);
+
+  await supabase
+    .from(SYNCED_CALENDARS_TABLE)
+    .delete()
+    .eq("location_id", locationId);
+}
+
+/**
+ * Upsert synced calendars and team members from GHL API response.
+ */
+export async function upsertSyncedCalendars(
+  locationId: string,
+  calendars: GHLCalendar[]
+): Promise<{ calendarsCount: number; teamMembersCount: number }> {
+  let calendarsCount = 0;
+  let teamMembersCount = 0;
+
+  for (const cal of calendars) {
+    // Upsert calendar
+    const calendarRow: Partial<SyncedCalendar> = {
+      location_id: locationId,
+      calendar_id: cal.id,
+      calendar_name: cal.name,
+      calendar_type: cal.calendarType || "unknown",
+      slot_duration: cal.slotDuration || 60,
+      slot_buffer: cal.slotBuffer || 0,
+      open_hours: cal.openHours || null,
+      is_active: cal.isActive !== false,
+      raw_data: cal,
+      synced_at: new Date().toISOString(),
+    };
+
+    const { error: calError } = await supabase
+      .from(SYNCED_CALENDARS_TABLE)
+      .upsert(calendarRow, { onConflict: "location_id,calendar_id" });
+
+    if (calError) {
+      console.error("[DB] upsertSyncedCalendars calendar error:", calError);
+    } else {
+      calendarsCount++;
+    }
+
+    // Upsert team members
+    if (cal.teamMembers && cal.teamMembers.length > 0) {
+      for (const tm of cal.teamMembers) {
+        const memberRow: Partial<SyncedTeamMember> = {
+          location_id: locationId,
+          calendar_id: cal.id,
+          user_id: tm.userId,
+          user_name: tm.name || null,
+          user_email: tm.email || null,
+          is_primary: tm.isPrimary || false,
+          priority: tm.priority || 0,
+          synced_at: new Date().toISOString(),
+        };
+
+        const { error: tmError } = await supabase
+          .from(SYNCED_TEAM_MEMBERS_TABLE)
+          .upsert(memberRow, { onConflict: "location_id,calendar_id,user_id" });
+
+        if (tmError) {
+          console.error("[DB] upsertSyncedCalendars team member error:", tmError);
+        } else {
+          teamMembersCount++;
+        }
+      }
+    }
+  }
+
+  // Update sync status
+  await updateSyncStatus(locationId, {
+    last_sync_at: new Date().toISOString(),
+    sync_in_progress: false,
+    error_message: null,
+    calendars_count: calendarsCount,
+    team_members_count: teamMembersCount,
+  });
+
+  console.log(`[DB] Synced ${calendarsCount} calendars, ${teamMembersCount} team members for ${locationId}`);
+
+  return { calendarsCount, teamMembersCount };
+}
+
+/**
+ * Get all location IDs that need syncing.
+ */
+export async function getLocationsNeedingSync(maxAgeMinutes: number = 10): Promise<string[]> {
+  const cutoff = new Date(Date.now() - maxAgeMinutes * 60 * 1000).toISOString();
+
+  // Get all installations
+  const { data: installations, error: instError } = await supabase
+    .from(TABLE)
+    .select("location_id");
+
+  if (instError || !installations) {
+    console.error("[DB] getLocationsNeedingSync error:", instError);
+    return [];
+  }
+
+  const locationIds = installations.map((i: any) => i.location_id);
+
+  // Get sync status for all
+  const { data: statuses } = await supabase
+    .from(SYNC_STATUS_TABLE)
+    .select("location_id, last_sync_at, sync_in_progress")
+    .in("location_id", locationIds);
+
+  const statusMap = new Map<string, { last_sync_at: string | null; sync_in_progress: boolean }>();
+  for (const s of (statuses || [])) {
+    statusMap.set(s.location_id, s);
+  }
+
+  // Find locations needing sync
+  const needsSync: string[] = [];
+  for (const locId of locationIds) {
+    const status = statusMap.get(locId);
+    if (!status) {
+      // Never synced
+      needsSync.push(locId);
+    } else if (status.sync_in_progress) {
+      // Already syncing, skip
+      continue;
+    } else if (!status.last_sync_at || status.last_sync_at < cutoff) {
+      // Stale sync
+      needsSync.push(locId);
+    }
+  }
+
+  return needsSync;
 }

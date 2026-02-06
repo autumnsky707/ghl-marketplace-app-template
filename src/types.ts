@@ -28,6 +28,65 @@ export interface ServiceMapping {
   staff_name: string;
 }
 
+// Auto-sync types
+export interface SyncedCalendar {
+  id?: string;
+  location_id: string;
+  calendar_id: string;
+  calendar_name: string;
+  calendar_type: string;
+  slot_duration: number;
+  slot_buffer: number;
+  open_hours: any;
+  is_active: boolean;
+  raw_data?: any;
+  synced_at?: string;
+}
+
+export interface SyncedTeamMember {
+  id?: string;
+  location_id: string;
+  calendar_id: string;
+  user_id: string;
+  user_name: string | null;
+  user_email: string | null;
+  is_primary: boolean;
+  priority: number;
+  synced_at?: string;
+}
+
+export interface SyncStatus {
+  location_id: string;
+  last_sync_at: string | null;
+  sync_in_progress: boolean;
+  error_message: string | null;
+  calendars_count: number;
+  team_members_count: number;
+}
+
+export interface GHLCalendarResponse {
+  calendars: GHLCalendar[];
+}
+
+export interface GHLCalendar {
+  id: string;
+  name: string;
+  calendarType: string;
+  slotDuration?: number;
+  slotBuffer?: number;
+  openHours?: any[];
+  teamMembers?: GHLTeamMember[];
+  isActive?: boolean;
+}
+
+export interface GHLTeamMember {
+  userId: string;
+  name?: string;
+  email?: string;
+  isPrimary?: boolean;
+  priority?: number;
+}
+
 export interface GHLTokenResponse {
   access_token: string;
   token_type: string;

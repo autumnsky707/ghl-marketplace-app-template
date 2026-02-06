@@ -5,6 +5,7 @@ import { GHL } from "./ghl";
 import { json } from "body-parser";
 import { updateCalendarInfo } from "./db";
 import calendarRoutes from "./routes/calendar";
+import { syncLocation, startPolling } from "./sync";
 
 const path = __dirname + "/ui/dist/";
 
@@ -103,6 +104,15 @@ app.get("/authorize-handler", async (req: Request, res: Response) => {
     if (calendarId) {
       await updateCalendarInfo(locationId, calendarId, timezone);
     }
+
+    // Step 5: Trigger full calendar sync (runs in background)
+    syncLocation(locationId)
+      .then((result) => {
+        console.log(`[OAuth] Auto-sync complete: ${result.calendars} calendars, ${result.teamMembers} team members`);
+      })
+      .catch((err) => {
+        console.error("[OAuth] Auto-sync failed:", err.message);
+      });
 
     console.log(`[OAuth] Installation complete for ${locationId}`);
 
@@ -242,4 +252,7 @@ app.get("/", function (req, res) {
 
 app.listen(port, () => {
   console.log(`GHL app listening on port ${port}`);
+
+  // Start polling for calendar sync every 10 minutes
+  startPolling(10 * 60 * 1000);
 });
