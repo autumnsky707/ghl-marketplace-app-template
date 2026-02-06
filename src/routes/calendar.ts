@@ -573,45 +573,48 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     const hour12 = hours % 12 || 12;
     const currentTimeFormatted = `${hour12}:${minutes.toString().padStart(2, "0")} ${period}`;
 
-    // Date range: 7 days ahead (reduced from 14 for speed - we only need 3 slots)
-    const endDate = new Date(localNow);
-    endDate.setDate(endDate.getDate() + 7);
-
     const BUFFER_MS = 15 * 60 * 1000;
     const nowPlusBuffer = localNow.getTime() + BUFFER_MS;
     const startMs = Math.max(new Date(todayStr).getTime(), nowPlusBuffer);
-    const endMs = endDate.getTime();
 
-    // Fetch slots from GHL (direct call with cached token - skip ghl.requests overhead)
-    const slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${installation.calendar_id}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
-    let resp;
-    try {
-      resp = await axios.get(slotsUrl, {
-        headers: { Authorization: `Bearer ${installation.access_token}`, Version: "2021-07-28" }
-      });
-    } catch (err: any) {
-      // Fallback to ghl.requests on 401 (token expired) - slower but handles refresh
-      if (err?.response?.status === 401) {
-        console.log("[Calendar] Token expired, falling back to ghl.requests");
-        const client = await ghl.requests(resolvedLocationId);
-        resp = await client.get(slotsUrl, { headers: { Version: "2021-07-28" } });
-      } else {
-        throw err;
+    // Helper: fetch slots for a given number of days ahead
+    const fetchSlotsForDays = async (daysAhead: number): Promise<Record<string, string[]>> => {
+      const endDate = new Date(localNow);
+      endDate.setDate(endDate.getDate() + daysAhead);
+      const endMs = endDate.getTime();
+
+      const slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${installation.calendar_id}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
+      let resp;
+      try {
+        resp = await axios.get(slotsUrl, {
+          headers: { Authorization: `Bearer ${installation.access_token}`, Version: "2021-07-28" }
+        });
+      } catch (err: any) {
+        if (err?.response?.status === 401) {
+          console.log("[Calendar] Token expired, falling back to ghl.requests");
+          const client = await ghl.requests(resolvedLocationId);
+          resp = await client.get(slotsUrl, { headers: { Version: "2021-07-28" } });
+        } else {
+          throw err;
+        }
       }
-    }
 
-    // Build availability map (no openDays filter needed - GHL already filters)
-    const availabilityByDate: Record<string, string[]> = {};
-    const rawData = resp.data || {};
-    for (const dateKey of Object.keys(rawData).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort()) {
-      const entry = rawData[dateKey];
-      const slots: string[] = Array.isArray(entry) ? entry : (entry?.slots || []);
-      const futureSlots = slots.filter(slot => {
-        const slotMs = new Date(new Date(slot).toLocaleString("en-US", { timeZone: tz })).getTime();
-        return slotMs >= nowPlusBuffer;
-      });
-      if (futureSlots.length > 0) availabilityByDate[dateKey] = futureSlots;
-    }
+      const availabilityByDate: Record<string, string[]> = {};
+      const rawData = resp.data || {};
+      for (const dateKey of Object.keys(rawData).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort()) {
+        const entry = rawData[dateKey];
+        const slots: string[] = Array.isArray(entry) ? entry : (entry?.slots || []);
+        const futureSlots = slots.filter(slot => {
+          const slotMs = new Date(new Date(slot).toLocaleString("en-US", { timeZone: tz })).getTime();
+          return slotMs >= nowPlusBuffer;
+        });
+        if (futureSlots.length > 0) availabilityByDate[dateKey] = futureSlots;
+      }
+      return availabilityByDate;
+    };
+
+    // Start with 7 days (fast path)
+    let availabilityByDate = await fetchSlotsForDays(7);
 
     // Helper: get label
     const getLabel = (dateKey: string): string => {
@@ -714,17 +717,8 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       return null;
     };
 
-    const resultSlots: Array<{ date: string; time: string; label: string; startTime: string }> = [];
-
     // Parse date filter if requested_date is provided
     const dateFilter = requested_date ? parseDateRequest(requested_date) : null;
-
-    // Filter available dates based on requested_date
-    let filteredDates = Object.keys(availabilityByDate).sort();
-    if (dateFilter) {
-      filteredDates = filteredDates.filter(dateFilter);
-      console.log(`[Calendar] Date filter "${requested_date}" matched ${filteredDates.length} dates:`, filteredDates);
-    }
 
     // Determine time filter function
     let timeFilterFn: ((slot: string) => boolean) | null = null;
@@ -736,32 +730,57 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     // Target time for sorting (if requested_time is provided)
     const targetMins = requested_time ? parseTimeToMinutes(requested_time) : null;
 
-    // Iterate through filtered dates and collect slots
-    let daysFound = 0;
-    for (const dateKey of filteredDates) {
-      if (daysFound >= 3) break;
+    // Helper: collect slots from availability map
+    const collectSlots = (availability: Record<string, string[]>): Array<{ date: string; time: string; label: string; startTime: string }> => {
+      const results: Array<{ date: string; time: string; label: string; startTime: string }> = [];
+      let filteredDates = Object.keys(availability).sort();
 
-      let slots = availabilityByDate[dateKey];
-
-      // Apply time preference filter (morning/afternoon)
-      if (timeFilterFn) {
-        slots = slots.filter(timeFilterFn);
+      if (dateFilter) {
+        filteredDates = filteredDates.filter(dateFilter);
       }
 
-      if (slots.length === 0) continue;
+      let daysFound = 0;
+      for (const dateKey of filteredDates) {
+        if (daysFound >= 3) break;
 
-      // Pick best slot: closest to target time, or first available
-      let best = slots[0];
-      if (targetMins !== null) {
-        let bestDiff = Math.abs(getSlotMinutes(slots[0]) - targetMins);
-        for (const s of slots) {
-          const diff = Math.abs(getSlotMinutes(s) - targetMins);
-          if (diff < bestDiff) { bestDiff = diff; best = s; }
+        let slots = availability[dateKey];
+
+        // Apply time preference filter (morning/afternoon)
+        if (timeFilterFn) {
+          slots = slots.filter(timeFilterFn);
         }
-      }
 
-      resultSlots.push({ date: dateKey, time: formatSlotTime(best), label: getLabel(dateKey), startTime: best });
-      daysFound++;
+        if (slots.length === 0) continue;
+
+        // Pick best slot: closest to target time, or first available
+        let best = slots[0];
+        if (targetMins !== null) {
+          let bestDiff = Math.abs(getSlotMinutes(slots[0]) - targetMins);
+          for (const s of slots) {
+            const diff = Math.abs(getSlotMinutes(s) - targetMins);
+            if (diff < bestDiff) { bestDiff = diff; best = s; }
+          }
+        }
+
+        results.push({ date: dateKey, time: formatSlotTime(best), label: getLabel(dateKey), startTime: best });
+        daysFound++;
+      }
+      return results;
+    };
+
+    // Auto-extension: try 7 days, then 14, then 30 if no slots found
+    let resultSlots = collectSlots(availabilityByDate);
+
+    if (resultSlots.length === 0) {
+      console.log("[Calendar] No slots in 7 days, extending to 14 days...");
+      availabilityByDate = await fetchSlotsForDays(14);
+      resultSlots = collectSlots(availabilityByDate);
+    }
+
+    if (resultSlots.length === 0) {
+      console.log("[Calendar] No slots in 14 days, extending to 30 days...");
+      availabilityByDate = await fetchSlotsForDays(30);
+      resultSlots = collectSlots(availabilityByDate);
     }
 
     console.log(`[Calendar] Returning ${resultSlots.length} slots for ${todayFormatted} (${tz})`);
