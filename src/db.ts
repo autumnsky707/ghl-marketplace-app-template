@@ -467,6 +467,28 @@ export async function getUniqueStaffNames(locationId: string): Promise<string[]>
 }
 
 /**
+ * Get calendars assigned to a specific staff member (by name).
+ * Performs a case-insensitive partial match on user_name.
+ */
+export async function getCalendarsForStaffMember(
+  locationId: string,
+  staffName: string
+): Promise<SyncedTeamMember[]> {
+  const { data, error } = await supabase
+    .from(SYNCED_TEAM_MEMBERS_TABLE)
+    .select("*")
+    .eq("location_id", locationId)
+    .ilike("user_name", `%${staffName}%`);
+
+  if (error) {
+    console.error("[DB] getCalendarsForStaffMember error:", error);
+    return [];
+  }
+
+  return (data || []) as SyncedTeamMember[];
+}
+
+/**
  * Clear all synced data for a location.
  */
 export async function clearSyncedData(locationId: string): Promise<void> {

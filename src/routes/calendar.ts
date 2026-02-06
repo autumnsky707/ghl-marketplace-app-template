@@ -17,6 +17,7 @@ import {
   getSyncedCalendarsForService,
   getSyncedTeamMembers,
   getUniqueStaffNames,
+  getCalendarsForStaffMember,
 } from "../db";
 import { syncLocation } from "../sync";
 import {
@@ -756,12 +757,17 @@ router.post("/service-mappings", async (req: Request, res: Response) => {
  * POST /api/calendar/check-availability
  * Smart availability check for voice agents with multi-calendar support.
  *
- * Body: { locationId, service_type?, time_preference?, requested_date?, requested_time? }
+ * Body: { locationId, service_type?, staff_name?, time_preference?, requested_date?, requested_time? }
  * Response: { success: true, slots: [{ date, time, label, startTime, staff_name?, calendar_id? }] }
+ *
+ * When staff_name is provided:
+ * - Look up that staff member in synced_team_members
+ * - Only check availability on calendars they're assigned to
+ * - Return only that staff member's slots
  */
 router.post("/check-availability", async (req: Request, res: Response) => {
   try {
-    const { locationId, location_id, service_type, time_preference, requested_date, requested_time } = req.body;
+    const { locationId, location_id, service_type, staff_name, time_preference, requested_date, requested_time } = req.body;
     const resolvedLocationId = locationId || location_id;
 
     if (!resolvedLocationId) {
@@ -776,8 +782,49 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     // Determine which calendars to check (prefer synced data, fall back to manual mappings)
     let calendarsToCheck: Array<{ calendar_id: string; calendar_name: string | null; staff_name: string | null }> = [];
 
-    if (service_type) {
-      // First try synced calendars (calendar name matches service)
+    // If staff_name is provided, get calendars for that specific staff member
+    if (staff_name) {
+      const staffMembers = await getCalendarsForStaffMember(resolvedLocationId, staff_name);
+      if (staffMembers.length > 0) {
+        // Get the calendar IDs this staff member is assigned to
+        const staffCalendarIds = new Set(staffMembers.map((m) => m.calendar_id));
+        console.log(`[Calendar] Staff "${staff_name}" is assigned to ${staffCalendarIds.size} calendar(s)`);
+
+        // If service_type is also provided, filter to calendars that match both
+        if (service_type) {
+          const syncedCals = await getSyncedCalendarsForService(resolvedLocationId, service_type);
+          for (const cal of syncedCals) {
+            if (staffCalendarIds.has(cal.calendar_id)) {
+              // Find the staff member info for this calendar
+              const staffMember = staffMembers.find((m) => m.calendar_id === cal.calendar_id);
+              calendarsToCheck.push({
+                calendar_id: cal.calendar_id,
+                calendar_name: cal.calendar_name,
+                staff_name: staffMember?.user_name || null,
+              });
+            }
+          }
+          console.log(`[Calendar] Found ${calendarsToCheck.length} calendars for staff "${staff_name}" + service "${service_type}"`);
+        } else {
+          // Staff-only filter: get all calendars for this staff member
+          const syncedCals = await getSyncedCalendars(resolvedLocationId);
+          for (const cal of syncedCals) {
+            if (staffCalendarIds.has(cal.calendar_id)) {
+              const staffMember = staffMembers.find((m) => m.calendar_id === cal.calendar_id);
+              calendarsToCheck.push({
+                calendar_id: cal.calendar_id,
+                calendar_name: cal.calendar_name,
+                staff_name: staffMember?.user_name || null,
+              });
+            }
+          }
+          console.log(`[Calendar] Found ${calendarsToCheck.length} calendars for staff "${staff_name}"`);
+        }
+      } else {
+        console.log(`[Calendar] No staff member found matching "${staff_name}"`);
+      }
+    } else if (service_type) {
+      // Service type only - existing logic
       const syncedCals = await getSyncedCalendarsForService(resolvedLocationId, service_type);
       if (syncedCals.length > 0) {
         // Get team members for each calendar
@@ -804,7 +851,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
         }
       }
     } else {
-      // No service specified - use all synced calendars
+      // No service or staff specified - use all synced calendars
       const syncedCals = await getSyncedCalendars(resolvedLocationId);
       if (syncedCals.length > 0) {
         for (const cal of syncedCals) {
