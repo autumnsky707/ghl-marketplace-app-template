@@ -1,4 +1,5 @@
 import { Router, Request, Response } from "express";
+import axios from "axios";
 import { GHL } from "../ghl";
 import { getInstallation } from "../db";
 import {
@@ -572,39 +573,37 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     const hour12 = hours % 12 || 12;
     const currentTimeFormatted = `${hour12}:${minutes.toString().padStart(2, "0")} ${period}`;
 
-    // Date range: 14 days ahead
+    // Date range: 7 days ahead (reduced from 14 for speed - we only need 3 slots)
     const endDate = new Date(localNow);
-    endDate.setDate(endDate.getDate() + 14);
+    endDate.setDate(endDate.getDate() + 7);
 
     const BUFFER_MS = 15 * 60 * 1000;
     const nowPlusBuffer = localNow.getTime() + BUFFER_MS;
-
-    const client = await ghl.requests(resolvedLocationId);
     const startMs = Math.max(new Date(todayStr).getTime(), nowPlusBuffer);
     const endMs = endDate.getTime();
 
-    console.log("[Calendar] ===== CHECK AVAILABILITY =====");
-    console.log("[Calendar] time_preference:", time_preference, "requested_time:", requested_time);
-
-    // Get open days
-    let openDays = new Set([1, 2, 3, 4, 5]);
+    // Fetch slots from GHL (direct call with cached token - skip ghl.requests overhead)
+    const slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${installation.calendar_id}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
+    let resp;
     try {
-      const schedule = await getCalendarSchedule(client, installation.calendar_id, tz);
-      openDays = schedule.openDays;
-    } catch (e) {}
+      resp = await axios.get(slotsUrl, {
+        headers: { Authorization: `Bearer ${installation.access_token}`, Version: "2021-07-28" }
+      });
+    } catch (err: any) {
+      // Fallback to ghl.requests on 401 (token expired) - slower but handles refresh
+      if (err?.response?.status === 401) {
+        console.log("[Calendar] Token expired, falling back to ghl.requests");
+        const client = await ghl.requests(resolvedLocationId);
+        resp = await client.get(slotsUrl, { headers: { Version: "2021-07-28" } });
+      } else {
+        throw err;
+      }
+    }
 
-    // Fetch slots from GHL
-    const resp = await client.get(
-      `/calendars/${installation.calendar_id}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`,
-      { headers: { Version: "2021-07-28" } }
-    );
-
-    // Build availability map
+    // Build availability map (no openDays filter needed - GHL already filters)
     const availabilityByDate: Record<string, string[]> = {};
     const rawData = resp.data || {};
     for (const dateKey of Object.keys(rawData).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort()) {
-      const d = new Date(dateKey + "T00:00:00");
-      if (!openDays.has(d.getDay())) continue;
       const entry = rawData[dateKey];
       const slots: string[] = Array.isArray(entry) ? entry : (entry?.slots || []);
       const futureSlots = slots.filter(slot => {
