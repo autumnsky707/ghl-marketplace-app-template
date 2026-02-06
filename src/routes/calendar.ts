@@ -621,81 +621,148 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       return DAY_NAMES[new Date(dateKey + "T00:00:00").getDay()];
     };
 
-    // Helper: resolve day name
-    const resolveDayName = (name: string): string | null => {
-      const n = name.toLowerCase().trim();
-      if (n === "today") return todayStr;
-      if (n === "tomorrow") return tomorrowStr;
-      const idx = DAY_NAMES.findIndex(d => d.toLowerCase() === n);
-      if (idx === -1) return null;
-      let daysAhead = idx - localNow.getDay();
-      if (daysAhead <= 0) daysAhead += 7;
-      const target = new Date(localNow);
-      target.setDate(target.getDate() + daysAhead);
-      return target.toISOString().split("T")[0];
+    // Helper: parse natural language date requests into a date filter function
+    // Returns a function that takes a dateKey (YYYY-MM-DD) and returns true if it matches
+    const parseDateRequest = (input: string): ((dateKey: string) => boolean) | null => {
+      const n = input.toLowerCase().trim();
+
+      // Exact ISO date: "2026-02-15"
+      if (/^\d{4}-\d{2}-\d{2}$/.test(n)) {
+        return (dateKey) => dateKey === n;
+      }
+
+      // "today"
+      if (n === "today") {
+        return (dateKey) => dateKey === todayStr;
+      }
+
+      // "tomorrow"
+      if (n === "tomorrow") {
+        return (dateKey) => dateKey === tomorrowStr;
+      }
+
+      // "this weekend" - Saturday and Sunday of current week
+      if (n === "this weekend" || n === "weekend") {
+        const saturday = new Date(localNow);
+        const daysToSat = 6 - localNow.getDay();
+        saturday.setDate(saturday.getDate() + daysToSat);
+        const satStr = saturday.toISOString().split("T")[0];
+        const sunday = new Date(saturday);
+        sunday.setDate(sunday.getDate() + 1);
+        const sunStr = sunday.toISOString().split("T")[0];
+        return (dateKey) => dateKey === satStr || dateKey === sunStr;
+      }
+
+      // "next week" - starting from next Monday
+      if (n === "next week") {
+        const nextMonday = new Date(localNow);
+        const daysToMon = (8 - localNow.getDay()) % 7 || 7; // days until next Monday
+        nextMonday.setDate(nextMonday.getDate() + daysToMon);
+        const nextMondayStr = nextMonday.toISOString().split("T")[0];
+        return (dateKey) => dateKey >= nextMondayStr;
+      }
+
+      // "next [day]" - e.g., "next Monday", "next Friday"
+      const nextDayMatch = n.match(/^next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/);
+      if (nextDayMatch) {
+        const dayName = nextDayMatch[1];
+        const targetDayIdx = DAY_NAMES.findIndex(d => d.toLowerCase() === dayName);
+        if (targetDayIdx !== -1) {
+          let daysAhead = targetDayIdx - localNow.getDay();
+          if (daysAhead <= 0) daysAhead += 7;
+          // "next Monday" means the Monday of NEXT week, not this week
+          if (daysAhead < 7) daysAhead += 7;
+          const target = new Date(localNow);
+          target.setDate(target.getDate() + daysAhead);
+          const targetStr = target.toISOString().split("T")[0];
+          return (dateKey) => dateKey === targetStr;
+        }
+      }
+
+      // Single day name: "Friday", "Monday", etc. - next occurrence
+      const dayIdx = DAY_NAMES.findIndex(d => d.toLowerCase() === n);
+      if (dayIdx !== -1) {
+        let daysAhead = dayIdx - localNow.getDay();
+        if (daysAhead <= 0) daysAhead += 7;
+        const target = new Date(localNow);
+        target.setDate(target.getDate() + daysAhead);
+        const targetStr = target.toISOString().split("T")[0];
+        return (dateKey) => dateKey === targetStr;
+      }
+
+      // Month + day: "February 15th", "Feb 15", "February 15"
+      const monthDayMatch = n.match(/^(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+(\d{1,2})(?:st|nd|rd|th)?$/);
+      if (monthDayMatch) {
+        const monthNames: Record<string, number> = {
+          january: 0, jan: 0, february: 1, feb: 1, march: 2, mar: 2,
+          april: 3, apr: 3, may: 4, june: 5, jun: 5, july: 6, jul: 6,
+          august: 7, aug: 7, september: 8, sep: 8, october: 9, oct: 9,
+          november: 10, nov: 10, december: 11, dec: 11
+        };
+        const month = monthNames[monthDayMatch[1]];
+        const day = parseInt(monthDayMatch[2]);
+        // Assume current year, or next year if date has passed
+        let targetYear = year;
+        const targetDate = new Date(targetYear, month, day);
+        if (targetDate < localNow) {
+          targetYear++;
+        }
+        const targetStr = `${targetYear}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+        return (dateKey) => dateKey === targetStr;
+      }
+
+      // Couldn't parse - return null (no filter)
+      return null;
     };
 
     const resultSlots: Array<{ date: string; time: string; label: string; startTime: string }> = [];
 
-    // MODE 1: Time preference
+    // Parse date filter if requested_date is provided
+    const dateFilter = requested_date ? parseDateRequest(requested_date) : null;
+
+    // Filter available dates based on requested_date
+    let filteredDates = Object.keys(availabilityByDate).sort();
+    if (dateFilter) {
+      filteredDates = filteredDates.filter(dateFilter);
+      console.log(`[Calendar] Date filter "${requested_date}" matched ${filteredDates.length} dates:`, filteredDates);
+    }
+
+    // Determine time filter function
+    let timeFilterFn: ((slot: string) => boolean) | null = null;
     if (time_preference) {
       const pref = time_preference.toLowerCase();
-      const filterFn = pref === "morning" ? isSlotMorning : isSlotAfternoon;
-      const targetMins = requested_time ? parseTimeToMinutes(requested_time) : null;
-      let daysFound = 0;
-
-      for (const dateKey of Object.keys(availabilityByDate).sort()) {
-        if (daysFound >= 3) break;
-        const matching = availabilityByDate[dateKey].filter(filterFn);
-        if (matching.length > 0) {
-          // Pick best slot (closest to target or first)
-          let best = matching[0];
-          if (targetMins !== null) {
-            let bestDiff = Math.abs(getSlotMinutes(matching[0]) - targetMins);
-            for (const s of matching) {
-              const diff = Math.abs(getSlotMinutes(s) - targetMins);
-              if (diff < bestDiff) { bestDiff = diff; best = s; }
-            }
-          }
-          resultSlots.push({ date: dateKey, time: formatSlotTime(best), label: getLabel(dateKey), startTime: best });
-          daysFound++;
-        }
-      }
+      timeFilterFn = pref === "morning" ? isSlotMorning : isSlotAfternoon;
     }
-    // MODE 2: Specific date/time
-    else if (requested_date || requested_time) {
-      let targetDate = requested_date && !/^\d{4}-\d{2}-\d{2}$/.test(requested_date)
-        ? resolveDayName(requested_date)
-        : requested_date;
-      if (!targetDate) targetDate = todayStr;
 
-      const daySlots = availabilityByDate[targetDate] || [];
-      if (requested_time) {
-        const targetMins = parseTimeToMinutes(requested_time);
-        if (targetMins !== null) {
-          const withDiff = daySlots.map(s => ({ slot: s, diff: Math.abs(getSlotMinutes(s) - targetMins) }));
-          withDiff.sort((a, b) => a.diff - b.diff);
-          for (const { slot } of withDiff.slice(0, 3)) {
-            resultSlots.push({ date: targetDate, time: formatSlotTime(slot), label: getLabel(targetDate), startTime: slot });
-          }
-        }
-      } else {
-        for (const slot of daySlots.slice(0, 3)) {
-          resultSlots.push({ date: targetDate, time: formatSlotTime(slot), label: getLabel(targetDate), startTime: slot });
+    // Target time for sorting (if requested_time is provided)
+    const targetMins = requested_time ? parseTimeToMinutes(requested_time) : null;
+
+    // Iterate through filtered dates and collect slots
+    let daysFound = 0;
+    for (const dateKey of filteredDates) {
+      if (daysFound >= 3) break;
+
+      let slots = availabilityByDate[dateKey];
+
+      // Apply time preference filter (morning/afternoon)
+      if (timeFilterFn) {
+        slots = slots.filter(timeFilterFn);
+      }
+
+      if (slots.length === 0) continue;
+
+      // Pick best slot: closest to target time, or first available
+      let best = slots[0];
+      if (targetMins !== null) {
+        let bestDiff = Math.abs(getSlotMinutes(slots[0]) - targetMins);
+        for (const s of slots) {
+          const diff = Math.abs(getSlotMinutes(s) - targetMins);
+          if (diff < bestDiff) { bestDiff = diff; best = s; }
         }
       }
-    }
-    // DEFAULT: 1 slot per day for 3 days
-    else {
-      let daysFound = 0;
-      for (const dateKey of Object.keys(availabilityByDate).sort()) {
-        if (daysFound >= 3) break;
-        const slots = availabilityByDate[dateKey];
-        if (slots.length > 0) {
-          resultSlots.push({ date: dateKey, time: formatSlotTime(slots[0]), label: getLabel(dateKey), startTime: slots[0] });
-          daysFound++;
-        }
-      }
+
+      resultSlots.push({ date: dateKey, time: formatSlotTime(best), label: getLabel(dateKey), startTime: best });
+      daysFound++;
     }
 
     console.log(`[Calendar] Returning ${resultSlots.length} slots for ${todayFormatted} (${tz})`);
