@@ -796,18 +796,54 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     // Target time for sorting (if requested_time is provided)
     const targetMins = requested_time ? parseTimeToMinutes(requested_time) : null;
 
+    // How many slots to return: 5 if specific time requested, otherwise 3
+    const maxSlots = targetMins !== null ? 5 : 3;
+
     // Helper: collect slots from availability map
     const collectSlots = (availability: Record<string, string[]>): Array<{ date: string; time: string; label: string; startTime: string }> => {
-      const results: Array<{ date: string; time: string; label: string; startTime: string }> = [];
       let filteredDates = Object.keys(availability).sort();
 
       if (dateFilter) {
         filteredDates = filteredDates.filter(dateFilter);
       }
 
+      // If specific time requested, collect ALL matching slots and sort by proximity
+      if (targetMins !== null) {
+        const allSlots: Array<{ date: string; slot: string; diff: number }> = [];
+
+        for (const dateKey of filteredDates) {
+          let slots = availability[dateKey];
+
+          // Apply time preference filter (morning/afternoon)
+          if (timeFilterFn) {
+            slots = slots.filter(timeFilterFn);
+          }
+
+          for (const slot of slots) {
+            const slotMins = getSlotMinutes(slot);
+            const diff = Math.abs(slotMins - targetMins);
+            allSlots.push({ date: dateKey, slot, diff });
+          }
+        }
+
+        // Sort by proximity to requested time
+        allSlots.sort((a, b) => a.diff - b.diff);
+
+        // Return top 5 closest slots
+        return allSlots.slice(0, maxSlots).map(({ date, slot }) => ({
+          date,
+          time: formatSlotTime(slot),
+          label: getLabel(date),
+          startTime: slot
+        }));
+      }
+
+      // Default behavior: 1 slot per day, up to maxSlots days
+      const results: Array<{ date: string; time: string; label: string; startTime: string }> = [];
       let daysFound = 0;
+
       for (const dateKey of filteredDates) {
-        if (daysFound >= 3) break;
+        if (daysFound >= maxSlots) break;
 
         let slots = availability[dateKey];
 
@@ -818,17 +854,8 @@ router.post("/check-availability", async (req: Request, res: Response) => {
 
         if (slots.length === 0) continue;
 
-        // Pick best slot: closest to target time, or first available
-        let best = slots[0];
-        if (targetMins !== null) {
-          let bestDiff = Math.abs(getSlotMinutes(slots[0]) - targetMins);
-          for (const s of slots) {
-            const diff = Math.abs(getSlotMinutes(s) - targetMins);
-            if (diff < bestDiff) { bestDiff = diff; best = s; }
-          }
-        }
-
-        results.push({ date: dateKey, time: formatSlotTime(best), label: getLabel(dateKey), startTime: best });
+        // Pick first available slot
+        results.push({ date: dateKey, time: formatSlotTime(slots[0]), label: getLabel(dateKey), startTime: slots[0] });
         daysFound++;
       }
       return results;
