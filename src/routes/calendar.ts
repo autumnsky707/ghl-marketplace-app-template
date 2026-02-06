@@ -547,23 +547,39 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: "No calendar configured for this location" });
     }
 
-    // Hawaii timezone for all calculations
-    const HAWAII_TZ = "Pacific/Honolulu";
-    const hawaiiNow = new Date(new Date().toLocaleString("en-US", { timeZone: HAWAII_TZ }));
-    const todayStr = hawaiiNow.toISOString().split("T")[0];
-    const tomorrowDate = new Date(hawaiiNow);
+    // Use the location's configured timezone (fallback to Hawaii)
+    const tz = installation.timezone || "Pacific/Honolulu";
+    const localNow = new Date(new Date().toLocaleString("en-US", { timeZone: tz }));
+    const todayStr = localNow.toISOString().split("T")[0];
+    const tomorrowDate = new Date(localNow);
     tomorrowDate.setDate(tomorrowDate.getDate() + 1);
     const tomorrowStr = tomorrowDate.toISOString().split("T")[0];
 
+    // Format today's date for the agent (e.g., "Thursday, February 5th, 2026")
+    const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const dayOfWeek = dayNames[localNow.getDay()];
+    const month = monthNames[localNow.getMonth()];
+    const dayNum = localNow.getDate();
+    const year = localNow.getFullYear();
+    const daySuffix = (d: number) => { if (d > 3 && d < 21) return "th"; switch (d % 10) { case 1: return "st"; case 2: return "nd"; case 3: return "rd"; default: return "th"; } };
+    const todayFormatted = `${dayOfWeek}, ${month} ${dayNum}${daySuffix(dayNum)}, ${year}`;
+
+    // Format current time (e.g., "2:52 PM")
+    const hours = localNow.getHours();
+    const minutes = localNow.getMinutes();
+    const period = hours >= 12 ? "PM" : "AM";
+    const hour12 = hours % 12 || 12;
+    const currentTimeFormatted = `${hour12}:${minutes.toString().padStart(2, "0")} ${period}`;
+
     // Date range: 14 days ahead
-    const endDate = new Date(hawaiiNow);
+    const endDate = new Date(localNow);
     endDate.setDate(endDate.getDate() + 14);
 
     const BUFFER_MS = 15 * 60 * 1000;
-    const nowPlusBuffer = hawaiiNow.getTime() + BUFFER_MS;
+    const nowPlusBuffer = localNow.getTime() + BUFFER_MS;
 
     const client = await ghl.requests(resolvedLocationId);
-    const tz = installation.timezone || HAWAII_TZ;
     const startMs = Math.max(new Date(todayStr).getTime(), nowPlusBuffer);
     const endMs = endDate.getTime();
 
@@ -592,7 +608,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       const entry = rawData[dateKey];
       const slots: string[] = Array.isArray(entry) ? entry : (entry?.slots || []);
       const futureSlots = slots.filter(slot => {
-        const slotMs = new Date(new Date(slot).toLocaleString("en-US", { timeZone: HAWAII_TZ })).getTime();
+        const slotMs = new Date(new Date(slot).toLocaleString("en-US", { timeZone: tz })).getTime();
         return slotMs >= nowPlusBuffer;
       });
       if (futureSlots.length > 0) availabilityByDate[dateKey] = futureSlots;
@@ -612,9 +628,9 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       if (n === "tomorrow") return tomorrowStr;
       const idx = DAY_NAMES.findIndex(d => d.toLowerCase() === n);
       if (idx === -1) return null;
-      let daysAhead = idx - hawaiiNow.getDay();
+      let daysAhead = idx - localNow.getDay();
       if (daysAhead <= 0) daysAhead += 7;
-      const target = new Date(hawaiiNow);
+      const target = new Date(localNow);
       target.setDate(target.getDate() + daysAhead);
       return target.toISOString().split("T")[0];
     };
@@ -682,8 +698,14 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       }
     }
 
-    console.log(`[Calendar] Returning ${resultSlots.length} slots`);
-    return res.json({ success: true, slots: resultSlots });
+    console.log(`[Calendar] Returning ${resultSlots.length} slots for ${todayFormatted} (${tz})`);
+    return res.json({
+      success: true,
+      today: todayFormatted,
+      currentTime: currentTimeFormatted,
+      timezone: tz,
+      slots: resultSlots
+    });
 
   } catch (error: any) {
     console.error("[Calendar] check-availability error:", error?.response?.data || error.message);
