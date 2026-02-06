@@ -780,48 +780,52 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     }
 
     // Determine which calendars to check (prefer synced data, fall back to manual mappings)
-    let calendarsToCheck: Array<{ calendar_id: string; calendar_name: string | null; staff_name: string | null }> = [];
+    let calendarsToCheck: Array<{ calendar_id: string; calendar_name: string | null; staff_name: string | null; staff_id: string | null }> = [];
 
     // If staff_name is provided, get calendars for that specific staff member
     if (staff_name) {
       const staffMembers = await getCalendarsForStaffMember(resolvedLocationId, staff_name);
-      if (staffMembers.length > 0) {
-        // Get the calendar IDs this staff member is assigned to
-        const staffCalendarIds = new Set(staffMembers.map((m) => m.calendar_id));
-        console.log(`[Calendar] Staff "${staff_name}" is assigned to ${staffCalendarIds.size} calendar(s)`);
-
-        // If service_type is also provided, filter to calendars that match both
-        if (service_type) {
-          const syncedCals = await getSyncedCalendarsForService(resolvedLocationId, service_type);
-          for (const cal of syncedCals) {
-            if (staffCalendarIds.has(cal.calendar_id)) {
-              // Find the staff member info for this calendar
-              const staffMember = staffMembers.find((m) => m.calendar_id === cal.calendar_id);
-              calendarsToCheck.push({
-                calendar_id: cal.calendar_id,
-                calendar_name: cal.calendar_name,
-                staff_name: staffMember?.user_name || null,
-              });
-            }
-          }
-          console.log(`[Calendar] Found ${calendarsToCheck.length} calendars for staff "${staff_name}" + service "${service_type}"`);
-        } else {
-          // Staff-only filter: get all calendars for this staff member
-          const syncedCals = await getSyncedCalendars(resolvedLocationId);
-          for (const cal of syncedCals) {
-            if (staffCalendarIds.has(cal.calendar_id)) {
-              const staffMember = staffMembers.find((m) => m.calendar_id === cal.calendar_id);
-              calendarsToCheck.push({
-                calendar_id: cal.calendar_id,
-                calendar_name: cal.calendar_name,
-                staff_name: staffMember?.user_name || null,
-              });
-            }
-          }
-          console.log(`[Calendar] Found ${calendarsToCheck.length} calendars for staff "${staff_name}"`);
-        }
-      } else {
+      if (staffMembers.length === 0) {
+        // No matching staff member found - return error
         console.log(`[Calendar] No staff member found matching "${staff_name}"`);
+        return res.status(404).json({ success: false, error: "No staff member found with that name" });
+      }
+
+      // Get the calendar IDs this staff member is assigned to
+      const staffCalendarIds = new Set(staffMembers.map((m) => m.calendar_id));
+      console.log(`[Calendar] Staff "${staff_name}" is assigned to ${staffCalendarIds.size} calendar(s)`);
+
+      // If service_type is also provided, filter to calendars that match both
+      if (service_type) {
+        const syncedCals = await getSyncedCalendarsForService(resolvedLocationId, service_type);
+        for (const cal of syncedCals) {
+          if (staffCalendarIds.has(cal.calendar_id)) {
+            // Find the staff member info for this calendar
+            const staffMember = staffMembers.find((m) => m.calendar_id === cal.calendar_id);
+            calendarsToCheck.push({
+              calendar_id: cal.calendar_id,
+              calendar_name: cal.calendar_name,
+              staff_name: staffMember?.user_name || null,
+              staff_id: staffMember?.user_id || null,
+            });
+          }
+        }
+        console.log(`[Calendar] Found ${calendarsToCheck.length} calendars for staff "${staff_name}" + service "${service_type}"`);
+      } else {
+        // Staff-only filter: get all calendars for this staff member
+        const syncedCals = await getSyncedCalendars(resolvedLocationId);
+        for (const cal of syncedCals) {
+          if (staffCalendarIds.has(cal.calendar_id)) {
+            const staffMember = staffMembers.find((m) => m.calendar_id === cal.calendar_id);
+            calendarsToCheck.push({
+              calendar_id: cal.calendar_id,
+              calendar_name: cal.calendar_name,
+              staff_name: staffMember?.user_name || null,
+              staff_id: staffMember?.user_id || null,
+            });
+          }
+        }
+        console.log(`[Calendar] Found ${calendarsToCheck.length} calendars for staff "${staff_name}"`);
       }
     } else if (service_type) {
       // Service type only - existing logic
@@ -835,6 +839,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
             calendar_id: cal.calendar_id,
             calendar_name: cal.calendar_name,
             staff_name: primaryMember?.user_name || null,
+            staff_id: primaryMember?.user_id || null,
           });
         }
         console.log(`[Calendar] Found ${calendarsToCheck.length} synced calendars for service "${service_type}"`);
@@ -846,6 +851,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
             calendar_id: m.calendar_id,
             calendar_name: null,
             staff_name: m.staff_name,
+            staff_id: null,
           }));
           console.log(`[Calendar] Found ${calendarsToCheck.length} manual mappings for service "${service_type}"`);
         }
@@ -861,6 +867,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
             calendar_id: cal.calendar_id,
             calendar_name: cal.calendar_name,
             staff_name: primaryMember?.user_name || null,
+            staff_id: primaryMember?.user_id || null,
           });
         }
         console.log(`[Calendar] Using all ${calendarsToCheck.length} synced calendars`);
@@ -872,7 +879,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       if (!installation.calendar_id) {
         return res.status(400).json({ success: false, error: "No calendar configured for this location" });
       }
-      calendarsToCheck = [{ calendar_id: installation.calendar_id, calendar_name: null, staff_name: null }];
+      calendarsToCheck = [{ calendar_id: installation.calendar_id, calendar_name: null, staff_name: null, staff_id: null }];
       console.log(`[Calendar] Falling back to default calendar`);
     }
 
@@ -906,13 +913,14 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     const startMs = Math.max(new Date(todayStr).getTime(), nowPlusBuffer);
 
     // Slot type with staff info
-    type SlotWithStaff = { slot: string; staff_name: string | null; calendar_id: string; calendar_name: string | null };
+    type SlotWithStaff = { slot: string; staff_name: string | null; staff_id: string | null; calendar_id: string; calendar_name: string | null };
 
     // Helper: fetch slots for a given calendar and number of days ahead
     const fetchSlotsForCalendar = async (
       calendarId: string,
       calendarName: string | null,
       staffName: string | null,
+      staffId: string | null,
       daysAhead: number
     ): Promise<Record<string, SlotWithStaff[]>> => {
       const endDate = new Date(localNow);
@@ -948,6 +956,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
           availabilityByDate[dateKey] = futureSlots.map(slot => ({
             slot,
             staff_name: staffName,
+            staff_id: staffId,
             calendar_id: calendarId,
             calendar_name: calendarName
           }));
@@ -962,8 +971,8 @@ router.post("/check-availability", async (req: Request, res: Response) => {
 
       // Fetch all calendars in parallel
       const results = await Promise.all(
-        calendarsToCheck.map(({ calendar_id, calendar_name, staff_name }) =>
-          fetchSlotsForCalendar(calendar_id, calendar_name, staff_name, daysAhead)
+        calendarsToCheck.map(({ calendar_id, calendar_name, staff_name, staff_id }) =>
+          fetchSlotsForCalendar(calendar_id, calendar_name, staff_name, staff_id, daysAhead)
         )
       );
 
@@ -1120,6 +1129,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       label: string;
       startTime: string;
       staff_name?: string;
+      staff_id?: string;
       calendar_id?: string;
       calendar_name?: string;
     };
@@ -1161,6 +1171,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
           label: getLabel(date),
           startTime: slotInfo.slot,
           ...(slotInfo.staff_name && { staff_name: slotInfo.staff_name }),
+          ...(slotInfo.staff_id && { staff_id: slotInfo.staff_id }),
           ...(slotInfo.calendar_id && { calendar_id: slotInfo.calendar_id }),
           ...(slotInfo.calendar_name && { calendar_name: slotInfo.calendar_name })
         }));
@@ -1190,6 +1201,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
           label: getLabel(dateKey),
           startTime: firstSlot.slot,
           ...(firstSlot.staff_name && { staff_name: firstSlot.staff_name }),
+          ...(firstSlot.staff_id && { staff_id: firstSlot.staff_id }),
           ...(firstSlot.calendar_id && { calendar_id: firstSlot.calendar_id }),
           ...(firstSlot.calendar_name && { calendar_name: firstSlot.calendar_name })
         });
