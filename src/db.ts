@@ -575,7 +575,7 @@ export async function upsertSyncedCalendars(
         const userName = tm.name || tm.userName || tm.user_name || tm.firstName || null;
         const userEmail = tm.email || tm.userEmail || tm.user_email || null;
         const isPrimary = tm.isPrimary || tm.is_primary || tm.primary || false;
-        const priority = tm.priority || tm.order || 0;
+        const priority = Math.floor(Number(tm.priority || tm.order || 0));
 
         if (!userId) {
           console.log(`[DB] Skipping team member with no userId:`, JSON.stringify(tm));
