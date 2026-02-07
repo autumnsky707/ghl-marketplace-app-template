@@ -407,6 +407,29 @@ export async function getSyncedCalendars(locationId: string): Promise<SyncedCale
 }
 
 /**
+ * Get a synced calendar by ID.
+ */
+export async function getSyncedCalendarById(
+  locationId: string,
+  calendarId: string
+): Promise<SyncedCalendar | null> {
+  const { data, error } = await supabase
+    .from(SYNCED_CALENDARS_TABLE)
+    .select("*")
+    .eq("location_id", locationId)
+    .eq("calendar_id", calendarId)
+    .single();
+
+  if (error) {
+    if (error.code === "PGRST116") return null;
+    console.error("[DB] getSyncedCalendarById error:", error);
+    return null;
+  }
+
+  return data as SyncedCalendar;
+}
+
+/**
  * Get synced calendars matching a service name.
  */
 export async function getSyncedCalendarsForService(

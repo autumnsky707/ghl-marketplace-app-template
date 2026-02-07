@@ -14,6 +14,7 @@ import {
   deleteServiceMappingById,
   getSyncStatus,
   getSyncedCalendars,
+  getSyncedCalendarById,
   getSyncedCalendarsForService,
   getSyncedTeamMembers,
   getUniqueStaffNames,
@@ -757,17 +758,21 @@ router.post("/service-mappings", async (req: Request, res: Response) => {
  * POST /api/calendar/check-availability
  * Smart availability check for voice agents with multi-calendar support.
  *
- * Body: { locationId, service_type?, staff_name?, time_preference?, requested_date?, requested_time? }
+ * Body: { locationId, service_type?, staff_name?, time_preference?, requested_date?, requested_time?, start_after? }
  * Response: { success: true, slots: [{ date, time, label, startTime, staff_name?, calendar_id? }] }
  *
  * When staff_name is provided:
  * - Look up that staff member in synced_team_members
  * - Only check availability on calendars they're assigned to
  * - Return only that staff member's slots
+ *
+ * When start_after is provided (for multi-service booking):
+ * - Only return slots that START at or after this time
+ * - Format: ISO timestamp (e.g., "2026-02-06T14:00:00-10:00")
  */
 router.post("/check-availability", async (req: Request, res: Response) => {
   try {
-    const { locationId, location_id, service_type, staff_name, time_preference, requested_date, requested_time } = req.body;
+    const { locationId, location_id, service_type, staff_name, time_preference, requested_date, requested_time, start_after } = req.body;
     const resolvedLocationId = locationId || location_id;
 
     if (!resolvedLocationId) {
@@ -910,7 +915,19 @@ router.post("/check-availability", async (req: Request, res: Response) => {
 
     const BUFFER_MS = 15 * 60 * 1000;
     const nowPlusBuffer = localNow.getTime() + BUFFER_MS;
-    const startMs = Math.max(new Date(todayStr).getTime(), nowPlusBuffer);
+
+    // For multi-service booking: parse start_after to get minimum slot time
+    // This lets the agent find slots that start after the previous service ends
+    let minSlotTimeMs = nowPlusBuffer;
+    if (start_after) {
+      const startAfterMs = new Date(start_after).getTime();
+      if (!isNaN(startAfterMs)) {
+        minSlotTimeMs = Math.max(minSlotTimeMs, startAfterMs);
+        console.log(`[Calendar] start_after filter: only slots >= ${start_after}`);
+      }
+    }
+
+    const startMs = Math.max(new Date(todayStr).getTime(), minSlotTimeMs);
 
     // Slot type with staff info
     type SlotWithStaff = { slot: string; staff_name: string | null; staff_id: string | null; calendar_id: string; calendar_name: string | null };
@@ -948,9 +965,10 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       for (const dateKey of Object.keys(rawData).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort()) {
         const entry = rawData[dateKey];
         const slots: string[] = Array.isArray(entry) ? entry : (entry?.slots || []);
+        // Filter slots: must be >= minSlotTimeMs (accounts for both "now + buffer" AND start_after)
         const futureSlots = slots.filter(slot => {
-          const slotMs = new Date(new Date(slot).toLocaleString("en-US", { timeZone: tz })).getTime();
-          return slotMs >= nowPlusBuffer;
+          const slotMs = new Date(slot).getTime();
+          return slotMs >= minSlotTimeMs;
         });
         if (futureSlots.length > 0) {
           availabilityByDate[dateKey] = futureSlots.map(slot => ({
@@ -1300,6 +1318,19 @@ router.post("/book", async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: "No calendar configured for this location" });
     }
 
+    // Look up calendar settings for duration and buffer (for multi-service booking)
+    let slotDuration = 60; // default 60 minutes
+    let slotBuffer = 0;    // default 0 minutes buffer
+    const syncedCalendar = await getSyncedCalendarById(locationId, resolvedCalendarId);
+    if (syncedCalendar) {
+      slotDuration = syncedCalendar.slot_duration || 60;
+      slotBuffer = syncedCalendar.slot_buffer || 0;
+      console.log(`[Calendar] Calendar settings: duration=${slotDuration}min, buffer=${slotBuffer}min`);
+    }
+
+    // Allow override via request body
+    const durationMinutes = body.duration_minutes || body.durationMinutes || slotDuration;
+
     // 2. Get authenticated client (refreshes token if expired)
     const client = await ghl.requests(locationId);
 
@@ -1341,8 +1372,13 @@ router.post("/book", async (req: Request, res: Response) => {
 
     // 4. Book the appointment
     const startISO = new Date(startTime).toISOString();
-    // Default to 1 hour duration
-    const endISO = new Date(new Date(startTime).getTime() + 60 * 60 * 1000).toISOString();
+    const startTimeMs = new Date(startTime).getTime();
+    // Calculate end time based on duration (from calendar settings or override)
+    const endTimeMs = startTimeMs + durationMinutes * 60 * 1000;
+    const endISO = new Date(endTimeMs).toISOString();
+    // Calculate buffer_end for multi-service booking (when next service can start)
+    const bufferEndMs = endTimeMs + slotBuffer * 60 * 1000;
+    const bufferEndISO = new Date(bufferEndMs).toISOString();
 
     // Title-case the service type
     const formattedServiceType = serviceType ? toTitleCase(serviceType) : null;
@@ -1413,11 +1449,16 @@ router.post("/book", async (req: Request, res: Response) => {
       }
     }
 
-    // 6. Return success
+    // 6. Return success with timing info for multi-service booking
     return res.json({
       success: true,
       appointmentId,
       contactId,
+      startTime: startISO,
+      endTime: endISO,
+      buffer_end: bufferEndISO,
+      duration_minutes: durationMinutes,
+      buffer_minutes: slotBuffer,
       data: appointmentResp.data,
     });
   } catch (error: any) {
