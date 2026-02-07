@@ -913,6 +913,7 @@ router.post("/service-mappings", async (req: Request, res: Response) => {
  * Response includes today, currentTime, timezone so agent knows what day it is.
  */
 router.post("/check-availability", async (req: Request, res: Response) => {
+  console.log('[Check] Request body:', JSON.stringify(req.body, null, 2));
   try {
     const {
       locationId,
@@ -1571,6 +1572,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
  * Accepts both camelCase and snake_case field names.
  */
 router.post("/book", async (req: Request, res: Response) => {
+  console.log('[Book] Request body:', JSON.stringify(req.body, null, 2));
   try {
     const body = req.body;
 
