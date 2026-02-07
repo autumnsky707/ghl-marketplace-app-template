@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Package Setup - BookNexa AI</title>
+  <title>Package Setup</title>
   <style>
     * {
       box-sizing: border-box;
@@ -11,189 +11,225 @@
       padding: 0;
     }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      min-height: 100vh;
-      padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: #fff;
+      color: #111;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
     }
     .container {
-      max-width: 800px;
+      max-width: 640px;
       margin: 0 auto;
+      padding: 48px 24px;
     }
-    .card {
-      background: white;
-      border-radius: 12px;
-      padding: 24px;
-      margin-bottom: 20px;
-      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    .header {
+      margin-bottom: 48px;
     }
     h1 {
-      color: #1a1a2e;
+      font-size: 24px;
+      font-weight: 600;
+      color: #111;
       margin-bottom: 8px;
     }
     .subtitle {
       color: #666;
-      margin-bottom: 24px;
+      font-size: 15px;
+    }
+    .section {
+      margin-bottom: 48px;
     }
     h2 {
-      color: #1a1a2e;
-      margin-bottom: 16px;
-      font-size: 1.25rem;
+      font-size: 14px;
+      font-weight: 600;
+      color: #111;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 20px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #eee;
     }
     .form-group {
-      margin-bottom: 16px;
+      margin-bottom: 20px;
     }
     label {
       display: block;
+      font-size: 14px;
       font-weight: 500;
-      margin-bottom: 6px;
       color: #333;
+      margin-bottom: 6px;
     }
     input, textarea, select {
       width: 100%;
       padding: 10px 12px;
       border: 1px solid #ddd;
-      border-radius: 8px;
+      border-radius: 6px;
       font-size: 14px;
-      transition: border-color 0.2s;
+      color: #111;
+      background: #fff;
+      transition: border-color 0.15s ease;
     }
     input:focus, textarea:focus, select:focus {
       outline: none;
-      border-color: #667eea;
+      border-color: #111;
+    }
+    input::placeholder, textarea::placeholder {
+      color: #999;
     }
     .checkbox-group {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      display: flex;
+      flex-wrap: wrap;
       gap: 8px;
-      padding: 12px;
-      background: #f8f9fa;
-      border-radius: 8px;
-      max-height: 200px;
+      padding: 16px;
+      background: #fafafa;
+      border: 1px solid #eee;
+      border-radius: 6px;
+      max-height: 180px;
       overflow-y: auto;
     }
     .checkbox-item {
       display: flex;
       align-items: center;
       gap: 8px;
+      padding: 6px 12px;
+      background: #fff;
+      border: 1px solid #e5e5e5;
+      border-radius: 4px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: border-color 0.15s ease;
+    }
+    .checkbox-item:hover {
+      border-color: #111;
     }
     .checkbox-item input {
       width: auto;
+      margin: 0;
+    }
+    .checkbox-item input:checked + span {
+      font-weight: 500;
     }
     .row {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 16px;
     }
-    @media (max-width: 600px) {
+    @media (max-width: 500px) {
       .row {
         grid-template-columns: 1fr;
       }
     }
     .btn {
-      padding: 12px 24px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 10px 20px;
       border: none;
-      border-radius: 8px;
+      border-radius: 6px;
       font-size: 14px;
-      font-weight: 600;
+      font-weight: 500;
       cursor: pointer;
-      transition: all 0.2s;
+      transition: all 0.15s ease;
     }
     .btn-primary {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
+      background: #111;
+      color: #fff;
     }
     .btn-primary:hover {
-      transform: translateY(-1px);
-      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+      background: #333;
     }
     .btn-danger {
-      background: #dc3545;
-      color: white;
+      background: #fff;
+      color: #dc3545;
+      border: 1px solid #dc3545;
+      padding: 6px 12px;
+      font-size: 13px;
     }
     .btn-danger:hover {
-      background: #c82333;
-    }
-    .btn-secondary {
-      background: #6c757d;
-      color: white;
-    }
-    .package-list {
-      margin-top: 24px;
+      background: #dc3545;
+      color: #fff;
     }
     .package-item {
       display: flex;
       justify-content: space-between;
       align-items: flex-start;
-      padding: 16px;
-      background: #f8f9fa;
-      border-radius: 8px;
-      margin-bottom: 12px;
+      padding: 16px 0;
+      border-bottom: 1px solid #eee;
+    }
+    .package-item:last-child {
+      border-bottom: none;
     }
     .package-info h3 {
-      color: #1a1a2e;
+      font-size: 15px;
+      font-weight: 500;
+      color: #111;
       margin-bottom: 4px;
     }
     .package-info .services {
       color: #666;
-      font-size: 14px;
-      margin-bottom: 4px;
+      font-size: 13px;
+      margin-bottom: 2px;
     }
     .package-info .meta {
-      color: #888;
+      color: #999;
       font-size: 13px;
-    }
-    .package-actions {
-      display: flex;
-      gap: 8px;
-    }
-    .btn-sm {
-      padding: 6px 12px;
-      font-size: 12px;
     }
     .alert {
       padding: 12px 16px;
-      border-radius: 8px;
-      margin-bottom: 16px;
+      border-radius: 6px;
+      margin-bottom: 20px;
+      font-size: 14px;
     }
     .alert-success {
-      background: #d4edda;
-      color: #155724;
+      background: #f0fdf4;
+      color: #166534;
+      border: 1px solid #bbf7d0;
     }
     .alert-error {
-      background: #f8d7da;
-      color: #721c24;
+      background: #fef2f2;
+      color: #991b1b;
+      border: 1px solid #fecaca;
     }
     .loading {
       text-align: center;
-      padding: 40px;
-      color: #666;
+      padding: 32px;
+      color: #999;
+      font-size: 14px;
     }
     .empty-state {
       text-align: center;
-      padding: 40px;
-      color: #666;
+      padding: 32px;
+      color: #999;
+      font-size: 14px;
     }
     .hidden {
       display: none;
+    }
+    .divider {
+      height: 1px;
+      background: #eee;
+      margin: 32px 0;
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="card">
+    <div class="header">
       <h1>Package Setup</h1>
-      <p class="subtitle">Create service packages for your customers to book multiple services at once.</p>
+      <p class="subtitle">Create service packages for your customers.</p>
+    </div>
 
-      <div id="alert" class="alert hidden"></div>
+    <div id="alert" class="alert hidden"></div>
 
+    <div class="section">
+      <h2>Add New Package</h2>
       <form id="packageForm">
         <div class="form-group">
-          <label for="packageName">Package Name *</label>
-          <input type="text" id="packageName" placeholder="e.g., Serenity Package" required>
+          <label for="packageName">Package Name</label>
+          <input type="text" id="packageName" placeholder="Serenity Package" required>
         </div>
 
         <div class="form-group">
-          <label>Services Included *</label>
+          <label>Services Included</label>
           <div id="servicesContainer" class="checkbox-group">
             <div class="loading">Loading services...</div>
           </div>
@@ -201,45 +237,43 @@
 
         <div class="row">
           <div class="form-group">
-            <label for="duration">Total Duration (minutes)</label>
-            <input type="number" id="duration" placeholder="e.g., 180">
+            <label for="duration">Duration (minutes)</label>
+            <input type="number" id="duration" placeholder="180">
           </div>
           <div class="form-group">
             <label for="price">Price ($)</label>
-            <input type="number" id="price" step="0.01" placeholder="e.g., 299.00">
+            <input type="number" id="price" step="0.01" placeholder="299.00">
           </div>
         </div>
 
         <div class="form-group">
           <label for="description">Description</label>
-          <textarea id="description" rows="2" placeholder="e.g., 3-hour relaxation experience"></textarea>
+          <textarea id="description" rows="2" placeholder="3-hour relaxation experience"></textarea>
         </div>
 
         <button type="submit" class="btn btn-primary">Add Package</button>
       </form>
     </div>
 
-    <div class="card">
+    <div class="section">
       <h2>Your Packages</h2>
-      <div id="packageList" class="package-list">
+      <div id="packageList">
         <div class="loading">Loading packages...</div>
       </div>
     </div>
   </div>
 
   <script>
-    // Get locationId from URL
     const urlParams = new URLSearchParams(window.location.search);
     const locationId = urlParams.get('locationId');
 
     if (!locationId) {
-      document.body.innerHTML = '<div style="text-align:center;padding:40px;color:white;"><h2>Missing Location ID</h2><p>Please access this page with a valid locationId parameter.</p></div>';
+      document.body.innerHTML = '<div style="text-align:center;padding:80px 24px;"><h1 style="font-size:18px;margin-bottom:8px;">Missing Location ID</h1><p style="color:#666;font-size:14px;">Please access this page with a valid locationId parameter.</p></div>';
     }
 
     const API_BASE = window.location.origin;
     let availableServices = [];
 
-    // Show alert message
     function showAlert(message, type) {
       const alert = document.getElementById('alert');
       alert.textContent = message;
@@ -248,7 +282,6 @@
       setTimeout(() => alert.classList.add('hidden'), 5000);
     }
 
-    // Load available services from synced calendars
     async function loadServices() {
       try {
         const resp = await fetch(`${API_BASE}/api/calendar/business-info`, {
@@ -262,14 +295,13 @@
           availableServices = data.services;
           renderServiceCheckboxes();
         } else {
-          document.getElementById('servicesContainer').innerHTML = '<div class="empty-state">No services found. Please sync your calendars first.</div>';
+          document.getElementById('servicesContainer').innerHTML = '<div class="empty-state">No services found. Sync your calendars first.</div>';
         }
       } catch (err) {
         document.getElementById('servicesContainer').innerHTML = '<div class="empty-state">Failed to load services.</div>';
       }
     }
 
-    // Render service checkboxes
     function renderServiceCheckboxes() {
       const container = document.getElementById('servicesContainer');
       if (availableServices.length === 0) {
@@ -280,12 +312,11 @@
       container.innerHTML = availableServices.map(service => `
         <label class="checkbox-item">
           <input type="checkbox" name="services" value="${service}">
-          ${service}
+          <span>${service}</span>
         </label>
       `).join('');
     }
 
-    // Load existing packages
     async function loadPackages() {
       try {
         const resp = await fetch(`${API_BASE}/api/calendar/packages`, {
@@ -303,12 +334,11 @@
       }
     }
 
-    // Render packages list
     function renderPackages(packages) {
       const container = document.getElementById('packageList');
 
       if (!packages || packages.length === 0) {
-        container.innerHTML = '<div class="empty-state">No packages yet. Create your first package above!</div>';
+        container.innerHTML = '<div class="empty-state">No packages yet. Create your first one above.</div>';
         return;
       }
 
@@ -319,18 +349,15 @@
             <div class="services">${pkg.services.join(', ')}</div>
             <div class="meta">
               ${pkg.total_duration_minutes ? pkg.total_duration_minutes + ' min' : ''}
-              ${pkg.price ? ' - $' + parseFloat(pkg.price).toFixed(2) : ''}
-              ${pkg.description ? ' - ' + pkg.description : ''}
+              ${pkg.price ? ' &middot; $' + parseFloat(pkg.price).toFixed(2) : ''}
+              ${pkg.description ? ' &middot; ' + pkg.description : ''}
             </div>
           </div>
-          <div class="package-actions">
-            <button class="btn btn-danger btn-sm" onclick="deletePackage('${pkg.id}')">Delete</button>
-          </div>
+          <button class="btn btn-danger" onclick="deletePackage('${pkg.id}')">Delete</button>
         </div>
       `).join('');
     }
 
-    // Add new package
     document.getElementById('packageForm').addEventListener('submit', async (e) => {
       e.preventDefault();
 
@@ -361,7 +388,7 @@
         const data = await resp.json();
 
         if (data.success) {
-          showAlert('Package created successfully!', 'success');
+          showAlert('Package created successfully.', 'success');
           document.getElementById('packageForm').reset();
           loadPackages();
         } else {
@@ -372,9 +399,8 @@
       }
     });
 
-    // Delete package
     async function deletePackage(id) {
-      if (!confirm('Are you sure you want to delete this package?')) return;
+      if (!confirm('Delete this package?')) return;
 
       try {
         const resp = await fetch(`${API_BASE}/api/calendar/packages`, {
@@ -395,7 +421,6 @@
       }
     }
 
-    // Initialize
     loadServices();
     loadPackages();
   </script>
