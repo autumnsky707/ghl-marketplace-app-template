@@ -52,6 +52,7 @@ export interface SyncedTeamMember {
   user_email: string | null;
   is_primary: boolean;
   priority: number;
+  gender: "male" | "female" | null;
   synced_at?: string;
 }
 

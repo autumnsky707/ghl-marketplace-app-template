@@ -513,6 +513,83 @@ export async function getCalendarsForStaffMember(
 }
 
 /**
+ * Get team members by gender for a specific calendar.
+ * Used for therapist_preference filtering.
+ */
+export async function getTeamMembersByGender(
+  locationId: string,
+  calendarId: string,
+  gender: "male" | "female"
+): Promise<SyncedTeamMember[]> {
+  const { data, error } = await supabase
+    .from(SYNCED_TEAM_MEMBERS_TABLE)
+    .select("*")
+    .eq("location_id", locationId)
+    .eq("calendar_id", calendarId)
+    .eq("gender", gender)
+    .order("priority");
+
+  if (error) {
+    console.error("[DB] getTeamMembersByGender error:", error);
+    return [];
+  }
+
+  return (data || []) as SyncedTeamMember[];
+}
+
+/**
+ * Update team member gender.
+ */
+export async function updateTeamMemberGender(
+  locationId: string,
+  odMember: string,
+  gender: "male" | "female" | null
+): Promise<boolean> {
+  const { error } = await supabase
+    .from(SYNCED_TEAM_MEMBERS_TABLE)
+    .update({ gender })
+    .eq("location_id", locationId)
+    .eq("id", odMember);
+
+  if (error) {
+    console.error("[DB] updateTeamMemberGender error:", error);
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Get all unique team members for a location (deduplicated by user_id).
+ */
+export async function getUniqueTeamMembers(
+  locationId: string
+): Promise<SyncedTeamMember[]> {
+  const { data, error } = await supabase
+    .from(SYNCED_TEAM_MEMBERS_TABLE)
+    .select("*")
+    .eq("location_id", locationId)
+    .order("user_name");
+
+  if (error) {
+    console.error("[DB] getUniqueTeamMembers error:", error);
+    return [];
+  }
+
+  // Deduplicate by user_id, keeping first occurrence
+  const seen = new Set<string>();
+  const unique: SyncedTeamMember[] = [];
+  for (const member of (data || []) as SyncedTeamMember[]) {
+    if (!seen.has(member.user_id)) {
+      seen.add(member.user_id);
+      unique.push(member);
+    }
+  }
+
+  return unique;
+}
+
+/**
  * Clear all synced data for a location.
  */
 export async function clearSyncedData(locationId: string): Promise<void> {

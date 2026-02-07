@@ -19,6 +19,9 @@ import {
   getSyncedTeamMembers,
   getUniqueStaffNames,
   getCalendarsForStaffMember,
+  getTeamMembersByGender,
+  updateTeamMemberGender,
+  getUniqueTeamMembers,
   getPackages,
   getPackageByName,
   upsertPackage,
@@ -922,7 +925,8 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       time_preference,
       requested_date,
       requested_time,
-      start_after
+      start_after,
+      therapist_preference
     } = req.body;
     const resolvedLocationId = locationId || location_id;
 
@@ -1142,6 +1146,46 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       console.log(`[Calendar] Falling back to default calendar`);
     }
 
+    // Filter by therapist_preference (gender) if provided
+    const genderPreference = therapist_preference?.toLowerCase();
+    if (genderPreference === "male" || genderPreference === "female") {
+      console.log(`[Calendar] Filtering by therapist_preference: ${genderPreference}`);
+
+      // For each calendar, get only team members with matching gender
+      const genderFilteredCalendars: typeof calendarsToCheck = [];
+
+      for (const cal of calendarsToCheck) {
+        const genderMembers = await getTeamMembersByGender(resolvedLocationId, cal.calendar_id, genderPreference);
+        if (genderMembers.length > 0) {
+          // Add each matching team member as a separate entry (so we can pass their userId)
+          for (const member of genderMembers) {
+            genderFilteredCalendars.push({
+              calendar_id: cal.calendar_id,
+              calendar_name: cal.calendar_name,
+              staff_name: member.user_name,
+              staff_id: member.user_id,
+            });
+          }
+        }
+      }
+
+      if (genderFilteredCalendars.length === 0) {
+        console.log(`[Calendar] No ${genderPreference} therapists found with availability`);
+        return res.json({
+          success: false,
+          error: `No ${genderPreference} therapists available`,
+          message: `I couldn't find any ${genderPreference} therapists with availability. Would you like me to check for any available therapist instead?`,
+          today: todayStr,
+          currentTime: currentTimeStr,
+          timezone: tz,
+          slots: [],
+        });
+      }
+
+      calendarsToCheck = genderFilteredCalendars;
+      console.log(`[Calendar] Found ${calendarsToCheck.length} ${genderPreference} therapist entries across calendars`);
+    }
+
     // Use tz, localNow, todayStr already defined at top of endpoint
     const tomorrowDate = new Date(localNow);
     tomorrowDate.setDate(tomorrowDate.getDate() + 1);
@@ -1195,7 +1239,12 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       endDate.setDate(endDate.getDate() + daysAhead);
       const endMs = endDate.getTime();
 
-      const slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${calendarId}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
+      // Build URL - include userId if filtering by specific staff member (for gender preference)
+      let slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${calendarId}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
+      if (staffId) {
+        slotsUrl += `&userId=${encodeURIComponent(staffId)}`;
+        console.log(`[Calendar] Fetching slots for specific user: ${staffName} (${staffId})`);
+      }
       let resp;
       try {
         resp = await axios.get(slotsUrl, {
@@ -2116,6 +2165,68 @@ router.post("/packages", async (req: Request, res: Response) => {
 
   } catch (error: any) {
     console.error("[Calendar] packages error:", error?.message);
+    return res.status(500).json({ success: false, error: error?.message });
+  }
+});
+
+/**
+ * POST /api/calendar/staff
+ * Manage staff gender for therapist preference filtering.
+ *
+ * Actions:
+ *   - list: Get all unique staff members with their gender
+ *   - update-gender: Update a staff member's gender
+ *
+ * Body: { locationId, action, memberId?, gender? }
+ */
+router.post("/staff", async (req: Request, res: Response) => {
+  try {
+    const { locationId, location_id, action, memberId, gender } = req.body;
+    const resolvedLocationId = locationId || location_id;
+
+    if (!resolvedLocationId) {
+      return res.status(400).json({ success: false, error: "Missing required field: locationId" });
+    }
+
+    const actionLower = (action || "list").toLowerCase();
+
+    if (actionLower === "list") {
+      const staff = await getUniqueTeamMembers(resolvedLocationId);
+      const syncStatus = await getSyncStatus(resolvedLocationId);
+
+      return res.json({
+        success: true,
+        staff: staff.map((m) => ({
+          id: m.id,
+          user_id: m.user_id,
+          user_name: m.user_name,
+          user_email: m.user_email,
+          gender: m.gender,
+        })),
+        last_sync: syncStatus?.last_sync_at || null,
+      });
+    }
+
+    if (actionLower === "update-gender") {
+      if (!memberId) {
+        return res.status(400).json({ success: false, error: "Missing required field: memberId" });
+      }
+
+      // Validate gender value
+      const validGender = gender === "male" || gender === "female" ? gender : null;
+
+      const updated = await updateTeamMemberGender(resolvedLocationId, memberId, validGender);
+      if (!updated) {
+        return res.status(500).json({ success: false, error: "Failed to update gender" });
+      }
+
+      return res.json({ success: true, message: "Gender updated" });
+    }
+
+    return res.status(400).json({ success: false, error: `Unknown action: ${action}` });
+
+  } catch (error: any) {
+    console.error("[Calendar] staff error:", error?.message);
     return res.status(500).json({ success: false, error: error?.message });
   }
 });
