@@ -1755,20 +1755,41 @@ router.post("/book", async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, error: "Installation not found" });
     }
 
-    const resolvedCalendarId = calendarId || installation.calendar_id;
+    // 2. Resolve calendar_id - prioritize explicit calendarId, then lookup by service, then default
+    let resolvedCalendarId = calendarId;
+    let slotDuration = 60;
+    let slotBuffer = 0;
+
+    if (!resolvedCalendarId && serviceName) {
+      // Look up calendar for this service (same logic as check-availability)
+      const syncedCals = await getSyncedCalendarsForService(locationId, serviceName);
+      if (syncedCals.length > 0) {
+        resolvedCalendarId = syncedCals[0].calendar_id;
+        slotDuration = syncedCals[0].slot_duration || 60;
+        slotBuffer = syncedCals[0].slot_buffer || 0;
+        console.log(`[Book] Found calendar for service "${serviceName}": ${resolvedCalendarId}`);
+      }
+    }
+
+    // Fallback to installation default if no service match
+    if (!resolvedCalendarId) {
+      resolvedCalendarId = installation.calendar_id;
+      console.log(`[Book] Using default calendar: ${resolvedCalendarId}`);
+    }
+
     if (!resolvedCalendarId) {
       return res.status(400).json({ success: false, error: "No calendar configured for this location" });
     }
 
-    // Look up calendar settings for duration and buffer (for multi-service booking)
-    let slotDuration = 60; // default 60 minutes
-    let slotBuffer = 0;    // default 0 minutes buffer
-    const syncedCalendar = await getSyncedCalendarById(locationId, resolvedCalendarId);
-    if (syncedCalendar) {
-      slotDuration = syncedCalendar.slot_duration || 60;
-      slotBuffer = syncedCalendar.slot_buffer || 0;
-      console.log(`[Calendar] Calendar settings: duration=${slotDuration}min, buffer=${slotBuffer}min`);
+    // Get calendar settings if not already loaded
+    if (slotDuration === 60) {
+      const syncedCalendar = await getSyncedCalendarById(locationId, resolvedCalendarId);
+      if (syncedCalendar) {
+        slotDuration = syncedCalendar.slot_duration || 60;
+        slotBuffer = syncedCalendar.slot_buffer || 0;
+      }
     }
+    console.log(`[Book] Calendar settings: duration=${slotDuration}min, buffer=${slotBuffer}min`);
 
     // Allow override via request body
     const durationMinutes = body.duration_minutes || body.durationMinutes || slotDuration;
