@@ -1777,7 +1777,34 @@ router.post("/book-package", async (req: Request, res: Response) => {
       if (parsed) startDateFilter = parsed;
     }
 
-    // Step 3: Book each service sequentially
+    // Step 3: CRITICAL - Find a single day where ALL services can be booked consecutively
+    console.log(`[BookPackage] Finding a day where all ${pkg.services.length} services fit...`);
+
+    const packagePlan = await findPackageDayAvailability(
+      resolvedLocationId,
+      pkg.services,
+      time_preference,
+      startDateFilter,
+      tz,
+      installation,
+      localNow
+    );
+
+    if (!packagePlan) {
+      // No single day found - suggest alternative
+      const alternativePreference = time_preference === "afternoon" ? "morning" : "afternoon";
+      return res.json({
+        success: false,
+        partial: false,
+        package_name: pkg.package_name,
+        appointments: [],
+        message: `I couldn't find a day with availability for all services in the ${pkg.package_name}. Would you like to try ${alternativePreference} instead of ${time_preference}?`,
+      });
+    }
+
+    console.log(`[BookPackage] Found valid day: ${packagePlan.date} with ${packagePlan.slots.length} slots`);
+
+    // Step 4: Book all services on the found day
     const appointments: Array<{
       service: string;
       date?: string;
@@ -1790,56 +1817,19 @@ router.post("/book-package", async (req: Request, res: Response) => {
       error?: string;
     }> = [];
 
-    let nextStartAfter: string | null = null;
     let allSuccessful = true;
-    let anyBooked = false;
 
-    for (let i = 0; i < pkg.services.length; i++) {
-      const serviceName = pkg.services[i];
-      console.log(`[BookPackage] Processing service ${i + 1}/${pkg.services.length}: ${serviceName}`);
-
-      // If a previous booking failed, skip remaining
-      if (!allSuccessful && !anyBooked) {
-        appointments.push({
-          service: serviceName,
-          status: "skipped",
-        });
-        continue;
-      }
+    for (let i = 0; i < packagePlan.slots.length; i++) {
+      const slotInfo = packagePlan.slots[i];
+      console.log(`[BookPackage] Booking service ${i + 1}/${packagePlan.slots.length}: ${slotInfo.service} at ${slotInfo.startTime}`);
 
       try {
-        // Find availability for this service
-        const availabilityResult = await findServiceAvailability(
-          resolvedLocationId,
-          serviceName,
-          time_preference,
-          startDateFilter,
-          nextStartAfter,
-          tz,
-          installation,
-          localNow
-        );
-
-        if (!availabilityResult.slot) {
-          console.log(`[BookPackage] No availability for ${serviceName}`);
-          appointments.push({
-            service: serviceName,
-            status: "failed",
-            error: "No availability found",
-          });
-          allSuccessful = false;
-          continue;
-        }
-
-        console.log(`[BookPackage] Found slot for ${serviceName}: ${availabilityResult.slot.startTime}`);
-
-        // Book the appointment
         const bookingResult = await bookServiceAppointment(
           client,
           resolvedLocationId,
-          availabilityResult.slot.calendar_id,
-          availabilityResult.slot.startTime,
-          serviceName,
+          slotInfo.calendar_id,
+          slotInfo.startTime,
+          slotInfo.service,
           customer_name,
           email,
           phone,
@@ -1848,9 +1838,9 @@ router.post("/book-package", async (req: Request, res: Response) => {
         );
 
         if (!bookingResult.success) {
-          console.log(`[BookPackage] Booking failed for ${serviceName}: ${bookingResult.error}`);
+          console.log(`[BookPackage] Booking failed for ${slotInfo.service}: ${bookingResult.error}`);
           appointments.push({
-            service: serviceName,
+            service: slotInfo.service,
             status: "failed",
             error: bookingResult.error,
           });
@@ -1858,31 +1848,26 @@ router.post("/book-package", async (req: Request, res: Response) => {
           continue;
         }
 
-        // Format times for response
-        const startDate = new Date(availabilityResult.slot.startTime);
-        const endDate = new Date(bookingResult.endTime);
+        const startDate = new Date(slotInfo.startTime);
+        const endDate = new Date(bookingResult.endTime!);
 
         appointments.push({
-          service: serviceName,
-          date: startDate.toISOString().split("T")[0],
+          service: slotInfo.service,
+          date: packagePlan.date,
           start_time: formatTimeForVoice(startDate, tz),
           end_time: formatTimeForVoice(endDate, tz),
-          staff_name: availabilityResult.slot.staff_name || undefined,
-          calendar_id: availabilityResult.slot.calendar_id,
+          staff_name: slotInfo.staff_name || undefined,
+          calendar_id: slotInfo.calendar_id,
           appointment_id: bookingResult.appointmentId,
           status: "confirmed",
         });
 
-        anyBooked = true;
-
-        // Set start_after for next service (use buffer_end if available)
-        nextStartAfter = bookingResult.bufferEnd || bookingResult.endTime;
-        console.log(`[BookPackage] Booked ${serviceName}, next start_after: ${nextStartAfter}`);
+        console.log(`[BookPackage] Booked ${slotInfo.service} successfully`);
 
       } catch (err: any) {
-        console.error(`[BookPackage] Error booking ${serviceName}:`, err.message);
+        console.error(`[BookPackage] Error booking ${slotInfo.service}:`, err.message);
         appointments.push({
-          service: serviceName,
+          service: slotInfo.service,
           status: "failed",
           error: err.message,
         });
@@ -1890,7 +1875,7 @@ router.post("/book-package", async (req: Request, res: Response) => {
       }
     }
 
-    // Step 4: Build response
+    // Step 5: Build response
     const confirmedAppointments = appointments.filter((a) => a.status === "confirmed");
 
     if (confirmedAppointments.length === 0) {
@@ -1899,12 +1884,12 @@ router.post("/book-package", async (req: Request, res: Response) => {
         partial: false,
         package_name: pkg.package_name,
         appointments,
-        message: `I wasn't able to find availability for the ${pkg.package_name}. Would you like to try a different day or time?`,
+        message: `I found availability but the bookings failed. Would you like to try again?`,
       });
     }
 
     if (!allSuccessful) {
-      // Partial success
+      // Partial success - some bookings failed after we found availability
       const bookedServices = confirmedAppointments.map((a) => a.service).join(", ");
       const failedService = appointments.find((a) => a.status === "failed")?.service;
 
@@ -1914,7 +1899,7 @@ router.post("/book-package", async (req: Request, res: Response) => {
         package_name: pkg.package_name,
         total_price: pkg.price,
         appointments,
-        message: `I was able to book ${bookedServices}, but there's no ${failedService} availability right after. Would you like to try a different day?`,
+        message: `I was able to book ${bookedServices}, but ${failedService} failed to book. Would you like me to try again?`,
       });
     }
 
@@ -2125,6 +2110,199 @@ async function findServiceAvailability(
   }
 
   return { slot: null };
+}
+
+/**
+ * Find a single day where ALL package services can be booked consecutively.
+ * Returns the full booking plan if found, or null if no single day works.
+ */
+async function findPackageDayAvailability(
+  locationId: string,
+  services: string[],
+  timePreference: string,
+  requestedDate: string | null,
+  tz: string,
+  installation: any,
+  localNow: Date
+): Promise<{
+  date: string;
+  slots: Array<{
+    service: string;
+    startTime: string;
+    calendar_id: string;
+    staff_name: string | null;
+  }>;
+} | null> {
+  const DAYS_TO_SEARCH = 14;
+  const BUFFER_MS = 15 * 60 * 1000;
+
+  // Build list of dates to check
+  const datesToCheck: string[] = [];
+  const startDate = requestedDate ? new Date(requestedDate + "T00:00:00") : new Date(localNow);
+
+  for (let i = 0; i < DAYS_TO_SEARCH; i++) {
+    const checkDate = new Date(startDate);
+    checkDate.setDate(startDate.getDate() + i);
+    datesToCheck.push(checkDate.toISOString().split("T")[0]);
+  }
+
+  console.log(`[BookPackage] Checking ${datesToCheck.length} dates for all ${services.length} services: ${datesToCheck.slice(0, 5).join(", ")}...`);
+
+  // Get calendars for each service
+  const serviceCalendars: Map<string, Array<{ calendar_id: string; staff_name: string | null }>> = new Map();
+
+  for (const service of services) {
+    const syncedCals = await getSyncedCalendarsForService(locationId, service);
+    const cals: Array<{ calendar_id: string; staff_name: string | null }> = [];
+
+    if (syncedCals.length > 0) {
+      for (const cal of syncedCals) {
+        const members = await getSyncedTeamMembers(locationId, cal.calendar_id);
+        const primaryMember = members.find((m) => m.is_primary) || members[0];
+        cals.push({
+          calendar_id: cal.calendar_id,
+          staff_name: primaryMember?.user_name || null,
+        });
+      }
+    } else if (installation.calendar_id) {
+      cals.push({ calendar_id: installation.calendar_id, staff_name: null });
+    }
+
+    if (cals.length === 0) {
+      console.log(`[BookPackage] No calendar found for service: ${service}`);
+      return null;
+    }
+
+    serviceCalendars.set(service, cals);
+  }
+
+  // Fetch free slots for each calendar over the search window
+  const endDateMs = new Date(datesToCheck[datesToCheck.length - 1] + "T23:59:59").getTime();
+  const startMs = Math.max(localNow.getTime() + BUFFER_MS, new Date(datesToCheck[0] + "T00:00:00").getTime());
+
+  // Map: calendar_id -> { date -> slots[] }
+  const calendarSlots: Map<string, Map<string, string[]>> = new Map();
+  const allCalendarIds = new Set<string>();
+
+  for (const cals of serviceCalendars.values()) {
+    for (const cal of cals) {
+      allCalendarIds.add(cal.calendar_id);
+    }
+  }
+
+  // Fetch slots for all calendars
+  for (const calendarId of allCalendarIds) {
+    const slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${calendarId}/free-slots?startDate=${startMs}&endDate=${endDateMs}&timezone=${encodeURIComponent(tz)}`;
+
+    try {
+      const resp = await axios.get(slotsUrl, {
+        headers: {
+          Authorization: `Bearer ${installation.access_token}`,
+          Version: "2021-07-28",
+        },
+      });
+
+      const rawData = resp.data || {};
+      const dateSlots: Map<string, string[]> = new Map();
+
+      for (const dateKey of Object.keys(rawData)) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) continue;
+        const entry = rawData[dateKey];
+        const slots: string[] = Array.isArray(entry) ? entry : entry?.slots || [];
+        dateSlots.set(dateKey, slots);
+      }
+
+      calendarSlots.set(calendarId, dateSlots);
+    } catch (err: any) {
+      console.error(`[BookPackage] Error fetching slots for calendar ${calendarId}:`, err.message);
+      calendarSlots.set(calendarId, new Map());
+    }
+  }
+
+  // Helper to check time preference
+  const matchesTimePreference = (slotTime: string): boolean => {
+    const slotInTz = new Date(slotTime).toLocaleString("en-US", { timeZone: tz, hour12: false });
+    const hourMatch = slotInTz.match(/(\d{1,2}):/);
+    const localHour = hourMatch ? parseInt(hourMatch[1], 10) : new Date(slotTime).getHours();
+
+    if (timePreference === "morning" && localHour >= 12) return false;
+    if (timePreference === "afternoon" && localHour < 12) return false;
+    return true;
+  };
+
+  // Helper to get calendar duration + buffer
+  const getCalendarTiming = async (calendarId: string): Promise<{ duration: number; buffer: number }> => {
+    const syncedCalendar = await getSyncedCalendarById(locationId, calendarId);
+    return {
+      duration: (syncedCalendar?.slot_duration || 60) * 60 * 1000,
+      buffer: (syncedCalendar?.slot_buffer || 15) * 60 * 1000,
+    };
+  };
+
+  // Try each date
+  for (const dateKey of datesToCheck) {
+    console.log(`[BookPackage] Checking date: ${dateKey}`);
+
+    // Try to find slots for all services on this date
+    const plan: Array<{
+      service: string;
+      startTime: string;
+      calendar_id: string;
+      staff_name: string | null;
+    }> = [];
+
+    let minStartTimeMs = Math.max(localNow.getTime() + BUFFER_MS, new Date(dateKey + "T00:00:00").getTime());
+    let dateWorks = true;
+
+    for (const service of services) {
+      const cals = serviceCalendars.get(service) || [];
+      let foundSlot = false;
+
+      // Try each calendar for this service
+      for (const cal of cals) {
+        const dateSlots = calendarSlots.get(cal.calendar_id)?.get(dateKey) || [];
+
+        // Find a slot that starts at or after minStartTimeMs and matches time preference
+        for (const slotTime of dateSlots) {
+          const slotMs = new Date(slotTime).getTime();
+
+          if (slotMs < minStartTimeMs) continue;
+          if (!matchesTimePreference(slotTime)) continue;
+
+          // Found valid slot for this service
+          plan.push({
+            service,
+            startTime: slotTime,
+            calendar_id: cal.calendar_id,
+            staff_name: cal.staff_name,
+          });
+
+          // Calculate when this service ends (with buffer) for next service
+          const timing = await getCalendarTiming(cal.calendar_id);
+          minStartTimeMs = slotMs + timing.duration + timing.buffer;
+
+          foundSlot = true;
+          break;
+        }
+
+        if (foundSlot) break;
+      }
+
+      if (!foundSlot) {
+        console.log(`[BookPackage] No slot for ${service} on ${dateKey} after ${new Date(minStartTimeMs).toISOString()}`);
+        dateWorks = false;
+        break;
+      }
+    }
+
+    if (dateWorks && plan.length === services.length) {
+      console.log(`[BookPackage] SUCCESS! Found valid day: ${dateKey}`);
+      return { date: dateKey, slots: plan };
+    }
+  }
+
+  console.log(`[BookPackage] No single day found for all services in ${DAYS_TO_SEARCH} days`);
+  return null;
 }
 
 /**
