@@ -1694,4 +1694,631 @@ router.post("/get-package", async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * POST /api/calendar/book-package
+ * Aggregator endpoint that books an entire spa package in one API call.
+ * Handles finding availability and booking each service sequentially.
+ *
+ * Body: {
+ *   locationId, package_name, time_preference, requested_date?,
+ *   customer_name, phone, email, notes?
+ * }
+ */
+router.post("/book-package", async (req: Request, res: Response) => {
+  try {
+    const {
+      locationId,
+      location_id,
+      package_name,
+      time_preference,
+      requested_date,
+      customer_name,
+      phone,
+      email,
+      notes,
+    } = req.body;
+
+    const resolvedLocationId = locationId || location_id;
+
+    // Validate required fields
+    if (!resolvedLocationId) {
+      return res.status(400).json({ success: false, error: "Missing required field: locationId" });
+    }
+    if (!package_name) {
+      return res.status(400).json({ success: false, error: "Missing required field: package_name" });
+    }
+    if (!time_preference) {
+      return res.status(400).json({ success: false, error: "Missing required field: time_preference" });
+    }
+    if (!customer_name || !phone || !email) {
+      return res.status(400).json({ success: false, error: "Missing required fields: customer_name, phone, email" });
+    }
+
+    console.log(`[BookPackage] Starting package booking: ${package_name} for ${customer_name}`);
+
+    // Step 1: Look up the package
+    const pkg = await getPackageByName(resolvedLocationId, package_name);
+    if (!pkg) {
+      // Try to find similar packages for suggestion
+      const allPackages = await getPackages(resolvedLocationId);
+      const suggestion = allPackages.length > 0 ? allPackages[0].package_name : null;
+
+      return res.status(404).json({
+        success: false,
+        error: "Package not found",
+        message: suggestion
+          ? `I couldn't find a package called '${package_name}'. Did you mean ${suggestion}?`
+          : `I couldn't find a package called '${package_name}'.`,
+      });
+    }
+
+    console.log(`[BookPackage] Found package: ${pkg.package_name} with ${pkg.services.length} services`);
+
+    // Step 2: Get installation for timezone and auth
+    const installation = await getInstallation(resolvedLocationId);
+    if (!installation) {
+      return res.status(404).json({ success: false, error: "Installation not found" });
+    }
+
+    const tz = installation.timezone || "Pacific/Honolulu";
+    const client = await ghl.requests(resolvedLocationId);
+
+    // Get local time
+    const localNow = new Date(new Date().toLocaleString("en-US", { timeZone: tz }));
+    const todayStr = localNow.toISOString().split("T")[0];
+
+    // Parse requested_date if provided
+    let startDateFilter: string | null = null;
+    if (requested_date) {
+      const parsed = parseRequestedDate(requested_date, localNow);
+      if (parsed) startDateFilter = parsed;
+    }
+
+    // Step 3: Book each service sequentially
+    const appointments: Array<{
+      service: string;
+      date?: string;
+      start_time?: string;
+      end_time?: string;
+      staff_name?: string;
+      calendar_id?: string;
+      appointment_id?: string;
+      status: "confirmed" | "failed" | "skipped";
+      error?: string;
+    }> = [];
+
+    let nextStartAfter: string | null = null;
+    let allSuccessful = true;
+    let anyBooked = false;
+
+    for (let i = 0; i < pkg.services.length; i++) {
+      const serviceName = pkg.services[i];
+      console.log(`[BookPackage] Processing service ${i + 1}/${pkg.services.length}: ${serviceName}`);
+
+      // If a previous booking failed, skip remaining
+      if (!allSuccessful && !anyBooked) {
+        appointments.push({
+          service: serviceName,
+          status: "skipped",
+        });
+        continue;
+      }
+
+      try {
+        // Find availability for this service
+        const availabilityResult = await findServiceAvailability(
+          resolvedLocationId,
+          serviceName,
+          time_preference,
+          startDateFilter,
+          nextStartAfter,
+          tz,
+          installation,
+          localNow
+        );
+
+        if (!availabilityResult.slot) {
+          console.log(`[BookPackage] No availability for ${serviceName}`);
+          appointments.push({
+            service: serviceName,
+            status: "failed",
+            error: "No availability found",
+          });
+          allSuccessful = false;
+          continue;
+        }
+
+        console.log(`[BookPackage] Found slot for ${serviceName}: ${availabilityResult.slot.startTime}`);
+
+        // Book the appointment
+        const bookingResult = await bookServiceAppointment(
+          client,
+          resolvedLocationId,
+          availabilityResult.slot.calendar_id,
+          availabilityResult.slot.startTime,
+          serviceName,
+          customer_name,
+          email,
+          phone,
+          notes
+        );
+
+        if (!bookingResult.success) {
+          console.log(`[BookPackage] Booking failed for ${serviceName}: ${bookingResult.error}`);
+          appointments.push({
+            service: serviceName,
+            status: "failed",
+            error: bookingResult.error,
+          });
+          allSuccessful = false;
+          continue;
+        }
+
+        // Format times for response
+        const startDate = new Date(availabilityResult.slot.startTime);
+        const endDate = new Date(bookingResult.endTime);
+
+        appointments.push({
+          service: serviceName,
+          date: startDate.toISOString().split("T")[0],
+          start_time: formatTimeForVoice(startDate, tz),
+          end_time: formatTimeForVoice(endDate, tz),
+          staff_name: availabilityResult.slot.staff_name || undefined,
+          calendar_id: availabilityResult.slot.calendar_id,
+          appointment_id: bookingResult.appointmentId,
+          status: "confirmed",
+        });
+
+        anyBooked = true;
+
+        // Set start_after for next service (use buffer_end if available)
+        nextStartAfter = bookingResult.bufferEnd || bookingResult.endTime;
+        console.log(`[BookPackage] Booked ${serviceName}, next start_after: ${nextStartAfter}`);
+
+      } catch (err: any) {
+        console.error(`[BookPackage] Error booking ${serviceName}:`, err.message);
+        appointments.push({
+          service: serviceName,
+          status: "failed",
+          error: err.message,
+        });
+        allSuccessful = false;
+      }
+    }
+
+    // Step 4: Build response
+    const confirmedAppointments = appointments.filter((a) => a.status === "confirmed");
+
+    if (confirmedAppointments.length === 0) {
+      return res.json({
+        success: false,
+        partial: false,
+        package_name: pkg.package_name,
+        appointments,
+        message: `I wasn't able to find availability for the ${pkg.package_name}. Would you like to try a different day or time?`,
+      });
+    }
+
+    if (!allSuccessful) {
+      // Partial success
+      const bookedServices = confirmedAppointments.map((a) => a.service).join(", ");
+      const failedService = appointments.find((a) => a.status === "failed")?.service;
+
+      return res.json({
+        success: false,
+        partial: true,
+        package_name: pkg.package_name,
+        total_price: pkg.price,
+        appointments,
+        message: `I was able to book ${bookedServices}, but there's no ${failedService} availability right after. Would you like to try a different day?`,
+      });
+    }
+
+    // Full success - build confirmation message
+    const confirmationMessage = buildPackageConfirmation(
+      pkg.package_name,
+      confirmedAppointments,
+      pkg.price,
+      tz
+    );
+
+    console.log(`[BookPackage] Successfully booked all ${confirmedAppointments.length} services`);
+
+    return res.json({
+      success: true,
+      package_name: pkg.package_name,
+      total_price: pkg.price,
+      total_duration_minutes: pkg.total_duration_minutes,
+      appointments: confirmedAppointments,
+      confirmation_message: confirmationMessage,
+    });
+
+  } catch (error: any) {
+    console.error("[BookPackage] Error:", error?.response?.data || error.message);
+    return res.status(500).json({
+      success: false,
+      error: error?.response?.data?.message || error.message,
+    });
+  }
+});
+
+// ============================================================================
+// Helper functions for book-package
+// ============================================================================
+
+/**
+ * Parse requested_date string to ISO date string.
+ */
+function parseRequestedDate(input: string, localNow: Date): string | null {
+  const n = input.toLowerCase().trim();
+  const dayNames = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(n)) {
+    return n;
+  }
+
+  if (n === "today") {
+    return localNow.toISOString().split("T")[0];
+  }
+
+  if (n === "tomorrow") {
+    const tomorrow = new Date(localNow);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return tomorrow.toISOString().split("T")[0];
+  }
+
+  // Day name: "monday", "friday", etc.
+  const dayIdx = dayNames.indexOf(n);
+  if (dayIdx !== -1) {
+    let daysAhead = dayIdx - localNow.getDay();
+    if (daysAhead <= 0) daysAhead += 7;
+    const target = new Date(localNow);
+    target.setDate(target.getDate() + daysAhead);
+    return target.toISOString().split("T")[0];
+  }
+
+  // "next monday", "next friday", etc.
+  const nextDayMatch = n.match(/^next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/);
+  if (nextDayMatch) {
+    const targetDayIdx = dayNames.indexOf(nextDayMatch[1]);
+    if (targetDayIdx !== -1) {
+      let daysAhead = targetDayIdx - localNow.getDay();
+      if (daysAhead <= 0) daysAhead += 7;
+      daysAhead += 7; // "next" means next week
+      const target = new Date(localNow);
+      target.setDate(target.getDate() + daysAhead);
+      return target.toISOString().split("T")[0];
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Find availability for a specific service.
+ */
+async function findServiceAvailability(
+  locationId: string,
+  serviceName: string,
+  timePreference: string,
+  requestedDate: string | null,
+  startAfter: string | null,
+  tz: string,
+  installation: any,
+  localNow: Date
+): Promise<{
+  slot: { startTime: string; calendar_id: string; staff_name: string | null } | null;
+}> {
+  // Find calendars for this service
+  let calendarsToCheck: Array<{ calendar_id: string; calendar_name: string | null; staff_name: string | null }> = [];
+
+  const syncedCals = await getSyncedCalendarsForService(locationId, serviceName);
+  if (syncedCals.length > 0) {
+    for (const cal of syncedCals) {
+      const members = await getSyncedTeamMembers(locationId, cal.calendar_id);
+      const primaryMember = members.find((m) => m.is_primary) || members[0];
+      calendarsToCheck.push({
+        calendar_id: cal.calendar_id,
+        calendar_name: cal.calendar_name,
+        staff_name: primaryMember?.user_name || null,
+      });
+    }
+  }
+
+  // Fallback to default calendar
+  if (calendarsToCheck.length === 0 && installation.calendar_id) {
+    calendarsToCheck = [{ calendar_id: installation.calendar_id, calendar_name: null, staff_name: null }];
+  }
+
+  if (calendarsToCheck.length === 0) {
+    return { slot: null };
+  }
+
+  // Calculate time window
+  const BUFFER_MS = 15 * 60 * 1000;
+  const nowPlusBuffer = localNow.getTime() + BUFFER_MS;
+
+  let minSlotTimeMs = nowPlusBuffer;
+  if (startAfter) {
+    const startAfterMs = new Date(startAfter).getTime();
+    if (!isNaN(startAfterMs)) {
+      minSlotTimeMs = Math.max(minSlotTimeMs, startAfterMs);
+    }
+  }
+
+  // Fetch slots for each calendar
+  for (const cal of calendarsToCheck) {
+    for (const daysAhead of [7, 14, 30]) {
+      const endDate = new Date(localNow);
+      endDate.setDate(endDate.getDate() + daysAhead);
+      const endMs = endDate.getTime();
+      const startMs = minSlotTimeMs;
+
+      const slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${cal.calendar_id}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
+
+      try {
+        const resp = await axios.get(slotsUrl, {
+          headers: {
+            Authorization: `Bearer ${installation.access_token}`,
+            Version: "2021-07-28",
+          },
+        });
+
+        const rawData = resp.data || {};
+        const dateKeys = Object.keys(rawData).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
+
+        for (const dateKey of dateKeys) {
+          // Apply date filter if requested
+          if (requestedDate && dateKey !== requestedDate) continue;
+
+          const entry = rawData[dateKey];
+          const slots: string[] = Array.isArray(entry) ? entry : entry?.slots || [];
+
+          for (const slot of slots) {
+            const slotMs = new Date(slot).getTime();
+            if (slotMs < minSlotTimeMs) continue;
+
+            // Apply time preference filter
+            const hour = new Date(slot).getHours();
+            if (timePreference === "morning" && hour >= 12) continue;
+            if (timePreference === "afternoon" && hour < 12) continue;
+
+            // Found a valid slot
+            return {
+              slot: {
+                startTime: slot,
+                calendar_id: cal.calendar_id,
+                staff_name: cal.staff_name,
+              },
+            };
+          }
+        }
+      } catch (err: any) {
+        console.error(`[BookPackage] Error fetching slots for ${cal.calendar_id}:`, err.message);
+      }
+    }
+  }
+
+  return { slot: null };
+}
+
+/**
+ * Book an appointment for a service.
+ */
+async function bookServiceAppointment(
+  client: any,
+  locationId: string,
+  calendarId: string,
+  startTime: string,
+  serviceName: string,
+  customerName: string,
+  customerEmail: string,
+  customerPhone: string,
+  notes?: string
+): Promise<{
+  success: boolean;
+  appointmentId?: string;
+  endTime?: string;
+  bufferEnd?: string;
+  error?: string;
+}> {
+  try {
+    // Get calendar settings for duration and buffer
+    const syncedCalendar = await getSyncedCalendarById(locationId, calendarId);
+    const slotDuration = syncedCalendar?.slot_duration || 60;
+    const slotBuffer = syncedCalendar?.slot_buffer || 15;
+
+    // Create/upsert contact
+    const nameParts = customerName.trim().split(/\s+/);
+    const firstName = nameParts[0];
+    const lastName = nameParts.slice(1).join(" ") || "";
+
+    const contactPayload: Record<string, string> = {
+      locationId,
+      email: customerEmail,
+      firstName,
+    };
+    if (lastName) contactPayload.lastName = lastName;
+    if (customerPhone) contactPayload.phone = normalizePhoneForBooking(customerPhone);
+
+    const contactResp = await client.post("/contacts/upsert", contactPayload, {
+      headers: { Version: "2021-07-28" },
+    });
+    const contactId = contactResp.data?.contact?.id;
+    if (!contactId) {
+      return { success: false, error: "Failed to create contact" };
+    }
+
+    // Calculate times
+    const startISO = new Date(startTime).toISOString();
+    const startTimeMs = new Date(startTime).getTime();
+    const endTimeMs = startTimeMs + slotDuration * 60 * 1000;
+    const endISO = new Date(endTimeMs).toISOString();
+    const bufferEndMs = endTimeMs + slotBuffer * 60 * 1000;
+    const bufferEndISO = new Date(bufferEndMs).toISOString();
+
+    // Build appointment
+    const appointmentPayload = {
+      calendarId,
+      locationId,
+      contactId,
+      startTime: startISO,
+      endTime: endISO,
+      title: toTitleCase(serviceName),
+      appointmentStatus: "confirmed",
+      notes: notes || undefined,
+    };
+
+    const appointmentResp = await client.post(
+      "/calendars/events/appointments",
+      appointmentPayload,
+      { headers: { Version: "2021-07-28" } }
+    );
+
+    const appointmentId =
+      appointmentResp.data?.id ||
+      appointmentResp.data?.event?.id ||
+      appointmentResp.data?.eventId ||
+      appointmentResp.data?.appointment?.id ||
+      null;
+
+    return {
+      success: true,
+      appointmentId,
+      endTime: endISO,
+      bufferEnd: bufferEndISO,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.response?.data?.message || err.message,
+    };
+  }
+}
+
+/**
+ * Normalize phone number for booking.
+ */
+function normalizePhoneForBooking(raw: string): string {
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length === 11 && digits.startsWith("1")) {
+    return "+" + digits;
+  }
+  if (digits.length === 10) {
+    return "+1" + digits;
+  }
+  return "+" + digits;
+}
+
+/**
+ * Format time for voice output.
+ */
+function formatTimeForVoice(date: Date, tz: string): string {
+  const options: Intl.DateTimeFormatOptions = {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: tz,
+  };
+  return date.toLocaleTimeString("en-US", options);
+}
+
+/**
+ * Build a voice-friendly confirmation message.
+ */
+function buildPackageConfirmation(
+  packageName: string,
+  appointments: Array<{ service: string; date?: string; start_time?: string }>,
+  price: number | null,
+  tz: string
+): string {
+  if (appointments.length === 0) return "";
+
+  // Format the date
+  const firstDate = appointments[0].date;
+  let dateStr = "";
+  if (firstDate) {
+    const d = new Date(firstDate + "T12:00:00");
+    const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const dayOfWeek = dayNames[d.getDay()];
+    const month = monthNames[d.getMonth()];
+    const dayNum = d.getDate();
+    const ordinal = getOrdinal(dayNum);
+    dateStr = `${dayOfWeek}, ${month} ${dayNum}${ordinal}`;
+  }
+
+  // Format service times
+  const serviceTimes = appointments.map((a) => {
+    const serviceName = a.service.split(" - ")[0]; // Remove duration from service name
+    return `${serviceName} at ${a.start_time?.toLowerCase()}`;
+  });
+
+  let timeList = "";
+  if (serviceTimes.length === 1) {
+    timeList = serviceTimes[0];
+  } else if (serviceTimes.length === 2) {
+    timeList = `${serviceTimes[0]} and ${serviceTimes[1]}`;
+  } else {
+    timeList = serviceTimes.slice(0, -1).join(", ") + ", and " + serviceTimes[serviceTimes.length - 1];
+  }
+
+  // Format price
+  let priceStr = "";
+  if (price) {
+    priceStr = ` Total is ${spellOutPrice(price)}.`;
+  }
+
+  return `Your ${packageName} is booked for ${dateStr}. ${timeList}.${priceStr}`;
+}
+
+/**
+ * Get ordinal suffix for a number.
+ */
+function getOrdinal(n: number): string {
+  if (n > 3 && n < 21) return "th";
+  switch (n % 10) {
+    case 1: return "st";
+    case 2: return "nd";
+    case 3: return "rd";
+    default: return "th";
+  }
+}
+
+/**
+ * Spell out a price for voice.
+ */
+function spellOutPrice(price: number): string {
+  const dollars = Math.floor(price);
+  const cents = Math.round((price - dollars) * 100);
+
+  if (cents === 0) {
+    return `${spellOutNumber(dollars)} dollars`;
+  }
+  return `${spellOutNumber(dollars)} dollars and ${cents} cents`;
+}
+
+/**
+ * Spell out a number for voice (simplified).
+ */
+function spellOutNumber(n: number): string {
+  const ones = ["", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"];
+  const tens = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
+
+  if (n < 20) return ones[n];
+  if (n < 100) {
+    const t = Math.floor(n / 10);
+    const o = n % 10;
+    return tens[t] + (o > 0 ? "-" + ones[o] : "");
+  }
+  if (n < 1000) {
+    const h = Math.floor(n / 100);
+    const remainder = n % 100;
+    return ones[h] + " hundred" + (remainder > 0 ? " " + spellOutNumber(remainder) : "");
+  }
+  // For larger numbers, just return the number
+  return n.toString();
+}
+
 export default router;
