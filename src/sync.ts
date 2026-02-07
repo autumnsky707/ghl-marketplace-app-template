@@ -69,6 +69,21 @@ export async function syncLocation(
     const calendars = resp.data?.calendars || [];
     console.log(`[Sync] Fetched ${calendars.length} calendars for ${locationId}`);
 
+    // Debug: Log raw response structure to find team member field
+    if (calendars.length > 0) {
+      const sampleCal = calendars[0];
+      console.log(`[Sync] Sample calendar keys:`, Object.keys(sampleCal));
+      console.log(`[Sync] Sample calendar raw:`, JSON.stringify(sampleCal, null, 2));
+
+      // Check possible field names for team members
+      const possibleFields = ['teamMembers', 'team', 'users', 'assignedUsers', 'members', 'staff', 'selectedTeam'];
+      for (const field of possibleFields) {
+        if ((sampleCal as any)[field]) {
+          console.log(`[Sync] Found team data in field "${field}":`, JSON.stringify((sampleCal as any)[field], null, 2));
+        }
+      }
+    }
+
     // Clear old data and insert new
     await clearSyncedData(locationId);
     const { calendarsCount, teamMembersCount } = await upsertSyncedCalendars(locationId, calendars);

@@ -562,17 +562,34 @@ export async function upsertSyncedCalendars(
       calendarsCount++;
     }
 
-    // Upsert team members
-    if (cal.teamMembers && cal.teamMembers.length > 0) {
-      for (const tm of cal.teamMembers) {
+    // Upsert team members - check multiple possible field names
+    const calAny = cal as any;
+    const teamMembers = cal.teamMembers || calAny.team || calAny.users || calAny.assignedUsers || calAny.members || calAny.staff || calAny.selectedTeam || [];
+
+    console.log(`[DB] Calendar "${cal.name}" team members field check: teamMembers=${!!cal.teamMembers}, team=${!!calAny.team}, users=${!!calAny.users}, assignedUsers=${!!calAny.assignedUsers}, found ${teamMembers.length} members`);
+
+    if (teamMembers && teamMembers.length > 0) {
+      for (const tm of teamMembers) {
+        // Handle different field name conventions
+        const userId = tm.userId || tm.user_id || tm.id;
+        const userName = tm.name || tm.userName || tm.user_name || tm.firstName || null;
+        const userEmail = tm.email || tm.userEmail || tm.user_email || null;
+        const isPrimary = tm.isPrimary || tm.is_primary || tm.primary || false;
+        const priority = tm.priority || tm.order || 0;
+
+        if (!userId) {
+          console.log(`[DB] Skipping team member with no userId:`, JSON.stringify(tm));
+          continue;
+        }
+
         const memberRow: Partial<SyncedTeamMember> = {
           location_id: locationId,
           calendar_id: cal.id,
-          user_id: tm.userId,
-          user_name: tm.name || null,
-          user_email: tm.email || null,
-          is_primary: tm.isPrimary || false,
-          priority: tm.priority || 0,
+          user_id: userId,
+          user_name: userName,
+          user_email: userEmail,
+          is_primary: isPrimary,
+          priority: priority,
           synced_at: new Date().toISOString(),
         };
 
