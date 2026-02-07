@@ -8,6 +8,7 @@ import {
   SyncedTeamMember,
   SyncStatus,
   GHLCalendar,
+  SpaPackage,
 } from "./types";
 
 const TABLE = "ghl_installations";
@@ -648,4 +649,136 @@ export async function getLocationsNeedingSync(maxAgeMinutes: number = 10): Promi
   }
 
   return needsSync;
+}
+
+// =============================================================================
+// SPA PACKAGES
+// =============================================================================
+
+const SPA_PACKAGES_TABLE = "spa_packages";
+
+/**
+ * Get all packages for a location.
+ */
+export async function getPackages(locationId: string): Promise<SpaPackage[]> {
+  const { data, error } = await supabase
+    .from(SPA_PACKAGES_TABLE)
+    .select("*")
+    .eq("location_id", locationId)
+    .eq("is_active", true)
+    .order("package_name");
+
+  if (error) {
+    console.error("[DB] getPackages error:", error);
+    return [];
+  }
+
+  return (data || []) as SpaPackage[];
+}
+
+/**
+ * Get a package by name (case-insensitive partial match).
+ */
+export async function getPackageByName(
+  locationId: string,
+  packageName: string
+): Promise<SpaPackage | null> {
+  const { data, error } = await supabase
+    .from(SPA_PACKAGES_TABLE)
+    .select("*")
+    .eq("location_id", locationId)
+    .eq("is_active", true)
+    .ilike("package_name", `%${packageName}%`);
+
+  if (error) {
+    console.error("[DB] getPackageByName error:", error);
+    return null;
+  }
+
+  // Return first match (or null if no matches)
+  return (data && data.length > 0) ? data[0] as SpaPackage : null;
+}
+
+/**
+ * Get a package by ID.
+ */
+export async function getPackageById(id: string): Promise<SpaPackage | null> {
+  const { data, error } = await supabase
+    .from(SPA_PACKAGES_TABLE)
+    .select("*")
+    .eq("id", id)
+    .single();
+
+  if (error) {
+    if (error.code === "PGRST116") return null;
+    console.error("[DB] getPackageById error:", error);
+    return null;
+  }
+
+  return data as SpaPackage;
+}
+
+/**
+ * Create or update a package.
+ */
+export async function upsertPackage(pkg: Partial<SpaPackage>): Promise<SpaPackage | null> {
+  const { data, error } = await supabase
+    .from(SPA_PACKAGES_TABLE)
+    .upsert(
+      {
+        location_id: pkg.location_id,
+        package_name: pkg.package_name,
+        services: pkg.services,
+        total_duration_minutes: pkg.total_duration_minutes || null,
+        price: pkg.price || null,
+        description: pkg.description || null,
+        is_active: pkg.is_active !== false,
+      },
+      { onConflict: "location_id,package_name" }
+    )
+    .select()
+    .single();
+
+  if (error) {
+    console.error("[DB] upsertPackage error:", error);
+    return null;
+  }
+
+  console.log(`[DB] Upserted package: ${pkg.package_name}`);
+  return data as SpaPackage;
+}
+
+/**
+ * Delete a package by ID (soft delete - sets is_active to false).
+ */
+export async function deletePackage(id: string): Promise<boolean> {
+  const { error } = await supabase
+    .from(SPA_PACKAGES_TABLE)
+    .update({ is_active: false })
+    .eq("id", id);
+
+  if (error) {
+    console.error("[DB] deletePackage error:", error);
+    return false;
+  }
+
+  console.log(`[DB] Deleted package: ${id}`);
+  return true;
+}
+
+/**
+ * Hard delete a package by ID.
+ */
+export async function hardDeletePackage(id: string): Promise<boolean> {
+  const { error } = await supabase
+    .from(SPA_PACKAGES_TABLE)
+    .delete()
+    .eq("id", id);
+
+  if (error) {
+    console.error("[DB] hardDeletePackage error:", error);
+    return false;
+  }
+
+  return true;
 }

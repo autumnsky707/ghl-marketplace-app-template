@@ -19,6 +19,10 @@ import {
   getSyncedTeamMembers,
   getUniqueStaffNames,
   getCalendarsForStaffMember,
+  getPackages,
+  getPackageByName,
+  upsertPackage,
+  deletePackage,
 } from "../db";
 import { syncLocation } from "../sync";
 import {
@@ -665,6 +669,9 @@ router.post("/business-info", async (req: Request, res: Response) => {
     // Get staff from synced team members
     const staffNames = await getUniqueStaffNames(resolvedLocationId);
 
+    // Get packages
+    const packages = await getPackages(resolvedLocationId);
+
     // Build services list: prefer synced data, fall back to manual config
     const servicesList = syncedServices.length > 0 ? syncedServices : (info?.services || ["massage", "facial", "body treatment"]);
 
@@ -673,6 +680,13 @@ router.post("/business-info", async (req: Request, res: Response) => {
       business_name: info?.business_name || "Our Spa",
       services: servicesList,
       staff: staffNames,
+      packages: packages.map((p) => ({
+        name: p.package_name,
+        services: p.services,
+        total_duration_minutes: p.total_duration_minutes,
+        price: p.price,
+        description: p.description,
+      })),
       greeting: info?.greeting || "Welcome! How can I help you today?",
       synced_calendars: syncedCalendars.map((c) => ({
         calendar_id: c.calendar_id,
@@ -1553,6 +1567,130 @@ router.post("/reschedule", async (req: Request, res: Response) => {
       success: false,
       error: error?.response?.data?.message || error.message,
     });
+  }
+});
+
+/**
+ * POST /api/calendar/packages
+ * Manage spa packages.
+ *
+ * List: { locationId, action: "list" }
+ * Add:  { locationId, action: "add", package_name, services, total_duration_minutes?, price?, description? }
+ * Delete: { locationId, action: "delete", id }
+ */
+router.post("/packages", async (req: Request, res: Response) => {
+  try {
+    const { locationId, location_id, action, package_name, services, total_duration_minutes, price, description, id } = req.body;
+    const resolvedLocationId = locationId || location_id;
+
+    if (!resolvedLocationId) {
+      return res.status(400).json({ success: false, error: "Missing required field: locationId" });
+    }
+
+    const actionLower = (action || "list").toLowerCase();
+
+    if (actionLower === "list") {
+      const packages = await getPackages(resolvedLocationId);
+      return res.json({
+        success: true,
+        packages: packages.map((p) => ({
+          id: p.id,
+          package_name: p.package_name,
+          services: p.services,
+          total_duration_minutes: p.total_duration_minutes,
+          price: p.price,
+          description: p.description,
+        })),
+      });
+    }
+
+    if (actionLower === "add") {
+      if (!package_name || !services || !Array.isArray(services)) {
+        return res.status(400).json({
+          success: false,
+          error: "Missing required fields: package_name, services (array)",
+        });
+      }
+
+      const pkg = await upsertPackage({
+        location_id: resolvedLocationId,
+        package_name,
+        services,
+        total_duration_minutes: total_duration_minutes || null,
+        price: price || null,
+        description: description || null,
+        is_active: true,
+      });
+
+      if (!pkg) {
+        return res.status(500).json({ success: false, error: "Failed to create package" });
+      }
+
+      return res.json({ success: true, package: pkg });
+    }
+
+    if (actionLower === "delete") {
+      if (!id) {
+        return res.status(400).json({ success: false, error: "Missing required field: id" });
+      }
+
+      const deleted = await deletePackage(id);
+      if (!deleted) {
+        return res.status(500).json({ success: false, error: "Failed to delete package" });
+      }
+
+      return res.json({ success: true, message: "Package deleted" });
+    }
+
+    return res.status(400).json({ success: false, error: `Unknown action: ${action}` });
+
+  } catch (error: any) {
+    console.error("[Calendar] packages error:", error?.message);
+    return res.status(500).json({ success: false, error: error?.message });
+  }
+});
+
+/**
+ * POST /api/calendar/get-package
+ * Get package details by name (for voice agent).
+ *
+ * Body: { locationId, package_name }
+ * Returns package details. Supports partial matching (case-insensitive).
+ */
+router.post("/get-package", async (req: Request, res: Response) => {
+  try {
+    const { locationId, location_id, package_name } = req.body;
+    const resolvedLocationId = locationId || location_id;
+
+    if (!resolvedLocationId) {
+      return res.status(400).json({ success: false, error: "Missing required field: locationId" });
+    }
+
+    if (!package_name) {
+      return res.status(400).json({ success: false, error: "Missing required field: package_name" });
+    }
+
+    const pkg = await getPackageByName(resolvedLocationId, package_name);
+
+    if (!pkg) {
+      return res.status(404).json({ success: false, error: "No package found with that name" });
+    }
+
+    return res.json({
+      success: true,
+      package: {
+        id: pkg.id,
+        package_name: pkg.package_name,
+        services: pkg.services,
+        total_duration_minutes: pkg.total_duration_minutes,
+        price: pkg.price,
+        description: pkg.description,
+      },
+    });
+
+  } catch (error: any) {
+    console.error("[Calendar] get-package error:", error?.message);
+    return res.status(500).json({ success: false, error: error?.message });
   }
 });
 

@@ -149,3 +149,16 @@ export interface RescheduleAppointmentRequest {
   startTime: string;
   endTime: string;
 }
+
+// Spa Packages
+export interface SpaPackage {
+  id?: string;
+  location_id: string;
+  package_name: string;
+  services: string[];
+  total_duration_minutes: number | null;
+  price: number | null;
+  description: string | null;
+  is_active: boolean;
+  created_at?: string;
+}

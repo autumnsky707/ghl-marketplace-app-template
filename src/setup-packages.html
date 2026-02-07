@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Package Setup - BookNexa AI</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    h1 {
+      color: #1a1a2e;
+      margin-bottom: 8px;
+    }
+    .subtitle {
+      color: #666;
+      margin-bottom: 24px;
+    }
+    h2 {
+      color: #1a1a2e;
+      margin-bottom: 16px;
+      font-size: 1.25rem;
+    }
+    .form-group {
+      margin-bottom: 16px;
+    }
+    label {
+      display: block;
+      font-weight: 500;
+      margin-bottom: 6px;
+      color: #333;
+    }
+    input, textarea, select {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      font-size: 14px;
+      transition: border-color 0.2s;
+    }
+    input:focus, textarea:focus, select:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    .checkbox-group {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 8px;
+      padding: 12px;
+      background: #f8f9fa;
+      border-radius: 8px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .checkbox-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .checkbox-item input {
+      width: auto;
+    }
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    @media (max-width: 600px) {
+      .row {
+        grid-template-columns: 1fr;
+      }
+    }
+    .btn {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    }
+    .btn-danger {
+      background: #dc3545;
+      color: white;
+    }
+    .btn-danger:hover {
+      background: #c82333;
+    }
+    .btn-secondary {
+      background: #6c757d;
+      color: white;
+    }
+    .package-list {
+      margin-top: 24px;
+    }
+    .package-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      padding: 16px;
+      background: #f8f9fa;
+      border-radius: 8px;
+      margin-bottom: 12px;
+    }
+    .package-info h3 {
+      color: #1a1a2e;
+      margin-bottom: 4px;
+    }
+    .package-info .services {
+      color: #666;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+    .package-info .meta {
+      color: #888;
+      font-size: 13px;
+    }
+    .package-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .btn-sm {
+      padding: 6px 12px;
+      font-size: 12px;
+    }
+    .alert {
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+    }
+    .alert-success {
+      background: #d4edda;
+      color: #155724;
+    }
+    .alert-error {
+      background: #f8d7da;
+      color: #721c24;
+    }
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #666;
+    }
+    .empty-state {
+      text-align: center;
+      padding: 40px;
+      color: #666;
+    }
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>Package Setup</h1>
+      <p class="subtitle">Create service packages for your customers to book multiple services at once.</p>
+
+      <div id="alert" class="alert hidden"></div>
+
+      <form id="packageForm">
+        <div class="form-group">
+          <label for="packageName">Package Name *</label>
+          <input type="text" id="packageName" placeholder="e.g., Serenity Package" required>
+        </div>
+
+        <div class="form-group">
+          <label>Services Included *</label>
+          <div id="servicesContainer" class="checkbox-group">
+            <div class="loading">Loading services...</div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="form-group">
+            <label for="duration">Total Duration (minutes)</label>
+            <input type="number" id="duration" placeholder="e.g., 180">
+          </div>
+          <div class="form-group">
+            <label for="price">Price ($)</label>
+            <input type="number" id="price" step="0.01" placeholder="e.g., 299.00">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="description">Description</label>
+          <textarea id="description" rows="2" placeholder="e.g., 3-hour relaxation experience"></textarea>
+        </div>
+
+        <button type="submit" class="btn btn-primary">Add Package</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Your Packages</h2>
+      <div id="packageList" class="package-list">
+        <div class="loading">Loading packages...</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Get locationId from URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const locationId = urlParams.get('locationId');
+
+    if (!locationId) {
+      document.body.innerHTML = '<div style="text-align:center;padding:40px;color:white;"><h2>Missing Location ID</h2><p>Please access this page with a valid locationId parameter.</p></div>';
+    }
+
+    const API_BASE = window.location.origin;
+    let availableServices = [];
+
+    // Show alert message
+    function showAlert(message, type) {
+      const alert = document.getElementById('alert');
+      alert.textContent = message;
+      alert.className = `alert alert-${type}`;
+      alert.classList.remove('hidden');
+      setTimeout(() => alert.classList.add('hidden'), 5000);
+    }
+
+    // Load available services from synced calendars
+    async function loadServices() {
+      try {
+        const resp = await fetch(`${API_BASE}/api/calendar/business-info`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ locationId })
+        });
+        const data = await resp.json();
+
+        if (data.success && data.services) {
+          availableServices = data.services;
+          renderServiceCheckboxes();
+        } else {
+          document.getElementById('servicesContainer').innerHTML = '<div class="empty-state">No services found. Please sync your calendars first.</div>';
+        }
+      } catch (err) {
+        document.getElementById('servicesContainer').innerHTML = '<div class="empty-state">Failed to load services.</div>';
+      }
+    }
+
+    // Render service checkboxes
+    function renderServiceCheckboxes() {
+      const container = document.getElementById('servicesContainer');
+      if (availableServices.length === 0) {
+        container.innerHTML = '<div class="empty-state">No services found.</div>';
+        return;
+      }
+
+      container.innerHTML = availableServices.map(service => `
+        <label class="checkbox-item">
+          <input type="checkbox" name="services" value="${service}">
+          ${service}
+        </label>
+      `).join('');
+    }
+
+    // Load existing packages
+    async function loadPackages() {
+      try {
+        const resp = await fetch(`${API_BASE}/api/calendar/packages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ locationId, action: 'list' })
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+          renderPackages(data.packages);
+        }
+      } catch (err) {
+        document.getElementById('packageList').innerHTML = '<div class="empty-state">Failed to load packages.</div>';
+      }
+    }
+
+    // Render packages list
+    function renderPackages(packages) {
+      const container = document.getElementById('packageList');
+
+      if (!packages || packages.length === 0) {
+        container.innerHTML = '<div class="empty-state">No packages yet. Create your first package above!</div>';
+        return;
+      }
+
+      container.innerHTML = packages.map(pkg => `
+        <div class="package-item">
+          <div class="package-info">
+            <h3>${pkg.package_name}</h3>
+            <div class="services">${pkg.services.join(', ')}</div>
+            <div class="meta">
+              ${pkg.total_duration_minutes ? pkg.total_duration_minutes + ' min' : ''}
+              ${pkg.price ? ' - $' + parseFloat(pkg.price).toFixed(2) : ''}
+              ${pkg.description ? ' - ' + pkg.description : ''}
+            </div>
+          </div>
+          <div class="package-actions">
+            <button class="btn btn-danger btn-sm" onclick="deletePackage('${pkg.id}')">Delete</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    // Add new package
+    document.getElementById('packageForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const selectedServices = Array.from(document.querySelectorAll('input[name="services"]:checked'))
+        .map(cb => cb.value);
+
+      if (selectedServices.length === 0) {
+        showAlert('Please select at least one service.', 'error');
+        return;
+      }
+
+      const payload = {
+        locationId,
+        action: 'add',
+        package_name: document.getElementById('packageName').value,
+        services: selectedServices,
+        total_duration_minutes: parseInt(document.getElementById('duration').value) || null,
+        price: parseFloat(document.getElementById('price').value) || null,
+        description: document.getElementById('description').value || null
+      };
+
+      try {
+        const resp = await fetch(`${API_BASE}/api/calendar/packages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+          showAlert('Package created successfully!', 'success');
+          document.getElementById('packageForm').reset();
+          loadPackages();
+        } else {
+          showAlert(data.error || 'Failed to create package.', 'error');
+        }
+      } catch (err) {
+        showAlert('Failed to create package.', 'error');
+      }
+    });
+
+    // Delete package
+    async function deletePackage(id) {
+      if (!confirm('Are you sure you want to delete this package?')) return;
+
+      try {
+        const resp = await fetch(`${API_BASE}/api/calendar/packages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ locationId, action: 'delete', id })
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+          showAlert('Package deleted.', 'success');
+          loadPackages();
+        } else {
+          showAlert(data.error || 'Failed to delete package.', 'error');
+        }
+      } catch (err) {
+        showAlert('Failed to delete package.', 'error');
+      }
+    }
+
+    // Initialize
+    loadServices();
+    loadPackages();
+  </script>
+</body>
+</html>

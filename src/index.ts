@@ -116,8 +116,10 @@ app.get("/authorize-handler", async (req: Request, res: Response) => {
 
     console.log(`[OAuth] Installation complete for ${locationId}`);
 
-    // Redirect back to settings panel with locationId and success flag
-    return res.redirect(`${SETTINGS_PANEL_URL}?locationId=${encodeURIComponent(locationId)}&connected=true`);
+    // Redirect to package setup page so client can configure their packages
+    // After setup, they can go to the settings panel
+    const setupUrl = `https://booknexaai-oauth.onrender.com/setup/packages?locationId=${encodeURIComponent(locationId)}&connected=true`;
+    return res.redirect(setupUrl);
   } catch (error: any) {
     console.error("[OAuth] Authorization failed:", error?.response?.data || error.message);
     return res.redirect(`${SETTINGS_PANEL_URL}?error=connection_failed`);
@@ -248,6 +250,11 @@ app.post("/example-webhook-handler", async (req: Request, res: Response) => {
 // Serve frontend
 app.get("/", function (req, res) {
   res.sendFile(path + "index.html");
+});
+
+// Package setup page (self-service for clients)
+app.get("/setup/packages", function (req, res) {
+  res.sendFile(__dirname + "/setup-packages.html");
 });
 
 app.listen(port, () => {
