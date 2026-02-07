@@ -702,6 +702,136 @@ router.post("/business-info", async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/calendar/location-info
+ * CONSOLIDATED TOOL #1: Get all location info in one call.
+ * Replaces: get_business_hours, get_business_info, get_package_info
+ *
+ * Body: { locationId }
+ *
+ * Returns: business_name, business_hours, services, packages, staff, today, currentTime, timezone
+ */
+router.post("/location-info", async (req: Request, res: Response) => {
+  try {
+    const { locationId, location_id } = req.body;
+    const resolvedLocationId = locationId || location_id;
+
+    if (!resolvedLocationId) {
+      return res.status(400).json({ success: false, error: "Missing required field: locationId" });
+    }
+
+    const installation = await getInstallation(resolvedLocationId);
+    if (!installation) {
+      return res.status(404).json({ success: false, error: "Installation not found" });
+    }
+
+    const tz = installation.timezone || "Pacific/Honolulu";
+    const localNow = new Date(new Date().toLocaleString("en-US", { timeZone: tz }));
+    const todayStr = localNow.toISOString().split("T")[0];
+    const currentTimeStr = localNow.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZone: tz
+    });
+
+    // Get business info
+    const info = await getBusinessInfo(resolvedLocationId);
+
+    // Get synced calendars (services)
+    const syncedCalendars = await getSyncedCalendars(resolvedLocationId);
+    const services = syncedCalendars.map((c) => ({
+      name: c.calendar_name,
+      duration: c.slot_duration || 60,
+      calendar_id: c.calendar_id,
+    }));
+
+    // Get packages
+    const packages = await getPackages(resolvedLocationId);
+    const packagesFormatted = packages.map((p) => ({
+      name: p.package_name,
+      services: p.services,
+      total_duration_minutes: p.total_duration_minutes,
+      price: p.price,
+      description: p.description,
+    }));
+
+    // Get staff with their services
+    const staffMap: Map<string, Set<string>> = new Map();
+    for (const cal of syncedCalendars) {
+      const members = await getSyncedTeamMembers(resolvedLocationId, cal.calendar_id);
+      for (const member of members) {
+        if (member.user_name) {
+          if (!staffMap.has(member.user_name)) {
+            staffMap.set(member.user_name, new Set());
+          }
+          if (cal.calendar_name) {
+            staffMap.get(member.user_name)!.add(cal.calendar_name);
+          }
+        }
+      }
+    }
+    const staff = Array.from(staffMap.entries()).map(([name, servicesSet]) => ({
+      name,
+      services: Array.from(servicesSet),
+    }));
+
+    // Get business hours from the first calendar with schedule data
+    let business_hours: Record<string, string> = {
+      monday: "Closed",
+      tuesday: "Closed",
+      wednesday: "Closed",
+      thursday: "Closed",
+      friday: "Closed",
+      saturday: "Closed",
+      sunday: "Closed",
+    };
+
+    if (syncedCalendars.length > 0) {
+      const client = await ghl.requests(resolvedLocationId);
+      const firstCalId = syncedCalendars[0].calendar_id;
+
+      try {
+        const { openDays, dayInfo } = await getCalendarSchedule(client, firstCalId, tz);
+        const dayNames = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+        for (const [dow, info] of dayInfo) {
+          const earliestTime = info.earliest.match(/T(\d{2}:\d{2})/)?.[1] || info.earliest;
+          const latestTime = info.latest.match(/T(\d{2}:\d{2})/)?.[1] || info.latest;
+
+          const [oH, oM] = earliestTime.split(":").map(Number);
+          const [cH, cM] = latestTime.split(":").map(Number);
+
+          const openStr = formatTimeForSpeech(oH, oM);
+          const closeStr = formatTimeForSpeech(cH + 1, cM);
+
+          business_hours[dayNames[dow]] = `${openStr} - ${closeStr}`;
+        }
+      } catch (err: any) {
+        console.error("[LocationInfo] Error getting business hours:", err.message);
+      }
+    }
+
+    console.log(`[LocationInfo] Returning info for ${resolvedLocationId}: ${services.length} services, ${packagesFormatted.length} packages, ${staff.length} staff`);
+
+    return res.json({
+      success: true,
+      business_name: info?.business_name || "Our Spa",
+      business_hours,
+      services,
+      packages: packagesFormatted,
+      staff,
+      today: todayStr,
+      currentTime: currentTimeStr,
+      timezone: tz,
+    });
+
+  } catch (error: any) {
+    console.error("[LocationInfo] Error:", error?.message);
+    return res.status(500).json({ success: false, error: error?.message });
+  }
+});
+
+/**
  * POST /api/calendar/service-mappings
  * Manage service-to-staff calendar mappings.
  *
@@ -770,23 +900,30 @@ router.post("/service-mappings", async (req: Request, res: Response) => {
 
 /**
  * POST /api/calendar/check-availability
- * Smart availability check for voice agents with multi-calendar support.
+ * CONSOLIDATED TOOL #2: Check availability for services OR packages.
  *
- * Body: { locationId, service_type?, staff_name?, time_preference?, requested_date?, requested_time?, start_after? }
- * Response: { success: true, slots: [{ date, time, label, startTime, staff_name?, calendar_id? }] }
+ * Body:
+ *   For services: { locationId, type: "service", service_name, time_preference, requested_date?, staff_name?, start_after? }
+ *   For packages: { locationId, type: "package", package_name, time_preference, requested_date? }
+ *   Legacy (no type): treats as service with service_type parameter
  *
- * When staff_name is provided:
- * - Look up that staff member in synced_team_members
- * - Only check availability on calendars they're assigned to
- * - Return only that staff member's slots
- *
- * When start_after is provided (for multi-service booking):
- * - Only return slots that START at or after this time
- * - Format: ISO timestamp (e.g., "2026-02-06T14:00:00-10:00")
+ * Response includes today, currentTime, timezone so agent knows what day it is.
  */
 router.post("/check-availability", async (req: Request, res: Response) => {
   try {
-    const { locationId, location_id, service_type, staff_name, time_preference, requested_date, requested_time, start_after } = req.body;
+    const {
+      locationId,
+      location_id,
+      type,
+      service_name,
+      service_type,
+      package_name,
+      staff_name,
+      time_preference,
+      requested_date,
+      requested_time,
+      start_after
+    } = req.body;
     const resolvedLocationId = locationId || location_id;
 
     if (!resolvedLocationId) {
@@ -797,6 +934,109 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     if (!installation) {
       return res.status(404).json({ success: false, error: "Installation not found" });
     }
+
+    const tz = installation.timezone || "Pacific/Honolulu";
+    const localNow = new Date(new Date().toLocaleString("en-US", { timeZone: tz }));
+    const todayStr = localNow.toISOString().split("T")[0];
+    const currentTimeStr = localNow.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZone: tz
+    });
+
+    // ========== PACKAGE AVAILABILITY ==========
+    if (type === "package") {
+      if (!package_name) {
+        return res.status(400).json({ success: false, error: "Missing required field: package_name" });
+      }
+      if (!time_preference) {
+        return res.status(400).json({ success: false, error: "Missing required field: time_preference" });
+      }
+
+      console.log(`[CheckAvailability] Package mode: ${package_name}, preference: ${time_preference}`);
+
+      // Look up the package
+      const pkg = await getPackageByName(resolvedLocationId, package_name);
+      if (!pkg) {
+        const allPackages = await getPackages(resolvedLocationId);
+        const suggestion = allPackages.length > 0 ? allPackages[0].package_name : null;
+
+        return res.status(404).json({
+          success: false,
+          error: "Package not found",
+          message: suggestion
+            ? `I couldn't find a package called '${package_name}'. Did you mean ${suggestion}?`
+            : `I couldn't find a package called '${package_name}'.`,
+        });
+      }
+
+      // Parse requested_date if provided
+      let startDateFilter: string | null = null;
+      if (requested_date) {
+        const parsed = parseRequestedDate(requested_date, localNow);
+        if (parsed) startDateFilter = parsed;
+      }
+
+      // Find up to 3 days where all services fit
+      const packagePlans = await findPackageDayAvailability(
+        resolvedLocationId,
+        pkg.services,
+        time_preference,
+        startDateFilter,
+        tz,
+        installation,
+        localNow,
+        3
+      );
+
+      if (packagePlans.length === 0) {
+        const alternativePreference = time_preference === "afternoon" ? "morning" : "afternoon";
+        return res.json({
+          success: false,
+          package_name: pkg.package_name,
+          today: todayStr,
+          currentTime: currentTimeStr,
+          timezone: tz,
+          available_dates: [],
+          message: `I couldn't find any days with availability for all services in the ${pkg.package_name}. Would you like to try ${alternativePreference} instead of ${time_preference}?`,
+        });
+      }
+
+      // Format response
+      const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+      const available_dates = packagePlans.map((plan) => {
+        const dateObj = new Date(plan.date + "T12:00:00");
+        const dayName = dayNames[dateObj.getDay()];
+
+        return {
+          date: plan.date,
+          day_name: dayName,
+          slots: plan.slots.map((slot) => ({
+            service: slot.service,
+            start_time: formatTimeForVoice(new Date(slot.startTime), tz),
+            end_time: formatTimeForVoice(new Date(slot.endTime), tz),
+          })),
+        };
+      });
+
+      console.log(`[CheckAvailability] Package: found ${available_dates.length} available dates`);
+
+      return res.json({
+        success: true,
+        package_name: pkg.package_name,
+        total_price: pkg.price,
+        total_duration_minutes: pkg.total_duration_minutes,
+        today: todayStr,
+        currentTime: currentTimeStr,
+        timezone: tz,
+        available_dates,
+      });
+    }
+
+    // ========== SERVICE AVAILABILITY (default) ==========
+    // Support both service_name (new) and service_type (legacy)
+    const serviceToCheck = service_name || service_type;
 
     // Determine which calendars to check (prefer synced data, fall back to manual mappings)
     let calendarsToCheck: Array<{ calendar_id: string; calendar_name: string | null; staff_name: string | null; staff_id: string | null }> = [];
@@ -814,9 +1054,9 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       const staffCalendarIds = new Set(staffMembers.map((m) => m.calendar_id));
       console.log(`[Calendar] Staff "${staff_name}" is assigned to ${staffCalendarIds.size} calendar(s)`);
 
-      // If service_type is also provided, filter to calendars that match both
-      if (service_type) {
-        const syncedCals = await getSyncedCalendarsForService(resolvedLocationId, service_type);
+      // If service is also provided, filter to calendars that match both
+      if (serviceToCheck) {
+        const syncedCals = await getSyncedCalendarsForService(resolvedLocationId, serviceToCheck);
         for (const cal of syncedCals) {
           if (staffCalendarIds.has(cal.calendar_id)) {
             // Find the staff member info for this calendar
@@ -829,7 +1069,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
             });
           }
         }
-        console.log(`[Calendar] Found ${calendarsToCheck.length} calendars for staff "${staff_name}" + service "${service_type}"`);
+        console.log(`[Calendar] Found ${calendarsToCheck.length} calendars for staff "${staff_name}" + service "${serviceToCheck}"`);
       } else {
         // Staff-only filter: get all calendars for this staff member
         const syncedCals = await getSyncedCalendars(resolvedLocationId);
@@ -846,9 +1086,9 @@ router.post("/check-availability", async (req: Request, res: Response) => {
         }
         console.log(`[Calendar] Found ${calendarsToCheck.length} calendars for staff "${staff_name}"`);
       }
-    } else if (service_type) {
-      // Service type only - existing logic
-      const syncedCals = await getSyncedCalendarsForService(resolvedLocationId, service_type);
+    } else if (serviceToCheck) {
+      // Service only - existing logic
+      const syncedCals = await getSyncedCalendarsForService(resolvedLocationId, serviceToCheck);
       if (syncedCals.length > 0) {
         // Get team members for each calendar
         for (const cal of syncedCals) {
@@ -861,10 +1101,10 @@ router.post("/check-availability", async (req: Request, res: Response) => {
             staff_id: primaryMember?.user_id || null,
           });
         }
-        console.log(`[Calendar] Found ${calendarsToCheck.length} synced calendars for service "${service_type}"`);
+        console.log(`[Calendar] Found ${calendarsToCheck.length} synced calendars for service "${serviceToCheck}"`);
       } else {
         // Fall back to manual service mappings
-        const mappings = await getCalendarsForService(resolvedLocationId, service_type);
+        const mappings = await getCalendarsForService(resolvedLocationId, serviceToCheck);
         if (mappings.length > 0) {
           calendarsToCheck = mappings.map((m) => ({
             calendar_id: m.calendar_id,
@@ -872,7 +1112,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
             staff_name: m.staff_name,
             staff_id: null,
           }));
-          console.log(`[Calendar] Found ${calendarsToCheck.length} manual mappings for service "${service_type}"`);
+          console.log(`[Calendar] Found ${calendarsToCheck.length} manual mappings for service "${serviceToCheck}"`);
         }
       }
     } else {
@@ -902,10 +1142,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       console.log(`[Calendar] Falling back to default calendar`);
     }
 
-    // Use the location's configured timezone (fallback to Hawaii)
-    const tz = installation.timezone || "Pacific/Honolulu";
-    const localNow = new Date(new Date().toLocaleString("en-US", { timeZone: tz }));
-    const todayStr = localNow.toISOString().split("T")[0];
+    // Use tz, localNow, todayStr already defined at top of endpoint
     const tomorrowDate = new Date(localNow);
     tomorrowDate.setDate(tomorrowDate.getDate() + 1);
     const tomorrowStr = tomorrowDate.toISOString().split("T")[0];
@@ -1260,6 +1497,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     console.log(`[Calendar] Returning ${resultSlots.length} slots: ${resultSlots.map(s => `${s.label} ${s.time}`).join(", ")}`);
     return res.json({
       success: true,
+      service: serviceToCheck || null,
       today: todayFormatted,
       currentTime: currentTimeFormatted,
       timezone: tz,
@@ -1274,19 +1512,14 @@ router.post("/check-availability", async (req: Request, res: Response) => {
 
 /**
  * POST /api/calendar/book
- * Create or upsert a GHL contact, then book an appointment.
+ * Consolidated booking endpoint for both services and packages.
  *
- * Accepts both camelCase and snake_case field names:
- *   - locationId / location_id
- *   - calendarId / calendar_id
- *   - startTime / start_time
- *   - customerName / customer_name
- *   - customerEmail / customer_email
- *   - customerPhone / customer_phone
- *   - serviceType / service_type
- *   - therapistPreference / therapist_preference
+ * For type=service (or no type):
+ *   - locationId, service_name, selected_date, selected_time, customer_name, email, phone
+ * For type=package:
+ *   - locationId, package_name, selected_date, time_preference, customer_name, email, phone
  *
- * The 'action' field from ElevenLabs is ignored.
+ * Accepts both camelCase and snake_case field names.
  */
 router.post("/book", async (req: Request, res: Response) => {
   try {
@@ -1294,32 +1527,227 @@ router.post("/book", async (req: Request, res: Response) => {
 
     // Accept both camelCase and snake_case (camelCase takes priority)
     const locationId = body.locationId || body.location_id;
-    const calendarId = body.calendarId || body.calendar_id;
-    const startTime = body.startTime || body.start_time;
+    const type = body.type || "service"; // default to service
     const customerName = body.customerName || body.customer_name;
-    const customerEmail = body.customerEmail || body.customer_email;
-    const customerPhone = body.customerPhone || body.customer_phone;
-    const serviceType = body.serviceType || body.service_type;
+    const customerEmail = body.customerEmail || body.customer_email || body.email;
+    const customerPhone = body.customerPhone || body.customer_phone || body.phone;
     const therapistPreference = body.therapistPreference || body.therapist_preference;
-    const occasion = body.occasion;
-    const title = body.title;
     const notes = body.notes;
-    // 'action' field from ElevenLabs is intentionally ignored
 
-    if (!locationId || !startTime || !customerName || !customerEmail) {
-      return res.status(400).json({
-        success: false,
-        error: "Missing required fields: locationId, startTime, customerName, customerEmail",
+    // ========== PACKAGE BOOKING ==========
+    if (type === "package") {
+      const packageName = body.package_name;
+      const selectedDate = body.selected_date;
+      const timePreference = body.time_preference;
+
+      if (!locationId) {
+        return res.status(400).json({ success: false, error: "Missing required field: locationId" });
+      }
+      if (!packageName) {
+        return res.status(400).json({ success: false, error: "Missing required field: package_name" });
+      }
+      if (!selectedDate) {
+        return res.status(400).json({ success: false, error: "Missing required field: selected_date" });
+      }
+      if (!timePreference) {
+        return res.status(400).json({ success: false, error: "Missing required field: time_preference" });
+      }
+      if (!customerName || !customerPhone || !customerEmail) {
+        return res.status(400).json({ success: false, error: "Missing required fields: customer_name, phone, email" });
+      }
+
+      console.log(`[Book] PACKAGE mode: ${packageName} for ${customerName} on ${selectedDate}`);
+
+      // Look up the package
+      const pkg = await getPackageByName(locationId, packageName);
+      if (!pkg) {
+        const allPackages = await getPackages(locationId);
+        const suggestion = allPackages.length > 0 ? allPackages[0].package_name : null;
+        return res.status(404).json({
+          success: false,
+          error: "Package not found",
+          message: suggestion
+            ? `I couldn't find a package called '${packageName}'. Did you mean ${suggestion}?`
+            : `I couldn't find a package called '${packageName}'.`,
+        });
+      }
+
+      // Get installation for timezone and auth
+      const installation = await getInstallation(locationId);
+      if (!installation) {
+        return res.status(404).json({ success: false, error: "Installation not found" });
+      }
+
+      const tz = installation.timezone || "Pacific/Honolulu";
+      const client = await ghl.requests(locationId);
+      const localNow = new Date(new Date().toLocaleString("en-US", { timeZone: tz }));
+
+      // Parse selected_date
+      const parsedDate = parseRequestedDate(selectedDate, localNow);
+      if (!parsedDate) {
+        return res.status(400).json({ success: false, error: "Invalid selected_date format" });
+      }
+
+      // Find availability on the selected date
+      const packagePlans = await findPackageDayAvailability(
+        locationId,
+        pkg.services,
+        timePreference,
+        parsedDate,
+        tz,
+        installation,
+        localNow,
+        1
+      );
+
+      type PackagePlan = {
+        date: string;
+        slots: Array<{
+          service: string;
+          startTime: string;
+          endTime: string;
+          calendar_id: string;
+          staff_name: string | null;
+        }>;
+      };
+      const packagePlan: PackagePlan | null = packagePlans[0] || null;
+
+      if (!packagePlan || packagePlan.date !== parsedDate) {
+        const alternativePreference = timePreference === "afternoon" ? "morning" : "afternoon";
+        return res.json({
+          success: false,
+          package_name: pkg.package_name,
+          appointments: [],
+          message: `I couldn't find availability for all services in the ${pkg.package_name} on ${parsedDate}. Would you like to try ${alternativePreference} instead of ${timePreference}?`,
+        });
+      }
+
+      // Book all services
+      const appointments: Array<{
+        service: string;
+        date?: string;
+        start_time?: string;
+        end_time?: string;
+        staff_name?: string;
+        calendar_id?: string;
+        appointment_id?: string;
+        status: "confirmed" | "failed";
+        error?: string;
+      }> = [];
+
+      let allSuccessful = true;
+
+      for (let i = 0; i < packagePlan.slots.length; i++) {
+        const slotInfo = packagePlan.slots[i];
+        console.log(`[Book] Booking service ${i + 1}/${packagePlan.slots.length}: ${slotInfo.service}`);
+
+        try {
+          const bookingResult = await bookServiceAppointment(
+            client,
+            locationId,
+            slotInfo.calendar_id,
+            slotInfo.startTime,
+            slotInfo.service,
+            customerName,
+            customerEmail,
+            customerPhone,
+            notes,
+            therapistPreference
+          );
+
+          if (!bookingResult.success) {
+            appointments.push({ service: slotInfo.service, status: "failed", error: bookingResult.error });
+            allSuccessful = false;
+            continue;
+          }
+
+          const startDate = new Date(slotInfo.startTime);
+          const endDate = new Date(bookingResult.endTime!);
+          appointments.push({
+            service: slotInfo.service,
+            date: packagePlan.date,
+            start_time: formatTimeForVoice(startDate, tz),
+            end_time: formatTimeForVoice(endDate, tz),
+            staff_name: slotInfo.staff_name || undefined,
+            calendar_id: slotInfo.calendar_id,
+            appointment_id: bookingResult.appointmentId,
+            status: "confirmed",
+          });
+        } catch (err: any) {
+          appointments.push({ service: slotInfo.service, status: "failed", error: err.message });
+          allSuccessful = false;
+        }
+      }
+
+      const confirmedAppointments = appointments.filter((a) => a.status === "confirmed");
+
+      if (confirmedAppointments.length === 0) {
+        return res.json({
+          success: false,
+          package_name: pkg.package_name,
+          appointments,
+          message: `I found availability but the bookings failed. Would you like to try again?`,
+        });
+      }
+
+      if (!allSuccessful) {
+        const bookedServices = confirmedAppointments.map((a) => a.service).join(", ");
+        const failedService = appointments.find((a) => a.status === "failed")?.service;
+        return res.json({
+          success: false,
+          partial: true,
+          package_name: pkg.package_name,
+          total_price: pkg.price,
+          appointments,
+          message: `I was able to book ${bookedServices}, but ${failedService} failed to book. Would you like me to try again?`,
+        });
+      }
+
+      // Full success
+      const confirmationMessage = buildPackageConfirmation(pkg.package_name, confirmedAppointments, pkg.price, tz);
+      console.log(`[Book] Package booked successfully: ${confirmedAppointments.length} services`);
+
+      return res.json({
+        success: true,
+        package_name: pkg.package_name,
+        total_price: pkg.price,
+        total_duration_minutes: pkg.total_duration_minutes,
+        appointments: confirmedAppointments,
+        confirmation_message: confirmationMessage,
       });
     }
 
-    console.log("[Calendar] ===== BOOK REQUEST (normalized) =====");
-    console.log("[Calendar] locationId:", locationId);
-    console.log("[Calendar] startTime:", startTime);
-    console.log("[Calendar] customerName:", customerName);
-    console.log("[Calendar] customerEmail:", customerEmail);
-    console.log("[Calendar] customerPhone:", customerPhone);
-    console.log("[Calendar] serviceType:", serviceType);
+    // ========== SERVICE BOOKING (default) ==========
+    const calendarId = body.calendarId || body.calendar_id;
+    const startTime = body.startTime || body.start_time || body.selected_time;
+    const selectedDate = body.selected_date;
+    const serviceName = body.service_name || body.serviceType || body.service_type;
+    const occasion = body.occasion;
+    const title = body.title;
+
+    // Build full startTime from selected_date + selected_time if needed
+    let resolvedStartTime = startTime;
+    if (selectedDate && startTime && !startTime.includes("T")) {
+      // startTime is just a time like "10:00 AM", combine with selected_date
+      const timeParsed = parseTimeToMinutes(startTime);
+      if (timeParsed !== null) {
+        const hours = Math.floor(timeParsed / 60);
+        const mins = timeParsed % 60;
+        resolvedStartTime = `${selectedDate}T${hours.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:00`;
+      }
+    }
+
+    if (!locationId || !resolvedStartTime || !customerName || !customerEmail) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required fields: locationId, startTime (or selected_date + selected_time), customerName, customerEmail",
+      });
+    }
+
+    console.log("[Book] SERVICE mode for", customerName);
+    console.log("[Book] locationId:", locationId);
+    console.log("[Book] startTime:", resolvedStartTime);
+    console.log("[Book] service:", serviceName);
 
     // 1. Look up installation
     const installation = await getInstallation(locationId);
@@ -1385,8 +1813,8 @@ router.post("/book", async (req: Request, res: Response) => {
     }
 
     // 4. Book the appointment
-    const startISO = new Date(startTime).toISOString();
-    const startTimeMs = new Date(startTime).getTime();
+    const startISO = new Date(resolvedStartTime).toISOString();
+    const startTimeMs = new Date(resolvedStartTime).getTime();
     // Calculate end time based on duration (from calendar settings or override)
     const endTimeMs = startTimeMs + durationMinutes * 60 * 1000;
     const endISO = new Date(endTimeMs).toISOString();
@@ -1395,7 +1823,7 @@ router.post("/book", async (req: Request, res: Response) => {
     const bufferEndISO = new Date(bufferEndMs).toISOString();
 
     // Title-case the service type
-    const formattedServiceType = serviceType ? toTitleCase(serviceType) : null;
+    const formattedServiceType = serviceName ? toTitleCase(serviceName) : null;
 
     // Build title from serviceType or fallback
     const appointmentTitle = formattedServiceType || title || "Appointment";
@@ -1714,6 +2142,7 @@ router.post("/book-package", async (req: Request, res: Response) => {
       package_name,
       time_preference,
       requested_date,
+      selected_date,
       customer_name,
       phone,
       email,
@@ -1770,35 +2199,68 @@ router.post("/book-package", async (req: Request, res: Response) => {
     const localNow = new Date(new Date().toLocaleString("en-US", { timeZone: tz }));
     const todayStr = localNow.toISOString().split("T")[0];
 
-    // Parse requested_date if provided
+    // Parse requested_date or selected_date if provided
     let startDateFilter: string | null = null;
-    if (requested_date) {
+    let specificDate: string | null = null;
+
+    if (selected_date) {
+      // User picked a specific date from check-package-availability
+      const parsed = parseRequestedDate(selected_date, localNow);
+      if (parsed) {
+        specificDate = parsed;
+        startDateFilter = parsed;
+      }
+    } else if (requested_date) {
       const parsed = parseRequestedDate(requested_date, localNow);
       if (parsed) startDateFilter = parsed;
     }
 
-    // Step 3: CRITICAL - Find a single day where ALL services can be booked consecutively
+    // Step 3: Find a day where ALL services can be booked consecutively
     console.log(`[BookPackage] Finding a day where all ${pkg.services.length} services fit...`);
+    if (specificDate) {
+      console.log(`[BookPackage] User selected specific date: ${specificDate}`);
+    }
 
-    const packagePlan = await findPackageDayAvailability(
+    const packagePlans = await findPackageDayAvailability(
       resolvedLocationId,
       pkg.services,
       time_preference,
       startDateFilter,
       tz,
       installation,
-      localNow
+      localNow,
+      1 // Only need 1 result for booking
     );
+
+    // If user selected a specific date, verify the result matches
+    type PackagePlan = {
+      date: string;
+      slots: Array<{
+        service: string;
+        startTime: string;
+        endTime: string;
+        calendar_id: string;
+        staff_name: string | null;
+      }>;
+    };
+    let packagePlan: PackagePlan | null = packagePlans[0] || null;
+
+    if (specificDate && packagePlan && packagePlan.date !== specificDate) {
+      // The specific date doesn't work, return error
+      console.log(`[BookPackage] Selected date ${specificDate} doesn't have availability`);
+      packagePlan = null;
+    }
 
     if (!packagePlan) {
       // No single day found - suggest alternative
       const alternativePreference = time_preference === "afternoon" ? "morning" : "afternoon";
+      const dateContext = specificDate ? ` on ${specificDate}` : "";
       return res.json({
         success: false,
         partial: false,
         package_name: pkg.package_name,
         appointments: [],
-        message: `I couldn't find a day with availability for all services in the ${pkg.package_name}. Would you like to try ${alternativePreference} instead of ${time_preference}?`,
+        message: `I couldn't find availability for all services in the ${pkg.package_name}${dateContext}. Would you like to try ${alternativePreference} instead of ${time_preference}?`,
       });
     }
 
@@ -1924,6 +2386,132 @@ router.post("/book-package", async (req: Request, res: Response) => {
 
   } catch (error: any) {
     console.error("[BookPackage] Error:", error?.response?.data || error.message);
+    return res.status(500).json({
+      success: false,
+      error: error?.response?.data?.message || error.message,
+    });
+  }
+});
+
+/**
+ * POST /api/calendar/check-package-availability
+ * Check availability for a package WITHOUT booking.
+ * Returns 2-3 available dates where ALL services fit on the SAME day.
+ *
+ * Body: {
+ *   locationId, package_name, time_preference,
+ *   requested_date? (optional - start searching from this date)
+ * }
+ */
+router.post("/check-package-availability", async (req: Request, res: Response) => {
+  try {
+    const {
+      locationId,
+      location_id,
+      package_name,
+      time_preference,
+      requested_date,
+    } = req.body;
+
+    const resolvedLocationId = locationId || location_id;
+
+    // Validate required fields
+    if (!resolvedLocationId) {
+      return res.status(400).json({ success: false, error: "Missing required field: locationId" });
+    }
+    if (!package_name) {
+      return res.status(400).json({ success: false, error: "Missing required field: package_name" });
+    }
+    if (!time_preference) {
+      return res.status(400).json({ success: false, error: "Missing required field: time_preference" });
+    }
+
+    console.log(`[CheckPackage] Checking availability for: ${package_name}, preference: ${time_preference}`);
+
+    // Look up the package
+    const pkg = await getPackageByName(resolvedLocationId, package_name);
+    if (!pkg) {
+      const allPackages = await getPackages(resolvedLocationId);
+      const suggestion = allPackages.length > 0 ? allPackages[0].package_name : null;
+
+      return res.status(404).json({
+        success: false,
+        error: "Package not found",
+        message: suggestion
+          ? `I couldn't find a package called '${package_name}'. Did you mean ${suggestion}?`
+          : `I couldn't find a package called '${package_name}'.`,
+      });
+    }
+
+    // Get installation for timezone and auth
+    const installation = await getInstallation(resolvedLocationId);
+    if (!installation) {
+      return res.status(404).json({ success: false, error: "Installation not found" });
+    }
+
+    const tz = installation.timezone || "Pacific/Honolulu";
+    const localNow = new Date(new Date().toLocaleString("en-US", { timeZone: tz }));
+
+    // Parse requested_date if provided
+    let startDateFilter: string | null = null;
+    if (requested_date) {
+      const parsed = parseRequestedDate(requested_date, localNow);
+      if (parsed) startDateFilter = parsed;
+    }
+
+    // Find up to 3 days where all services fit
+    const packagePlans = await findPackageDayAvailability(
+      resolvedLocationId,
+      pkg.services,
+      time_preference,
+      startDateFilter,
+      tz,
+      installation,
+      localNow,
+      3 // Return up to 3 available dates
+    );
+
+    if (packagePlans.length === 0) {
+      const alternativePreference = time_preference === "afternoon" ? "morning" : "afternoon";
+      return res.json({
+        success: false,
+        package_name: pkg.package_name,
+        available_dates: [],
+        message: `I couldn't find any days with availability for all services in the ${pkg.package_name}. Would you like to try ${alternativePreference} instead of ${time_preference}?`,
+      });
+    }
+
+    // Format response with human-readable times
+    const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+    const available_dates = packagePlans.map((plan) => {
+      const dateObj = new Date(plan.date + "T12:00:00");
+      const dayName = dayNames[dateObj.getDay()];
+
+      return {
+        date: plan.date,
+        day_name: dayName,
+        slots: plan.slots.map((slot) => ({
+          service: slot.service,
+          start_time: formatTimeForVoice(new Date(slot.startTime), tz),
+          end_time: formatTimeForVoice(new Date(slot.endTime), tz),
+        })),
+      };
+    });
+
+    console.log(`[CheckPackage] Found ${available_dates.length} available dates`);
+
+    return res.json({
+      success: true,
+      package_name: pkg.package_name,
+      total_price: pkg.price,
+      total_duration_minutes: pkg.total_duration_minutes,
+      services: pkg.services,
+      available_dates,
+    });
+
+  } catch (error: any) {
+    console.error("[CheckPackage] Error:", error?.response?.data || error.message);
     return res.status(500).json({
       success: false,
       error: error?.response?.data?.message || error.message,
@@ -2113,8 +2701,8 @@ async function findServiceAvailability(
 }
 
 /**
- * Find a single day where ALL package services can be booked consecutively.
- * Returns the full booking plan if found, or null if no single day works.
+ * Find days where ALL package services can be booked consecutively.
+ * Returns up to maxResults valid days, or empty array if none found.
  */
 async function findPackageDayAvailability(
   locationId: string,
@@ -2123,16 +2711,18 @@ async function findPackageDayAvailability(
   requestedDate: string | null,
   tz: string,
   installation: any,
-  localNow: Date
-): Promise<{
+  localNow: Date,
+  maxResults: number = 1
+): Promise<Array<{
   date: string;
   slots: Array<{
     service: string;
     startTime: string;
+    endTime: string;
     calendar_id: string;
     staff_name: string | null;
   }>;
-} | null> {
+}>> {
   const DAYS_TO_SEARCH = 14;
   const BUFFER_MS = 15 * 60 * 1000;
 
@@ -2170,7 +2760,7 @@ async function findPackageDayAvailability(
 
     if (cals.length === 0) {
       console.log(`[BookPackage] No calendar found for service: ${service}`);
-      return null;
+      return [];
     }
 
     serviceCalendars.set(service, cals);
@@ -2239,14 +2829,29 @@ async function findPackageDayAvailability(
     };
   };
 
+  // Collect valid dates
+  const results: Array<{
+    date: string;
+    slots: Array<{
+      service: string;
+      startTime: string;
+      endTime: string;
+      calendar_id: string;
+      staff_name: string | null;
+    }>;
+  }> = [];
+
   // Try each date
   for (const dateKey of datesToCheck) {
+    if (results.length >= maxResults) break;
+
     console.log(`[BookPackage] Checking date: ${dateKey}`);
 
     // Try to find slots for all services on this date
     const plan: Array<{
       service: string;
       startTime: string;
+      endTime: string;
       calendar_id: string;
       staff_name: string | null;
     }> = [];
@@ -2269,17 +2874,22 @@ async function findPackageDayAvailability(
           if (slotMs < minStartTimeMs) continue;
           if (!matchesTimePreference(slotTime)) continue;
 
+          // Calculate when this service ends (with buffer) for next service
+          const timing = await getCalendarTiming(cal.calendar_id);
+          const endTimeMs = slotMs + timing.duration;
+          const endTimeISO = new Date(endTimeMs).toISOString();
+
           // Found valid slot for this service
           plan.push({
             service,
             startTime: slotTime,
+            endTime: endTimeISO,
             calendar_id: cal.calendar_id,
             staff_name: cal.staff_name,
           });
 
-          // Calculate when this service ends (with buffer) for next service
-          const timing = await getCalendarTiming(cal.calendar_id);
-          minStartTimeMs = slotMs + timing.duration + timing.buffer;
+          // Next service starts after this one ends + buffer
+          minStartTimeMs = endTimeMs + timing.buffer;
 
           foundSlot = true;
           break;
@@ -2297,12 +2907,12 @@ async function findPackageDayAvailability(
 
     if (dateWorks && plan.length === services.length) {
       console.log(`[BookPackage] SUCCESS! Found valid day: ${dateKey}`);
-      return { date: dateKey, slots: plan };
+      results.push({ date: dateKey, slots: plan });
     }
   }
 
-  console.log(`[BookPackage] No single day found for all services in ${DAYS_TO_SEARCH} days`);
-  return null;
+  console.log(`[BookPackage] Found ${results.length} valid days out of ${DAYS_TO_SEARCH} searched`);
+  return results;
 }
 
 /**
