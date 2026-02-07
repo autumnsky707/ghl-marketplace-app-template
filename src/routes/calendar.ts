@@ -1701,8 +1701,10 @@ router.post("/get-package", async (req: Request, res: Response) => {
  *
  * Body: {
  *   locationId, package_name, time_preference, requested_date?,
- *   customer_name, phone, email, notes?
+ *   customer_name, phone, email, notes?, therapist_preference?
  * }
+ *
+ * therapist_preference: "male", "female", or null/undefined - appended to notes for spa staff
  */
 router.post("/book-package", async (req: Request, res: Response) => {
   try {
@@ -1716,6 +1718,7 @@ router.post("/book-package", async (req: Request, res: Response) => {
       phone,
       email,
       notes,
+      therapist_preference,
     } = req.body;
 
     const resolvedLocationId = locationId || location_id;
@@ -1840,7 +1843,8 @@ router.post("/book-package", async (req: Request, res: Response) => {
           customer_name,
           email,
           phone,
-          notes
+          notes,
+          therapist_preference
         );
 
         if (!bookingResult.success) {
@@ -2057,6 +2061,7 @@ async function findServiceAvailability(
       const slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${cal.calendar_id}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
 
       try {
+        console.log(`[BookPackage] Fetching free-slots: ${slotsUrl}`);
         const resp = await axios.get(slotsUrl, {
           headers: {
             Authorization: `Bearer ${installation.access_token}`,
@@ -2065,25 +2070,44 @@ async function findServiceAvailability(
         });
 
         const rawData = resp.data || {};
+        console.log(`[BookPackage] Raw GHL free-slots response:`, JSON.stringify(rawData, null, 2));
+
         const dateKeys = Object.keys(rawData).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
+        console.log(`[BookPackage] Found ${dateKeys.length} dates with slots: ${dateKeys.join(", ")}`);
 
         for (const dateKey of dateKeys) {
-          // Apply date filter if requested
-          if (requestedDate && dateKey !== requestedDate) continue;
+          // Apply date filter: skip dates BEFORE requested date (start searching from that date)
+          if (requestedDate && dateKey < requestedDate) {
+            console.log(`[BookPackage] Skipping ${dateKey} (before requested date ${requestedDate})`);
+            continue;
+          }
 
           const entry = rawData[dateKey];
           const slots: string[] = Array.isArray(entry) ? entry : entry?.slots || [];
+          console.log(`[BookPackage] Date ${dateKey} has ${slots.length} slots`);
 
           for (const slot of slots) {
             const slotMs = new Date(slot).getTime();
             if (slotMs < minSlotTimeMs) continue;
 
-            // Apply time preference filter
-            const hour = new Date(slot).getHours();
-            if (timePreference === "morning" && hour >= 12) continue;
-            if (timePreference === "afternoon" && hour < 12) continue;
+            // Apply time preference filter using LOCATION'S timezone
+            const slotInTz = new Date(slot).toLocaleString("en-US", { timeZone: tz, hour12: false });
+            const hourMatch = slotInTz.match(/(\d{1,2}):/);
+            const localHour = hourMatch ? parseInt(hourMatch[1], 10) : new Date(slot).getHours();
+
+            console.log(`[BookPackage] Slot ${slot} -> local hour ${localHour} in ${tz}, preference: ${timePreference}`);
+
+            if (timePreference === "morning" && localHour >= 12) {
+              console.log(`[BookPackage] Skipping slot - afternoon hour ${localHour} but preference is morning`);
+              continue;
+            }
+            if (timePreference === "afternoon" && localHour < 12) {
+              console.log(`[BookPackage] Skipping slot - morning hour ${localHour} but preference is afternoon`);
+              continue;
+            }
 
             // Found a valid slot
+            console.log(`[BookPackage] Selected slot: ${slot} (local hour ${localHour})`);
             return {
               slot: {
                 startTime: slot,
@@ -2095,6 +2119,7 @@ async function findServiceAvailability(
         }
       } catch (err: any) {
         console.error(`[BookPackage] Error fetching slots for ${cal.calendar_id}:`, err.message);
+        console.error(`[BookPackage] Full error:`, err.response?.data || err);
       }
     }
   }
@@ -2114,7 +2139,8 @@ async function bookServiceAppointment(
   customerName: string,
   customerEmail: string,
   customerPhone: string,
-  notes?: string
+  notes?: string,
+  therapistPreference?: string
 ): Promise<{
   success: boolean;
   appointmentId?: string;
@@ -2157,6 +2183,13 @@ async function bookServiceAppointment(
     const bufferEndMs = endTimeMs + slotBuffer * 60 * 1000;
     const bufferEndISO = new Date(bufferEndMs).toISOString();
 
+    // Build notes with therapist preference if provided
+    let appointmentNotes = notes || "";
+    if (therapistPreference && ["male", "female"].includes(therapistPreference.toLowerCase())) {
+      const prefNote = `Therapist preference: ${therapistPreference.toLowerCase()}`;
+      appointmentNotes = appointmentNotes ? `${appointmentNotes} | ${prefNote}` : prefNote;
+    }
+
     // Build appointment
     const appointmentPayload = {
       calendarId,
@@ -2166,7 +2199,7 @@ async function bookServiceAppointment(
       endTime: endISO,
       title: toTitleCase(serviceName),
       appointmentStatus: "confirmed",
-      notes: notes || undefined,
+      notes: appointmentNotes || undefined,
     };
 
     const appointmentResp = await client.post(
