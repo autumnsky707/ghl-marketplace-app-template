@@ -1725,35 +1725,64 @@ router.post("/book", async (req: Request, res: Response) => {
     const occasion = body.occasion;
     const title = body.title;
 
-    // Build full startTime from selected_date + selected_time if needed
-    let resolvedStartTime = startTime;
-    if (selectedDate && startTime && !startTime.includes("T")) {
-      // startTime is just a time like "10:00 AM", combine with selected_date
+    if (!locationId || !customerName || !customerEmail) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required fields: locationId, customerName, customerEmail",
+      });
+    }
+
+    // 1. Look up installation first (needed for timezone)
+    const installation = await getInstallation(locationId);
+    if (!installation) {
+      return res.status(404).json({ success: false, error: "Installation not found" });
+    }
+
+    const tz = installation.timezone || "Pacific/Honolulu";
+
+    // Resolve startTime - prefer full ISO datetime from slot, otherwise build from date+time
+    let resolvedStartTime: string | null = null;
+
+    // Option 1: startTime already contains full ISO datetime (from check-availability slot)
+    if (startTime && startTime.includes("T")) {
+      resolvedStartTime = startTime;
+      console.log(`[Book] Using provided startTime: ${resolvedStartTime}`);
+    }
+    // Option 2: Build from selected_date + selected_time
+    else if (selectedDate && startTime) {
       const timeParsed = parseTimeToMinutes(startTime);
       if (timeParsed !== null) {
         const hours = Math.floor(timeParsed / 60);
         const mins = timeParsed % 60;
-        resolvedStartTime = `${selectedDate}T${hours.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:00`;
+        const dateTimeStr = `${selectedDate}T${hours.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:00`;
+
+        // Get timezone offset using Intl API
+        const tempDate = new Date();
+        const formatter = new Intl.DateTimeFormat("en-US", {
+          timeZone: tz,
+          timeZoneName: "longOffset"
+        });
+        const parts = formatter.formatToParts(tempDate);
+        const offsetPart = parts.find(p => p.type === "timeZoneName");
+        const offsetMatch = offsetPart?.value?.match(/GMT([+-]\d{2}:\d{2})/);
+        const tzOffset = offsetMatch ? offsetMatch[1] : "-10:00";
+
+        resolvedStartTime = `${dateTimeStr}${tzOffset}`;
+        console.log(`[Book] Built datetime: ${selectedDate} + ${startTime} => ${resolvedStartTime} (offset: ${tzOffset})`);
       }
     }
 
-    if (!locationId || !resolvedStartTime || !customerName || !customerEmail) {
+    if (!resolvedStartTime) {
       return res.status(400).json({
         success: false,
-        error: "Missing required fields: locationId, startTime (or selected_date + selected_time), customerName, customerEmail",
+        error: "Missing required field: startTime (or selected_date + selected_time)",
       });
     }
 
     console.log("[Book] SERVICE mode for", customerName);
     console.log("[Book] locationId:", locationId);
-    console.log("[Book] startTime:", resolvedStartTime);
+    console.log("[Book] resolvedStartTime:", resolvedStartTime);
     console.log("[Book] service:", serviceName);
-
-    // 1. Look up installation
-    const installation = await getInstallation(locationId);
-    if (!installation) {
-      return res.status(404).json({ success: false, error: "Installation not found" });
-    }
 
     // 2. Resolve calendar_id - prioritize explicit calendarId, then lookup by service, then default
     let resolvedCalendarId = calendarId;
@@ -1834,35 +1863,26 @@ router.post("/book", async (req: Request, res: Response) => {
     }
 
     // 4. Book the appointment
+    // Convert to UTC ISO format for GHL API
     const startISO = new Date(resolvedStartTime).toISOString();
     const startTimeMs = new Date(resolvedStartTime).getTime();
-    // Calculate end time based on duration (from calendar settings or override)
     const endTimeMs = startTimeMs + durationMinutes * 60 * 1000;
     const endISO = new Date(endTimeMs).toISOString();
-    // Calculate buffer_end for multi-service booking (when next service can start)
     const bufferEndMs = endTimeMs + slotBuffer * 60 * 1000;
     const bufferEndISO = new Date(bufferEndMs).toISOString();
 
+    console.log(`[Book] Time conversion: ${resolvedStartTime} => ${startISO}`);
+
     // Title-case the service type
     const formattedServiceType = serviceName ? toTitleCase(serviceName) : null;
-
-    // Build title from serviceType or fallback
     const appointmentTitle = formattedServiceType || title || "Appointment";
 
-    // Build notes: e.g. "Deep Tissue Massage - One Hour. Therapist preference: Female. Occasion: Birthday"
+    // Build notes
     const noteParts: string[] = [];
-    if (formattedServiceType) {
-      noteParts.push(formattedServiceType);
-    }
-    if (therapistPreference) {
-      noteParts.push(`Therapist preference: ${therapistPreference}`);
-    }
-    if (occasion) {
-      noteParts.push(`Occasion: ${occasion}`);
-    }
-    if (notes) {
-      noteParts.push(notes);
-    }
+    if (formattedServiceType) noteParts.push(formattedServiceType);
+    if (therapistPreference) noteParts.push(`Therapist preference: ${therapistPreference}`);
+    if (occasion) noteParts.push(`Occasion: ${occasion}`);
+    if (notes) noteParts.push(notes);
     const appointmentNotes = noteParts.join(". ");
 
     const appointmentPayload = {
@@ -1876,9 +1896,10 @@ router.post("/book", async (req: Request, res: Response) => {
       notes: appointmentNotes || undefined,
     };
 
-    console.log("[Calendar] ===== CREATE APPOINTMENT REQUEST =====");
-    console.log("[Calendar] Endpoint: POST /calendars/events/appointments");
-    console.log("[Calendar] Payload:", JSON.stringify(appointmentPayload, null, 2));
+    console.log("[Book] ===== GHL APPOINTMENT REQUEST =====");
+    console.log("[Book] calendarId:", resolvedCalendarId);
+    console.log("[Book] startTime:", startISO);
+    console.log("[Book] endTime:", endISO);
 
     const appointmentResp = await client.post(
       "/calendars/events/appointments",
