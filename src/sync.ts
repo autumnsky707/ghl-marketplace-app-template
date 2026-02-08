@@ -88,18 +88,38 @@ export async function syncLocation(
 
     for (const userId of userIds) {
       try {
+        console.log(`[Sync] Fetching user details for: ${userId}`);
         const userResp = await client.get(`/users/${userId}`, {
           headers: { Version: "2021-07-28" },
         });
+
+        // Log full response for debugging
+        console.log(`[Sync] User API response for ${userId}:`, JSON.stringify(userResp.data, null, 2));
+
         const user = userResp.data?.user || userResp.data;
         if (user) {
-          const name = user.name || user.firstName || `${user.firstName || ''} ${user.lastName || ''}`.trim() || null;
+          // Try multiple field combinations for name
+          const name = user.name ||
+                       (user.firstName && user.lastName ? `${user.firstName} ${user.lastName}` : null) ||
+                       user.firstName ||
+                       user.lastName ||
+                       null;
           const email = user.email || null;
-          userDetailsMap.set(userId, { name, email });
-          console.log(`[Sync] User ${userId}: ${name} (${email})`);
+
+          if (name) {
+            userDetailsMap.set(userId, { name, email });
+            console.log(`[Sync] User ${userId}: ${name} (${email})`);
+          } else {
+            console.log(`[Sync] User ${userId}: No name found in response`);
+          }
+        } else {
+          console.log(`[Sync] User ${userId}: Empty response data`);
         }
       } catch (err: any) {
         console.log(`[Sync] Failed to fetch user ${userId}:`, err?.response?.status || err.message);
+        if (err?.response?.data) {
+          console.log(`[Sync] Error response:`, JSON.stringify(err.response.data, null, 2));
+        }
       }
     }
 
