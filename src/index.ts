@@ -257,6 +257,11 @@ app.get("/setup/packages", function (req, res) {
   res.sendFile(__dirname + "/setup-packages.html");
 });
 
+// Staff setup page (gender assignment for therapist preferences)
+app.get("/setup/staff", function (req, res) {
+  res.sendFile(__dirname + "/setup-staff.html");
+});
+
 app.listen(port, () => {
   console.log(`GHL app listening on port ${port}`);
 
