@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import axios from "axios";
+import { DateTime } from "luxon";
 import { GHL } from "../ghl";
 import {
   getInstallation,
@@ -37,6 +38,25 @@ import {
 
 const router = Router();
 const ghl = new GHL();
+
+/**
+ * Get timezone-aware current time info for a location.
+ * Uses luxon for reliable timezone handling on servers.
+ */
+function getLocalTimeInfo(timezone: string): {
+  now: DateTime;
+  todayStr: string;
+  currentTimeStr: string;
+  todayFormatted: string;
+} {
+  const now = DateTime.now().setZone(timezone);
+  return {
+    now,
+    todayStr: now.toFormat("yyyy-MM-dd"),
+    currentTimeStr: now.toFormat("h:mm a"), // "2:09 PM"
+    todayFormatted: now.toFormat("cccc, MMMM d, yyyy"), // "Friday, February 7, 2026"
+  };
+}
 
 function toTitleCase(str: string): string {
   return str
@@ -182,38 +202,7 @@ router.post("/free-slots", async (req: Request, res: Response) => {
       });
     }
 
-    // Calculate dates automatically if not provided
-    // Use Hawaii time (Pacific/Honolulu) for all "now" calculations
-    const HAWAII_TZ = "Pacific/Honolulu";
-    const hawaiiNowStr = new Date().toLocaleString("en-US", { timeZone: HAWAII_TZ });
-    const hawaiiNow = new Date(hawaiiNowStr);
-
-    const daysAhead = duration_minutes ? Math.ceil(duration_minutes / (24 * 60)) : 7; // Default 7 days
-
-    let calculatedStartDate: string;
-    let calculatedEndDate: string;
-
-    if (startDate && endDate) {
-      // Use legacy params if provided
-      calculatedStartDate = startDate;
-      calculatedEndDate = endDate;
-    } else {
-      // Auto-calculate: today (Hawaii time) through X days ahead
-      const yyyy = hawaiiNow.getFullYear();
-      const mm = String(hawaiiNow.getMonth() + 1).padStart(2, "0");
-      const dd = String(hawaiiNow.getDate()).padStart(2, "0");
-      calculatedStartDate = `${yyyy}-${mm}-${dd}`;
-      const endDateObj = new Date(hawaiiNow);
-      endDateObj.setDate(endDateObj.getDate() + daysAhead);
-      const ey = endDateObj.getFullYear();
-      const em = String(endDateObj.getMonth() + 1).padStart(2, "0");
-      const ed = String(endDateObj.getDate()).padStart(2, "0");
-      calculatedEndDate = `${ey}-${em}-${ed}`;
-    }
-
-    // Normalize time_preference
-    const timePreference = (time_preference || "any").toLowerCase();
-
+    // Get installation first to determine the location's timezone
     const installation = await getInstallation(resolvedLocationId);
     if (!installation) {
       return res.status(404).json({ success: false, error: "Installation not found" });
@@ -225,9 +214,30 @@ router.post("/free-slots", async (req: Request, res: Response) => {
 
     const tz = timezone || installation.timezone || "America/New_York";
 
-    // 15-minute buffer so we don't offer slots that are about to pass (in Hawaii time)
+    // Use luxon for reliable timezone handling
+    const localNow = DateTime.now().setZone(tz);
+    console.log(`[FreeSlots] Timezone: ${tz}, LocalNow: ${localNow.toFormat("yyyy-MM-dd HH:mm")}`);
+
+    const daysAhead = duration_minutes ? Math.ceil(duration_minutes / (24 * 60)) : 7;
+
+    let calculatedStartDate: string;
+    let calculatedEndDate: string;
+
+    if (startDate && endDate) {
+      calculatedStartDate = startDate;
+      calculatedEndDate = endDate;
+    } else {
+      // Auto-calculate using location's timezone
+      calculatedStartDate = localNow.toFormat("yyyy-MM-dd");
+      calculatedEndDate = localNow.plus({ days: daysAhead }).toFormat("yyyy-MM-dd");
+    }
+
+    // Normalize time_preference
+    const timePreference = (time_preference || "any").toLowerCase();
+
+    // 15-minute buffer so we don't offer slots that are about to pass
     const BUFFER_MS = 15 * 60 * 1000;
-    const nowPlusBuffer = hawaiiNow.getTime() + BUFFER_MS;
+    const nowPlusBuffer = localNow.toMillis() + BUFFER_MS;
 
     // Convert dates to Unix milliseconds for GHL API
     // Use the later of the requested start or "now + 15 min" so past slots aren't fetched
@@ -244,8 +254,8 @@ router.post("/free-slots", async (req: Request, res: Response) => {
     console.log("[Calendar] startDate:", calculatedStartDate, "-> requested:", requestedStartMs, "-> actual:", startMs);
     console.log("[Calendar] endDate:", calculatedEndDate, "->", endMs);
     console.log("[Calendar] timezone:", tz);
-    console.log("[Calendar] Hawaii now:", hawaiiNowStr);
-    console.log("[Calendar] nowPlusBuffer (Hawaii):", new Date(nowPlusBuffer).toLocaleString("en-US", { timeZone: HAWAII_TZ }));
+    console.log("[Calendar] localNow:", localNow.toFormat("yyyy-MM-dd HH:mm"));
+    console.log("[Calendar] nowPlusBuffer:", DateTime.fromMillis(nowPlusBuffer).setZone(tz).toFormat("yyyy-MM-dd HH:mm"));
 
     const client = await ghl.requests(resolvedLocationId);
 
@@ -301,11 +311,11 @@ router.post("/free-slots", async (req: Request, res: Response) => {
 
         const entry = rawData[dateKey];
         const daySlots: string[] = Array.isArray(entry) ? entry : (entry?.slots || []);
-        // Compare slot times in Hawaii local time to filter out past slots
+        // Compare slot times to filter out past slots using luxon
         const futureSlots = daySlots.filter((slot) => {
-          const slotHawaiiStr = new Date(slot).toLocaleString("en-US", { timeZone: HAWAII_TZ });
-          const slotHawaiiMs = new Date(slotHawaiiStr).getTime();
-          return slotHawaiiMs >= nowPlusBuffer;
+          // Parse the slot ISO string and compare against nowPlusBuffer
+          const slotMs = DateTime.fromISO(slot).toMillis();
+          return slotMs >= nowPlusBuffer;
         });
         // Apply time preference filter (morning/afternoon/any)
         const filteredSlots = filterByTimePreference(futureSlots, timePreference);
@@ -727,15 +737,10 @@ router.post("/location-info", async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, error: "Installation not found" });
     }
 
-    const tz = installation.timezone || "Pacific/Honolulu";
-    const localNow = new Date(new Date().toLocaleString("en-US", { timeZone: tz }));
-    const todayStr = localNow.toISOString().split("T")[0];
-    const currentTimeStr = localNow.toLocaleTimeString("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-      timeZone: tz
-    });
+    // Use luxon for reliable timezone handling
+    const tz = installation.timezone || "America/New_York";
+    const { todayStr, currentTimeStr } = getLocalTimeInfo(tz);
+    console.log(`[LocationInfo] Timezone: ${tz}, Today: ${todayStr}, CurrentTime: ${currentTimeStr}`);
 
     // Get business info
     const info = await getBusinessInfo(resolvedLocationId);
@@ -940,15 +945,13 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, error: "Installation not found" });
     }
 
-    const tz = installation.timezone || "Pacific/Honolulu";
-    const localNow = new Date(new Date().toLocaleString("en-US", { timeZone: tz }));
-    const todayStr = localNow.toISOString().split("T")[0];
-    const currentTimeStr = localNow.toLocaleTimeString("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-      timeZone: tz
-    });
+    // Use luxon for reliable timezone handling
+    const tz = installation.timezone || "America/New_York";
+    const timeInfo = getLocalTimeInfo(tz);
+    const todayStr = timeInfo.todayStr;
+    const currentTimeStr = timeInfo.currentTimeStr;
+    const localNow = timeInfo.now.toJSDate(); // For calculations that need Date object
+    console.log(`[Check] Timezone: ${tz}, Today: ${todayStr}, CurrentTime: ${currentTimeStr}`);
 
     // ========== PACKAGE AVAILABILITY ==========
     if (type === "package") {
@@ -1629,9 +1632,9 @@ router.post("/book", async (req: Request, res: Response) => {
         return res.status(404).json({ success: false, error: "Installation not found" });
       }
 
-      const tz = installation.timezone || "Pacific/Honolulu";
+      const tz = installation.timezone || "America/New_York";
       const client = await ghl.requests(locationId);
-      const localNow = new Date(new Date().toLocaleString("en-US", { timeZone: tz }));
+      const localNow = DateTime.now().setZone(tz).toJSDate();
 
       // Parse selected_date
       const parsedDate = parseRequestedDate(selectedDate, localNow);
@@ -1789,7 +1792,7 @@ router.post("/book", async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, error: "Installation not found" });
     }
 
-    const tz = installation.timezone || "Pacific/Honolulu";
+    const tz = installation.timezone || "America/New_York";
 
     // Resolve startTime - prefer full ISO datetime from slot, otherwise build from date+time
     let resolvedStartTime: string | null = null;
@@ -2347,12 +2350,13 @@ router.post("/book-package", async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, error: "Installation not found" });
     }
 
-    const tz = installation.timezone || "Pacific/Honolulu";
+    const tz = installation.timezone || "America/New_York";
     const client = await ghl.requests(resolvedLocationId);
 
-    // Get local time
-    const localNow = new Date(new Date().toLocaleString("en-US", { timeZone: tz }));
-    const todayStr = localNow.toISOString().split("T")[0];
+    // Get local time using luxon
+    const localNowLuxon = DateTime.now().setZone(tz);
+    const localNow = localNowLuxon.toJSDate();
+    const todayStr = localNowLuxon.toFormat("yyyy-MM-dd");
 
     // Parse requested_date or selected_date if provided
     let startDateFilter: string | null = null;
@@ -2604,8 +2608,8 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
       return res.status(404).json({ success: false, error: "Installation not found" });
     }
 
-    const tz = installation.timezone || "Pacific/Honolulu";
-    const localNow = new Date(new Date().toLocaleString("en-US", { timeZone: tz }));
+    const tz = installation.timezone || "America/New_York";
+    const localNow = DateTime.now().setZone(tz).toJSDate();
 
     // Parse requested_date if provided
     let startDateFilter: string | null = null;
@@ -2922,9 +2926,13 @@ async function findPackageDayAvailability(
     }
 
     if (cals.length === 0) {
-      console.log(`[BookPackage] No calendar found for service: ${service}`);
+      console.log(`[Package] No calendar found for service: ${service}`);
       return [];
     }
+
+    // DEBUG: Log staff members for this service
+    console.log(`[Package] Checking service: ${service}, calendars: ${cals.map(c => c.calendar_id).join(", ")}`);
+    console.log(`[Package] Staff members for "${service}":`, cals.map(c => ({ name: c.staff_name, user_id: c.user_id })));
 
     serviceCalendars.set(service, cals);
   }
@@ -2954,8 +2962,9 @@ async function findPackageDayAvailability(
     let slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${calendarId}/free-slots?startDate=${startMs}&endDate=${endDateMs}&timezone=${encodeURIComponent(tz)}`;
     if (userId && userId !== "any") {
       slotsUrl += `&userId=${encodeURIComponent(userId)}`;
-      console.log(`[BookPackage] Fetching slots for calendar ${calendarId} + staff ${userId}`);
     }
+    console.log(`[Package] Fetching slots for calendar ${calendarId}, userId=${userId || "none"}`);
+    console.log(`[Package] API URL: ${slotsUrl}`);
 
     try {
       const resp = await axios.get(slotsUrl, {
@@ -2973,6 +2982,12 @@ async function findPackageDayAvailability(
         const entry = rawData[dateKey];
         const slots: string[] = Array.isArray(entry) ? entry : entry?.slots || [];
         dateSlots.set(dateKey, slots);
+        // DEBUG: Log slots for each date
+        if (slots.length > 0) {
+          console.log(`[Package] Slots for ${key} on ${dateKey}: ${slots.length} slots, first: ${slots[0]}, last: ${slots[slots.length - 1]}`);
+        } else {
+          console.log(`[Package] Slots for ${key} on ${dateKey}: NO SLOTS`);
+        }
       }
 
       staffCalendarSlots.set(key, dateSlots);
@@ -3064,6 +3079,7 @@ async function findPackageDayAvailability(
           const endTimeISO = new Date(endTimeMs).toISOString();
 
           // Found valid slot for this service
+          console.log(`[Package] FOUND slot for "${service}": ${slotTime} - ${endTimeISO}, staff: ${cal.staff_name}, userId: ${cal.user_id}`);
           plan.push({
             service,
             startTime: slotTime,
@@ -3090,12 +3106,14 @@ async function findPackageDayAvailability(
     }
 
     if (dateWorks && plan.length === services.length) {
-      console.log(`[BookPackage] SUCCESS! Found valid day: ${dateKey}`);
+      console.log(`[Package] SUCCESS! Found valid day: ${dateKey}`);
+      console.log(`[Package] Plan for ${dateKey}:`, plan.map(s => `${s.service} @ ${s.startTime} by ${s.staff_name}`));
       results.push({ date: dateKey, slots: plan });
     }
   }
 
-  console.log(`[BookPackage] Found ${results.length} valid days out of ${DAYS_TO_SEARCH} searched`);
+  console.log(`[Package] Available dates found: ${results.map(r => r.date).join(", ") || "none"}`);
+  console.log(`[Package] Found ${results.length} valid days out of ${DAYS_TO_SEARCH} searched`);
   return results;
 }
 
