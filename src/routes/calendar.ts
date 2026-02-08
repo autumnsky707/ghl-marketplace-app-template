@@ -2893,24 +2893,32 @@ async function findPackageDayAvailability(
 
   console.log(`[BookPackage] Checking ${datesToCheck.length} dates for all ${services.length} services: ${datesToCheck.slice(0, 5).join(", ")}...`);
 
-  // Get calendars for each service
-  const serviceCalendars: Map<string, Array<{ calendar_id: string; staff_name: string | null }>> = new Map();
+  // Get calendars and staff for each service
+  // Track staff members with their user_id so we can fetch their specific availability
+  const serviceCalendars: Map<string, Array<{ calendar_id: string; staff_name: string | null; user_id: string | null }>> = new Map();
 
   for (const service of services) {
     const syncedCals = await getSyncedCalendarsForService(locationId, service);
-    const cals: Array<{ calendar_id: string; staff_name: string | null }> = [];
+    const cals: Array<{ calendar_id: string; staff_name: string | null; user_id: string | null }> = [];
 
     if (syncedCals.length > 0) {
       for (const cal of syncedCals) {
         const members = await getSyncedTeamMembers(locationId, cal.calendar_id);
-        const primaryMember = members.find((m) => m.is_primary) || members[0];
-        cals.push({
-          calendar_id: cal.calendar_id,
-          staff_name: primaryMember?.user_name || null,
-        });
+        // Add ALL staff members, not just primary - each can provide the service
+        for (const member of members) {
+          cals.push({
+            calendar_id: cal.calendar_id,
+            staff_name: member.user_name,
+            user_id: member.user_id,
+          });
+        }
+        // Fallback if no members found
+        if (members.length === 0) {
+          cals.push({ calendar_id: cal.calendar_id, staff_name: null, user_id: null });
+        }
       }
     } else if (installation.calendar_id) {
-      cals.push({ calendar_id: installation.calendar_id, staff_name: null });
+      cals.push({ calendar_id: installation.calendar_id, staff_name: null, user_id: null });
     }
 
     if (cals.length === 0) {
@@ -2921,23 +2929,33 @@ async function findPackageDayAvailability(
     serviceCalendars.set(service, cals);
   }
 
-  // Fetch free slots for each calendar over the search window
+  // Fetch free slots for each calendar+staff combination
+  // IMPORTANT: Pass userId to GHL so it checks that staff member's availability across ALL calendars
   const endDateMs = new Date(datesToCheck[datesToCheck.length - 1] + "T23:59:59").getTime();
   const startMs = Math.max(localNow.getTime() + BUFFER_MS, new Date(datesToCheck[0] + "T00:00:00").getTime());
 
-  // Map: calendar_id -> { date -> slots[] }
-  const calendarSlots: Map<string, Map<string, string[]>> = new Map();
-  const allCalendarIds = new Set<string>();
+  // Map: "calendar_id:user_id" -> { date -> slots[] }
+  // Using composite key to track per-staff availability
+  const staffCalendarSlots: Map<string, Map<string, string[]>> = new Map();
+  const staffCalendarKeys = new Set<string>();
 
   for (const cals of serviceCalendars.values()) {
     for (const cal of cals) {
-      allCalendarIds.add(cal.calendar_id);
+      const key = `${cal.calendar_id}:${cal.user_id || "any"}`;
+      staffCalendarKeys.add(key);
     }
   }
 
-  // Fetch slots for all calendars
-  for (const calendarId of allCalendarIds) {
-    const slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${calendarId}/free-slots?startDate=${startMs}&endDate=${endDateMs}&timezone=${encodeURIComponent(tz)}`;
+  // Fetch slots for each calendar+staff combination
+  for (const key of staffCalendarKeys) {
+    const [calendarId, userId] = key.split(":");
+
+    // Build URL with userId if available (this is critical for cross-calendar conflict detection)
+    let slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${calendarId}/free-slots?startDate=${startMs}&endDate=${endDateMs}&timezone=${encodeURIComponent(tz)}`;
+    if (userId && userId !== "any") {
+      slotsUrl += `&userId=${encodeURIComponent(userId)}`;
+      console.log(`[BookPackage] Fetching slots for calendar ${calendarId} + staff ${userId}`);
+    }
 
     try {
       const resp = await axios.get(slotsUrl, {
@@ -2957,10 +2975,19 @@ async function findPackageDayAvailability(
         dateSlots.set(dateKey, slots);
       }
 
-      calendarSlots.set(calendarId, dateSlots);
+      staffCalendarSlots.set(key, dateSlots);
     } catch (err: any) {
-      console.error(`[BookPackage] Error fetching slots for calendar ${calendarId}:`, err.message);
-      calendarSlots.set(calendarId, new Map());
+      console.error(`[BookPackage] Error fetching slots for ${key}:`, err.message);
+      staffCalendarSlots.set(key, new Map());
+    }
+  }
+
+  // Backward compat: also create calendarSlots map for code that uses it
+  const calendarSlots: Map<string, Map<string, string[]>> = new Map();
+  for (const [key, dateSlots] of staffCalendarSlots) {
+    const [calendarId] = key.split(":");
+    if (!calendarSlots.has(calendarId)) {
+      calendarSlots.set(calendarId, dateSlots);
     }
   }
 
@@ -3018,9 +3045,11 @@ async function findPackageDayAvailability(
       const cals = serviceCalendars.get(service) || [];
       let foundSlot = false;
 
-      // Try each calendar for this service
+      // Try each calendar+staff combination for this service
       for (const cal of cals) {
-        const dateSlots = calendarSlots.get(cal.calendar_id)?.get(dateKey) || [];
+        // Use staff-specific slots key for accurate cross-calendar conflict detection
+        const staffKey = `${cal.calendar_id}:${cal.user_id || "any"}`;
+        const dateSlots = staffCalendarSlots.get(staffKey)?.get(dateKey) || [];
 
         // Find a slot that starts at or after minStartTimeMs and matches time preference
         for (const slotTime of dateSlots) {
