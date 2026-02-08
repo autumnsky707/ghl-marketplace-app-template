@@ -252,14 +252,9 @@ app.get("/", function (req, res) {
   res.sendFile(path + "index.html");
 });
 
-// Package setup page (self-service for clients)
+// Setup page (packages and staff)
 app.get("/setup/packages", function (req, res) {
   res.sendFile(__dirname + "/setup-packages.html");
-});
-
-// Staff setup page (gender assignment for therapist preferences)
-app.get("/setup/staff", function (req, res) {
-  res.sendFile(__dirname + "/setup-staff.html");
 });
 
 app.listen(port, () => {

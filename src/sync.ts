@@ -69,24 +69,43 @@ export async function syncLocation(
     const calendars = resp.data?.calendars || [];
     console.log(`[Sync] Fetched ${calendars.length} calendars for ${locationId}`);
 
-    // Debug: Log raw response structure to find team member field
-    if (calendars.length > 0) {
-      const sampleCal = calendars[0];
-      console.log(`[Sync] Sample calendar keys:`, Object.keys(sampleCal));
-      console.log(`[Sync] Sample calendar raw:`, JSON.stringify(sampleCal, null, 2));
+    // Collect all unique userIds from team members across all calendars
+    const userIds = new Set<string>();
+    for (const cal of calendars) {
+      const calAny = cal as any;
+      const teamMembers = cal.teamMembers || calAny.team || calAny.users || calAny.assignedUsers || calAny.members || calAny.staff || calAny.selectedTeam || [];
+      for (const tm of teamMembers) {
+        const userId = tm.userId || tm.user_id || tm.id;
+        if (userId) userIds.add(userId);
+      }
+    }
 
-      // Check possible field names for team members
-      const possibleFields = ['teamMembers', 'team', 'users', 'assignedUsers', 'members', 'staff', 'selectedTeam'];
-      for (const field of possibleFields) {
-        if ((sampleCal as any)[field]) {
-          console.log(`[Sync] Found team data in field "${field}":`, JSON.stringify((sampleCal as any)[field], null, 2));
+    console.log(`[Sync] Found ${userIds.size} unique team members, fetching user details...`);
+
+    // Fetch user details from GHL Users API for each userId
+    const userDetailsMap = new Map<string, { name: string; email: string }>();
+    const client = await ghl.requests(locationId);
+
+    for (const userId of userIds) {
+      try {
+        const userResp = await client.get(`/users/${userId}`, {
+          headers: { Version: "2021-07-28" },
+        });
+        const user = userResp.data?.user || userResp.data;
+        if (user) {
+          const name = user.name || user.firstName || `${user.firstName || ''} ${user.lastName || ''}`.trim() || null;
+          const email = user.email || null;
+          userDetailsMap.set(userId, { name, email });
+          console.log(`[Sync] User ${userId}: ${name} (${email})`);
         }
+      } catch (err: any) {
+        console.log(`[Sync] Failed to fetch user ${userId}:`, err?.response?.status || err.message);
       }
     }
 
     // Clear old data and insert new
     await clearSyncedData(locationId);
-    const { calendarsCount, teamMembersCount } = await upsertSyncedCalendars(locationId, calendars);
+    const { calendarsCount, teamMembersCount } = await upsertSyncedCalendars(locationId, calendars, userDetailsMap);
 
     console.log(`[Sync] Sync complete for ${locationId}: ${calendarsCount} calendars, ${teamMembersCount} team members`);
 

@@ -609,7 +609,8 @@ export async function clearSyncedData(locationId: string): Promise<void> {
  */
 export async function upsertSyncedCalendars(
   locationId: string,
-  calendars: GHLCalendar[]
+  calendars: GHLCalendar[],
+  userDetailsMap?: Map<string, { name: string; email: string }>
 ): Promise<{ calendarsCount: number; teamMembersCount: number }> {
   let calendarsCount = 0;
   let teamMembersCount = 0;
@@ -643,21 +644,23 @@ export async function upsertSyncedCalendars(
     const calAny = cal as any;
     const teamMembers = cal.teamMembers || calAny.team || calAny.users || calAny.assignedUsers || calAny.members || calAny.staff || calAny.selectedTeam || [];
 
-    console.log(`[DB] Calendar "${cal.name}" team members field check: teamMembers=${!!cal.teamMembers}, team=${!!calAny.team}, users=${!!calAny.users}, assignedUsers=${!!calAny.assignedUsers}, found ${teamMembers.length} members`);
+    console.log(`[DB] Calendar "${cal.name}" (${cal.id}): found ${teamMembers.length} team members`);
 
     if (teamMembers && teamMembers.length > 0) {
       for (const tm of teamMembers) {
-        // Handle different field name conventions
         const userId = tm.userId || tm.user_id || tm.id;
-        const userName = tm.name || tm.userName || tm.user_name || tm.firstName || null;
-        const userEmail = tm.email || tm.userEmail || tm.user_email || null;
-        const isPrimary = tm.isPrimary || tm.is_primary || tm.primary || false;
-        const priority = Math.floor(Number(tm.priority || tm.order || 0));
 
         if (!userId) {
           console.log(`[DB] Skipping team member with no userId:`, JSON.stringify(tm));
           continue;
         }
+
+        // Get user details from the map (fetched from GHL Users API), fallback to calendar data
+        const userDetails = userDetailsMap?.get(userId);
+        const userName = userDetails?.name || tm.name || tm.userName || tm.user_name || tm.firstName || null;
+        const userEmail = userDetails?.email || tm.email || tm.userEmail || tm.user_email || null;
+        const isPrimary = tm.isPrimary || tm.is_primary || tm.primary || false;
+        const priority = Math.floor(Number(tm.priority || tm.order || 0));
 
         const memberRow: Partial<SyncedTeamMember> = {
           location_id: locationId,

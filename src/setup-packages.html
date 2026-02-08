@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Package Setup</title>
+  <title>Setup - Packages & Staff</title>
   <style>
     * {
       box-sizing: border-box;
@@ -209,6 +209,55 @@
       background: #eee;
       margin: 32px 0;
     }
+    .staff-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 0;
+      border-bottom: 1px solid #eee;
+    }
+    .staff-item:last-child {
+      border-bottom: none;
+    }
+    .staff-info h3 {
+      font-size: 15px;
+      font-weight: 500;
+      color: #111;
+      margin-bottom: 4px;
+    }
+    .staff-info .calendars {
+      color: #666;
+      font-size: 13px;
+    }
+    .gender-select {
+      padding: 8px 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 14px;
+      color: #111;
+      background: #fff;
+      cursor: pointer;
+      min-width: 120px;
+    }
+    .gender-select:focus {
+      outline: none;
+      border-color: #111;
+    }
+    .info-box {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 24px;
+    }
+    .info-box p {
+      font-size: 13px;
+      color: #64748b;
+      margin: 0;
+    }
+    .info-box p + p {
+      margin-top: 8px;
+    }
   </style>
 </head>
 <body>
@@ -259,6 +308,19 @@
       <h2>Your Packages</h2>
       <div id="packageList">
         <div class="loading">Loading packages...</div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="section">
+      <h2>Staff Gender</h2>
+      <div class="info-box">
+        <p>Assign gender to your team members so the AI receptionist can honor customer requests for a male or female therapist. For example, if a customer says "I'd prefer a female massage therapist," the system will only book staff members marked as female.</p>
+        <p>Staff without a gender assigned will be available to all customers regardless of preference.</p>
+      </div>
+      <div id="staffList">
+        <div class="loading">Loading staff...</div>
       </div>
     </div>
   </div>
@@ -421,8 +483,77 @@
       }
     }
 
+    async function loadStaff() {
+      try {
+        const resp = await fetch(`${API_BASE}/api/calendar/staff`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ locationId, action: 'list' })
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+          renderStaff(data.staff);
+        } else {
+          document.getElementById('staffList').innerHTML = '<div class="empty-state">Failed to load staff. Try syncing your calendars first.</div>';
+        }
+      } catch (err) {
+        document.getElementById('staffList').innerHTML = '<div class="empty-state">Failed to load staff.</div>';
+      }
+    }
+
+    function renderStaff(staff) {
+      const container = document.getElementById('staffList');
+
+      if (!staff || staff.length === 0) {
+        container.innerHTML = '<div class="empty-state">No staff members found. Make sure your calendars have team members assigned.</div>';
+        return;
+      }
+
+      container.innerHTML = staff.map(member => `
+        <div class="staff-item" data-id="${member.id}">
+          <div class="staff-info">
+            <h3>${member.user_name || 'Unknown'}</h3>
+            <div class="calendars">${member.calendars && member.calendars.length > 0 ? member.calendars.join(', ') : 'No calendars assigned'}</div>
+          </div>
+          <select class="gender-select" onchange="updateGender('${member.user_id}', this.value)">
+            <option value="" ${!member.gender ? 'selected' : ''}>Not set</option>
+            <option value="female" ${member.gender === 'female' ? 'selected' : ''}>Female</option>
+            <option value="male" ${member.gender === 'male' ? 'selected' : ''}>Male</option>
+          </select>
+        </div>
+      `).join('');
+    }
+
+    async function updateGender(userId, gender) {
+      try {
+        const resp = await fetch(`${API_BASE}/api/calendar/staff`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            locationId,
+            action: 'update-gender',
+            memberId: userId,
+            gender: gender || null
+          })
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+          showAlert('Gender updated successfully.', 'success');
+        } else {
+          showAlert(data.error || 'Failed to update gender.', 'error');
+          loadStaff();
+        }
+      } catch (err) {
+        showAlert('Failed to update gender.', 'error');
+        loadStaff();
+      }
+    }
+
     loadServices();
     loadPackages();
+    loadStaff();
   </script>
 </body>
 </html>

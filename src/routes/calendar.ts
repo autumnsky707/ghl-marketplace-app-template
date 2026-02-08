@@ -2200,16 +2200,34 @@ router.post("/staff", async (req: Request, res: Response) => {
     if (actionLower === "list") {
       const staff = await getUniqueTeamMembers(resolvedLocationId);
       const syncStatus = await getSyncStatus(resolvedLocationId);
+      const allCalendars = await getSyncedCalendars(resolvedLocationId);
 
-      return res.json({
-        success: true,
-        staff: staff.map((m) => ({
+      // For each staff member, find which calendars they're assigned to
+      const allTeamMembers = await getSyncedTeamMembers(resolvedLocationId, undefined);
+      const staffWithCalendars = staff.map((m) => {
+        // Find all calendar_ids this user is assigned to
+        const memberCalendarIds = (allTeamMembers as any[])
+          .filter((tm: any) => tm.user_id === m.user_id)
+          .map((tm: any) => tm.calendar_id);
+
+        // Get calendar names for those IDs
+        const assignedCalendars = allCalendars
+          .filter((cal) => memberCalendarIds.includes(cal.calendar_id))
+          .map((cal) => cal.calendar_name);
+
+        return {
           id: m.id,
           user_id: m.user_id,
           user_name: m.user_name,
           user_email: m.user_email,
           gender: m.gender,
-        })),
+          calendars: assignedCalendars,
+        };
+      });
+
+      return res.json({
+        success: true,
+        staff: staffWithCalendars,
         last_sync: syncStatus?.last_sync_at || null,
       });
     }
