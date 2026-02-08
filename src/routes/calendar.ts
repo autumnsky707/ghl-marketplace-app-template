@@ -995,7 +995,8 @@ router.post("/check-availability", async (req: Request, res: Response) => {
         tz,
         installation,
         localNow,
-        3
+        3,
+        therapist_preference
       );
 
       if (packagePlans.length === 0) {
@@ -1651,7 +1652,8 @@ router.post("/book", async (req: Request, res: Response) => {
         tz,
         installation,
         localNow,
-        1
+        1,
+        therapistPreference
       );
 
       type PackagePlan = {
@@ -2388,7 +2390,8 @@ router.post("/book-package", async (req: Request, res: Response) => {
       tz,
       installation,
       localNow,
-      1 // Only need 1 result for booking
+      1, // Only need 1 result for booking
+      therapist_preference
     );
 
     // If user selected a specific date, verify the result matches
@@ -2570,6 +2573,7 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
       package_name,
       time_preference,
       requested_date,
+      therapist_preference,
     } = req.body;
 
     const resolvedLocationId = locationId || location_id;
@@ -2585,7 +2589,7 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
       return res.status(400).json({ success: false, error: "Missing required field: time_preference" });
     }
 
-    console.log(`[CheckPackage] Checking availability for: ${package_name}, preference: ${time_preference}`);
+    console.log(`[CheckPackage] Checking availability for: ${package_name}, preference: ${time_preference}, therapist: ${therapist_preference || "(none)"}`);
 
     // Look up the package
     const pkg = await getPackageByName(resolvedLocationId, package_name);
@@ -2627,7 +2631,8 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
       tz,
       installation,
       localNow,
-      3 // Return up to 3 available dates
+      3, // Return up to 3 available dates
+      therapist_preference
     );
 
     if (packagePlans.length === 0) {
@@ -2871,7 +2876,8 @@ async function findPackageDayAvailability(
   tz: string,
   installation: any,
   localNow: Date,
-  maxResults: number = 1
+  maxResults: number = 1,
+  genderPreference?: string  // "male", "female", or undefined for no preference
 ): Promise<Array<{
   date: string;
   slots: Array<{
@@ -2896,6 +2902,10 @@ async function findPackageDayAvailability(
   }
 
   console.log(`[BookPackage] Checking ${datesToCheck.length} dates for all ${services.length} services: ${datesToCheck.slice(0, 5).join(", ")}...`);
+  console.log(`[BookPackage] Gender preference: ${genderPreference || "(none)"}`);
+
+  // Normalize gender preference
+  const normalizedGender = genderPreference?.toLowerCase() as "male" | "female" | undefined;
 
   // Get calendars and staff for each service
   // Track staff members with their user_id so we can fetch their specific availability
@@ -2907,8 +2917,16 @@ async function findPackageDayAvailability(
 
     if (syncedCals.length > 0) {
       for (const cal of syncedCals) {
-        const members = await getSyncedTeamMembers(locationId, cal.calendar_id);
-        // Add ALL staff members, not just primary - each can provide the service
+        let members = await getSyncedTeamMembers(locationId, cal.calendar_id);
+
+        // Filter by gender preference if specified
+        if (normalizedGender && ["male", "female"].includes(normalizedGender)) {
+          const beforeCount = members.length;
+          members = members.filter(m => m.gender === normalizedGender);
+          console.log(`[Package] Filtered by gender "${normalizedGender}": ${beforeCount} -> ${members.length} members for ${cal.calendar_id}`);
+        }
+
+        // Add staff members that match the gender preference
         for (const member of members) {
           cals.push({
             calendar_id: cal.calendar_id,
@@ -2916,8 +2934,8 @@ async function findPackageDayAvailability(
             user_id: member.user_id,
           });
         }
-        // Fallback if no members found
-        if (members.length === 0) {
+        // Fallback if no members found (only if no gender preference)
+        if (members.length === 0 && !normalizedGender) {
           cals.push({ calendar_id: cal.calendar_id, staff_name: null, user_id: null });
         }
       }
@@ -2926,7 +2944,7 @@ async function findPackageDayAvailability(
     }
 
     if (cals.length === 0) {
-      console.log(`[Package] No calendar found for service: ${service}`);
+      console.log(`[Package] No calendar/staff found for service: ${service} with gender preference: ${normalizedGender || "(none)"}`);
       return [];
     }
 
@@ -3191,6 +3209,11 @@ async function bookServiceAppointment(
       appointmentStatus: "confirmed",
       notes: appointmentNotes || undefined,
     };
+
+    // DEBUG: Log exact payload being sent to GHL
+    console.log(`[BookService] Creating appointment with payload:`, JSON.stringify(appointmentPayload, null, 2));
+    console.log(`[BookService] Notes being sent: "${appointmentNotes || '(none)'}"`);
+    console.log(`[BookService] therapistPreference param was: "${therapistPreference || '(none)'}"`);
 
     const appointmentResp = await client.post(
       "/calendars/events/appointments",
