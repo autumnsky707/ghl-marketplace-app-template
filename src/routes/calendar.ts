@@ -22,6 +22,7 @@ import {
   getCalendarsForStaffMember,
   getTeamMembersByGender,
   updateTeamMemberGender,
+  updateTeamMemberName,
   getUniqueTeamMembers,
   getPackages,
   getPackageByName,
@@ -2246,6 +2247,24 @@ router.post("/staff", async (req: Request, res: Response) => {
       }
 
       return res.json({ success: true, message: "Gender updated" });
+    }
+
+    if (actionLower === "update-name") {
+      if (!memberId) {
+        return res.status(400).json({ success: false, error: "Missing required field: memberId" });
+      }
+
+      const { name } = req.body;
+      if (!name || typeof name !== "string" || name.trim().length === 0) {
+        return res.status(400).json({ success: false, error: "Missing required field: name" });
+      }
+
+      const updated = await updateTeamMemberName(resolvedLocationId, memberId, name.trim());
+      if (!updated) {
+        return res.status(500).json({ success: false, error: "Failed to update name" });
+      }
+
+      return res.json({ success: true, message: "Name updated" });
     }
 
     return res.status(400).json({ success: false, error: `Unknown action: ${action}` });

@@ -258,6 +258,34 @@
     .info-box p + p {
       margin-top: 8px;
     }
+    .name-edit-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .name-input {
+      width: 160px;
+      padding: 6px 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    .name-input:focus {
+      outline: none;
+      border-color: #111;
+    }
+    .btn-save-name {
+      padding: 6px 12px;
+      background: #111;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .btn-save-name:hover {
+      background: #333;
+    }
   </style>
 </head>
 <body>
@@ -510,19 +538,62 @@
         return;
       }
 
-      container.innerHTML = staff.map(member => `
-        <div class="staff-item" data-id="${member.id}">
-          <div class="staff-info">
-            <h3>${member.user_name || 'Unknown'}</h3>
-            <div class="calendars">${member.calendars && member.calendars.length > 0 ? member.calendars.join(', ') : 'No calendars assigned'}</div>
+      container.innerHTML = staff.map(member => {
+        const hasName = member.user_name && member.user_name !== 'Unknown';
+        const nameHtml = hasName
+          ? `<h3>${member.user_name}</h3>`
+          : `<div class="name-edit-row">
+               <input type="text" class="name-input" id="name-${member.id}" placeholder="Enter name..." value="">
+               <button class="btn-save-name" onclick="saveName('${member.id}')">Save</button>
+             </div>`;
+
+        return `
+          <div class="staff-item" data-id="${member.id}">
+            <div class="staff-info">
+              ${nameHtml}
+              <div class="calendars">${member.calendars && member.calendars.length > 0 ? member.calendars.join(', ') : 'No calendars assigned'}</div>
+            </div>
+            <select class="gender-select" onchange="updateGender('${member.id}', this.value)">
+              <option value="" ${!member.gender ? 'selected' : ''}>Not set</option>
+              <option value="female" ${member.gender === 'female' ? 'selected' : ''}>Female</option>
+              <option value="male" ${member.gender === 'male' ? 'selected' : ''}>Male</option>
+            </select>
           </div>
-          <select class="gender-select" onchange="updateGender('${member.user_id}', this.value)">
-            <option value="" ${!member.gender ? 'selected' : ''}>Not set</option>
-            <option value="female" ${member.gender === 'female' ? 'selected' : ''}>Female</option>
-            <option value="male" ${member.gender === 'male' ? 'selected' : ''}>Male</option>
-          </select>
-        </div>
-      `).join('');
+        `;
+      }).join('');
+    }
+
+    async function saveName(memberId) {
+      const input = document.getElementById(`name-${memberId}`);
+      const name = input?.value?.trim();
+
+      if (!name) {
+        showAlert('Please enter a name.', 'error');
+        return;
+      }
+
+      try {
+        const resp = await fetch(`${API_BASE}/api/calendar/staff`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            locationId,
+            action: 'update-name',
+            memberId,
+            name
+          })
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+          showAlert('Name saved.', 'success');
+          loadStaff();
+        } else {
+          showAlert(data.error || 'Failed to save name.', 'error');
+        }
+      } catch (err) {
+        showAlert('Failed to save name.', 'error');
+      }
     }
 
     async function updateGender(userId, gender) {

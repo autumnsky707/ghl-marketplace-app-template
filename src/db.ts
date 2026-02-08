@@ -560,6 +560,28 @@ export async function updateTeamMemberGender(
 }
 
 /**
+ * Update team member name (for manual entry when API can't fetch it).
+ */
+export async function updateTeamMemberName(
+  locationId: string,
+  odMember: string,
+  name: string
+): Promise<boolean> {
+  const { error } = await supabase
+    .from(SYNCED_TEAM_MEMBERS_TABLE)
+    .update({ user_name: name })
+    .eq("location_id", locationId)
+    .eq("id", odMember);
+
+  if (error) {
+    console.error("[DB] updateTeamMemberName error:", error);
+    return false;
+  }
+
+  return true;
+}
+
+/**
  * Get all unique team members for a location (deduplicated by user_id).
  */
 export async function getUniqueTeamMembers(

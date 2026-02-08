@@ -82,44 +82,46 @@ export async function syncLocation(
 
     console.log(`[Sync] Found ${userIds.size} unique team members, fetching user details...`);
 
-    // Fetch user details from GHL Users API for each userId
+    // Fetch user details from GHL Location Members API
     const userDetailsMap = new Map<string, { name: string; email: string }>();
     const client = await ghl.requests(locationId);
 
-    for (const userId of userIds) {
-      try {
-        console.log(`[Sync] Fetching user details for: ${userId}`);
-        const userResp = await client.get(`/users/${userId}`, {
-          headers: { Version: "2021-07-28" },
-        });
+    // Try GET /locations/{locationId}/members first (covered by locations.readonly scope)
+    try {
+      console.log(`[Sync] Fetching location members from /locations/${locationId}/members`);
+      const membersResp = await client.get(`/locations/${locationId}/members`, {
+        headers: { Version: "2021-07-28" },
+      });
 
-        // Log full response for debugging
-        console.log(`[Sync] User API response for ${userId}:`, JSON.stringify(userResp.data, null, 2));
+      console.log(`[Sync] Location members response:`, JSON.stringify(membersResp.data, null, 2));
 
-        const user = userResp.data?.user || userResp.data;
-        if (user) {
-          // Try multiple field combinations for name
-          const name = user.name ||
-                       (user.firstName && user.lastName ? `${user.firstName} ${user.lastName}` : null) ||
-                       user.firstName ||
-                       user.lastName ||
+      // Extract users from response - try different possible structures
+      const members = membersResp.data?.members || membersResp.data?.users || membersResp.data || [];
+
+      if (Array.isArray(members)) {
+        for (const member of members) {
+          const userId = member.userId || member.id;
+          if (!userId) continue;
+
+          const name = member.name ||
+                       (member.firstName && member.lastName ? `${member.firstName} ${member.lastName}` : null) ||
+                       member.firstName ||
+                       member.lastName ||
                        null;
-          const email = user.email || null;
+          const email = member.email || null;
 
-          if (name) {
+          if (name && userIds.has(userId)) {
             userDetailsMap.set(userId, { name, email });
-            console.log(`[Sync] User ${userId}: ${name} (${email})`);
-          } else {
-            console.log(`[Sync] User ${userId}: No name found in response`);
+            console.log(`[Sync] Found member ${userId}: ${name} (${email})`);
           }
-        } else {
-          console.log(`[Sync] User ${userId}: Empty response data`);
         }
-      } catch (err: any) {
-        console.log(`[Sync] Failed to fetch user ${userId}:`, err?.response?.status || err.message);
-        if (err?.response?.data) {
-          console.log(`[Sync] Error response:`, JSON.stringify(err.response.data, null, 2));
-        }
+      }
+
+      console.log(`[Sync] Matched ${userDetailsMap.size} of ${userIds.size} team members from location members`);
+    } catch (err: any) {
+      console.log(`[Sync] Location members API failed:`, err?.response?.status || err.message);
+      if (err?.response?.data) {
+        console.log(`[Sync] Error response:`, JSON.stringify(err.response.data, null, 2));
       }
     }
 
