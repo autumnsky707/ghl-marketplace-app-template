@@ -258,44 +258,29 @@
     .info-box p + p {
       margin-top: 8px;
     }
-    .name-edit-row {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-    }
-    .name-input {
-      width: 160px;
-      padding: 6px 10px;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      font-size: 14px;
-    }
-    .name-input:focus {
-      outline: none;
-      border-color: #111;
-    }
-    .btn-save-name {
-      padding: 6px 12px;
-      background: #111;
-      color: #fff;
-      border: none;
-      border-radius: 4px;
-      font-size: 13px;
-      cursor: pointer;
-    }
-    .btn-save-name:hover {
-      background: #333;
-    }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="header">
-      <h1>Package Setup</h1>
-      <p class="subtitle">Create service packages for your customers.</p>
+      <h1>Setup</h1>
+      <p class="subtitle">Configure your staff and packages.</p>
     </div>
 
     <div id="alert" class="alert hidden"></div>
+
+    <div class="section">
+      <h2>Staff Gender</h2>
+      <div class="info-box">
+        <p>Assign gender to your team members so the AI receptionist can honor customer requests for a male or female therapist. For example, if a customer says "I'd prefer a female massage therapist," the system will only book staff members marked as female.</p>
+        <p>Staff without a gender assigned will be available to all customers regardless of preference.</p>
+      </div>
+      <div id="staffList">
+        <div class="loading">Loading staff...</div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
 
     <div class="section">
       <h2>Add New Package</h2>
@@ -336,19 +321,6 @@
       <h2>Your Packages</h2>
       <div id="packageList">
         <div class="loading">Loading packages...</div>
-      </div>
-    </div>
-
-    <div class="divider"></div>
-
-    <div class="section">
-      <h2>Staff Gender</h2>
-      <div class="info-box">
-        <p>Assign gender to your team members so the AI receptionist can honor customer requests for a male or female therapist. For example, if a customer says "I'd prefer a female massage therapist," the system will only book staff members marked as female.</p>
-        <p>Staff without a gender assigned will be available to all customers regardless of preference.</p>
-      </div>
-      <div id="staffList">
-        <div class="loading">Loading staff...</div>
       </div>
     </div>
   </div>
@@ -538,65 +510,22 @@
         return;
       }
 
-      container.innerHTML = staff.map(member => {
-        const hasName = member.user_name && member.user_name !== 'Unknown';
-        const nameHtml = hasName
-          ? `<h3>${member.user_name}</h3>`
-          : `<div class="name-edit-row">
-               <input type="text" class="name-input" id="name-${member.id}" placeholder="Enter name..." value="">
-               <button class="btn-save-name" onclick="saveName('${member.id}')">Save</button>
-             </div>`;
-
-        return `
-          <div class="staff-item" data-id="${member.id}">
-            <div class="staff-info">
-              ${nameHtml}
-              <div class="calendars">${member.calendars && member.calendars.length > 0 ? member.calendars.join(', ') : 'No calendars assigned'}</div>
-            </div>
-            <select class="gender-select" onchange="updateGender('${member.id}', this.value)">
-              <option value="" ${!member.gender ? 'selected' : ''}>Not set</option>
-              <option value="female" ${member.gender === 'female' ? 'selected' : ''}>Female</option>
-              <option value="male" ${member.gender === 'male' ? 'selected' : ''}>Male</option>
-            </select>
+      container.innerHTML = staff.map(member => `
+        <div class="staff-item" data-id="${member.id}">
+          <div class="staff-info">
+            <h3>${member.user_name || 'Unknown'}</h3>
+            <div class="calendars">${member.calendars && member.calendars.length > 0 ? member.calendars.join(', ') : 'No calendars assigned'}</div>
           </div>
-        `;
-      }).join('');
+          <select class="gender-select" onchange="updateGender('${member.id}', this.value)">
+            <option value="" ${!member.gender ? 'selected' : ''}>Not set</option>
+            <option value="female" ${member.gender === 'female' ? 'selected' : ''}>Female</option>
+            <option value="male" ${member.gender === 'male' ? 'selected' : ''}>Male</option>
+          </select>
+        </div>
+      `).join('');
     }
 
-    async function saveName(memberId) {
-      const input = document.getElementById(`name-${memberId}`);
-      const name = input?.value?.trim();
-
-      if (!name) {
-        showAlert('Please enter a name.', 'error');
-        return;
-      }
-
-      try {
-        const resp = await fetch(`${API_BASE}/api/calendar/staff`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            locationId,
-            action: 'update-name',
-            memberId,
-            name
-          })
-        });
-        const data = await resp.json();
-
-        if (data.success) {
-          showAlert('Name saved.', 'success');
-          loadStaff();
-        } else {
-          showAlert(data.error || 'Failed to save name.', 'error');
-        }
-      } catch (err) {
-        showAlert('Failed to save name.', 'error');
-      }
-    }
-
-    async function updateGender(userId, gender) {
+    async function updateGender(memberId, gender) {
       try {
         const resp = await fetch(`${API_BASE}/api/calendar/staff`, {
           method: 'POST',
@@ -604,7 +533,7 @@
           body: JSON.stringify({
             locationId,
             action: 'update-gender',
-            memberId: userId,
+            memberId,
             gender: gender || null
           })
         });
