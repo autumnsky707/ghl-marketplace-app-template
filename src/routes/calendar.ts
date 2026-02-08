@@ -933,7 +933,8 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       requested_date,
       requested_time,
       start_after,
-      therapist_preference
+      therapist_preference,
+      strict_gender  // When true, apply gender filter strictly to ALL services (no fallback)
     } = req.body;
     const resolvedLocationId = locationId || location_id;
 
@@ -997,7 +998,8 @@ router.post("/check-availability", async (req: Request, res: Response) => {
         installation,
         localNow,
         3,
-        therapist_preference
+        therapist_preference,
+        strict_gender === true  // Pass strict gender mode
       );
 
       if (packagePlans.length === 0) {
@@ -1026,11 +1028,17 @@ router.post("/check-availability", async (req: Request, res: Response) => {
             service: slot.service,
             start_time: formatTimeForVoice(new Date(slot.startTime), tz),
             end_time: formatTimeForVoice(new Date(slot.endTime), tz),
+            staff_name: slot.staff_name,
+            is_gender_fallback: slot.is_gender_fallback || false,
           })),
+          gender_conflicts: plan.gender_conflicts,  // Include any gender conflicts
         };
       });
 
       console.log(`[CheckAvailability] Package: found ${available_dates.length} available dates`);
+
+      // Check if first result has gender conflicts (for agent to handle)
+      const firstDayConflicts = packagePlans[0]?.gender_conflicts;
 
       return res.json({
         success: true,
@@ -1041,6 +1049,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
         currentTime: currentTimeStr,
         timezone: tz,
         available_dates,
+        gender_conflicts: firstDayConflicts,  // Surface conflicts at top level for agent
       });
     }
 
@@ -1588,6 +1597,7 @@ router.post("/book", async (req: Request, res: Response) => {
     const customerEmail = body.customerEmail || body.customer_email || body.email;
     const customerPhone = body.customerPhone || body.customer_phone || body.phone;
     const therapistPreference = body.therapistPreference || body.therapist_preference;
+    const strictGender = body.strictGender || body.strict_gender;  // When true, no gender fallback
     const notes = body.notes;
 
     // ========== PACKAGE BOOKING ==========
@@ -1654,20 +1664,11 @@ router.post("/book", async (req: Request, res: Response) => {
         installation,
         localNow,
         1,
-        therapistPreference
+        therapistPreference,
+        strictGender === true  // Pass strict gender mode
       );
 
-      type PackagePlan = {
-        date: string;
-        slots: Array<{
-          service: string;
-          startTime: string;
-          endTime: string;
-          calendar_id: string;
-          staff_name: string | null;
-        }>;
-      };
-      const packagePlan: PackagePlan | null = packagePlans[0] || null;
+      const packagePlan = packagePlans[0] || null;
 
       if (!packagePlan || packagePlan.date !== parsedDate) {
         const alternativePreference = timePreference === "afternoon" ? "morning" : "afternoon";
@@ -1771,6 +1772,7 @@ router.post("/book", async (req: Request, res: Response) => {
         total_duration_minutes: pkg.total_duration_minutes,
         appointments: confirmedAppointments,
         confirmation_message: confirmationMessage,
+        gender_conflicts: packagePlan?.gender_conflicts,  // Surface any gender fallbacks used
       });
     }
 
@@ -2345,6 +2347,7 @@ router.post("/book-package", async (req: Request, res: Response) => {
       email,
       notes,
       therapist_preference,
+      strict_gender,  // When true, no gender fallback for any service
     } = req.body;
 
     const resolvedLocationId = locationId || location_id;
@@ -2428,21 +2431,12 @@ router.post("/book-package", async (req: Request, res: Response) => {
       installation,
       localNow,
       1, // Only need 1 result for booking
-      therapist_preference
+      therapist_preference,
+      strict_gender === true  // Pass strict gender mode
     );
 
     // If user selected a specific date, verify the result matches
-    type PackagePlan = {
-      date: string;
-      slots: Array<{
-        service: string;
-        startTime: string;
-        endTime: string;
-        calendar_id: string;
-        staff_name: string | null;
-      }>;
-    };
-    let packagePlan: PackagePlan | null = packagePlans[0] || null;
+    let packagePlan = packagePlans[0] || null;
 
     if (specificDate && packagePlan && packagePlan.date !== specificDate) {
       // The specific date doesn't work, return error
@@ -2581,6 +2575,7 @@ router.post("/book-package", async (req: Request, res: Response) => {
       total_duration_minutes: pkg.total_duration_minutes,
       appointments: confirmedAppointments,
       confirmation_message: confirmationMessage,
+      gender_conflicts: packagePlan.gender_conflicts,  // Surface any gender fallbacks used
     });
 
   } catch (error: any) {
@@ -2611,6 +2606,7 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
       time_preference,
       requested_date,
       therapist_preference,
+      strict_gender,  // When true, no gender fallback for any service
     } = req.body;
 
     const resolvedLocationId = locationId || location_id;
@@ -2669,7 +2665,8 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
       installation,
       localNow,
       3, // Return up to 3 available dates
-      therapist_preference
+      therapist_preference,
+      strict_gender === true  // Pass strict gender mode
     );
 
     if (packagePlans.length === 0) {
@@ -2696,14 +2693,21 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
           service: slot.service,
           start_time: formatTimeForVoice(new Date(slot.startTime), tz),
           end_time: formatTimeForVoice(new Date(slot.endTime), tz),
+          staff_name: slot.staff_name,
+          is_gender_fallback: slot.is_gender_fallback || false,
         })),
+        gender_conflicts: plan.gender_conflicts,  // Include any gender conflicts
       };
     });
 
     console.log(`[CheckPackage] Found ${available_dates.length} available dates`);
 
+    // Surface first day's conflicts at top level for agent
+    const firstDayConflicts = packagePlans[0]?.gender_conflicts;
+
     return res.json({
       success: true,
+      gender_conflicts: firstDayConflicts,
       package_name: pkg.package_name,
       total_price: pkg.price,
       total_duration_minutes: pkg.total_duration_minutes,
@@ -2905,6 +2909,38 @@ async function findServiceAvailability(
  * Find days where ALL package services can be booked consecutively.
  * Returns up to maxResults valid days, or empty array if none found.
  */
+// Gender conflict info returned when non-massage service can't match gender preference
+interface GenderConflict {
+  gender_conflict: true;
+  service: string;
+  date: string;
+  available_staff: string;
+  staff_gender: string;
+  message: string;
+}
+
+// Extended result type that includes gender conflicts
+interface PackageDayResult {
+  date: string;
+  slots: Array<{
+    service: string;
+    startTime: string;
+    endTime: string;
+    calendar_id: string;
+    staff_name: string | null;
+    staff_gender?: string | null;
+    is_gender_fallback?: boolean;
+  }>;
+  gender_conflicts?: GenderConflict[];
+}
+
+// Helper to check if a service is a massage type (gender filter always strict)
+function isMassageService(serviceName: string, calendarName?: string): boolean {
+  const lowerService = serviceName.toLowerCase();
+  const lowerCalendar = (calendarName || "").toLowerCase();
+  return lowerService.includes("massage") || lowerCalendar.includes("massage");
+}
+
 async function findPackageDayAvailability(
   locationId: string,
   services: string[],
@@ -2914,17 +2950,9 @@ async function findPackageDayAvailability(
   installation: any,
   localNow: Date,
   maxResults: number = 1,
-  genderPreference?: string  // "male", "female", or undefined for no preference
-): Promise<Array<{
-  date: string;
-  slots: Array<{
-    service: string;
-    startTime: string;
-    endTime: string;
-    calendar_id: string;
-    staff_name: string | null;
-  }>;
-}>> {
+  genderPreference?: string,  // "male", "female", or undefined for no preference
+  strictGender: boolean = false  // When true, apply gender filter strictly to ALL services
+): Promise<PackageDayResult[]> {
   const DAYS_TO_SEARCH = 14;
   const BUFFER_MS = 15 * 60 * 1000;
 
@@ -2939,72 +2967,98 @@ async function findPackageDayAvailability(
   }
 
   console.log(`[BookPackage] Checking ${datesToCheck.length} dates for all ${services.length} services: ${datesToCheck.slice(0, 5).join(", ")}...`);
-  console.log(`[BookPackage] Gender preference: ${genderPreference || "(none)"}`);
+  console.log(`[BookPackage] Gender preference: ${genderPreference || "(none)"}, strict mode: ${strictGender}`);
 
   // Normalize gender preference
   const normalizedGender = genderPreference?.toLowerCase() as "male" | "female" | undefined;
 
   // Get calendars and staff for each service
-  // Track staff members with their user_id so we can fetch their specific availability
-  const serviceCalendars: Map<string, Array<{ calendar_id: string; staff_name: string | null; user_id: string | null }>> = new Map();
+  // Track BOTH matching gender staff AND all staff (for fallback on non-massage services)
+  interface StaffInfo {
+    calendar_id: string;
+    calendar_name: string | null;
+    staff_name: string | null;
+    user_id: string | null;
+    gender: "male" | "female" | null;
+    matches_preference: boolean;
+  }
+
+  const serviceStaff: Map<string, StaffInfo[]> = new Map();
 
   for (const service of services) {
     const syncedCals = await getSyncedCalendarsForService(locationId, service);
-    const cals: Array<{ calendar_id: string; staff_name: string | null; user_id: string | null }> = [];
+    const allStaff: StaffInfo[] = [];
 
     if (syncedCals.length > 0) {
       for (const cal of syncedCals) {
-        let members = await getSyncedTeamMembers(locationId, cal.calendar_id);
+        const members = await getSyncedTeamMembers(locationId, cal.calendar_id);
 
-        // Filter by gender preference if specified
-        if (normalizedGender && ["male", "female"].includes(normalizedGender)) {
-          const beforeCount = members.length;
-          members = members.filter(m => m.gender === normalizedGender);
-          console.log(`[Package] Filtered by gender "${normalizedGender}": ${beforeCount} -> ${members.length} members for ${cal.calendar_id}`);
-        }
-
-        // Add staff members that match the gender preference
         for (const member of members) {
-          cals.push({
+          const matchesPreference = !normalizedGender || member.gender === normalizedGender;
+          allStaff.push({
             calendar_id: cal.calendar_id,
+            calendar_name: cal.calendar_name,
             staff_name: member.user_name,
             user_id: member.user_id,
+            gender: member.gender as "male" | "female" | null,
+            matches_preference: matchesPreference,
           });
         }
-        // Fallback if no members found (only if no gender preference)
-        if (members.length === 0 && !normalizedGender) {
-          cals.push({ calendar_id: cal.calendar_id, staff_name: null, user_id: null });
+
+        // Fallback if no members found
+        if (members.length === 0) {
+          allStaff.push({
+            calendar_id: cal.calendar_id,
+            calendar_name: cal.calendar_name,
+            staff_name: null,
+            user_id: null,
+            gender: null,
+            matches_preference: true,  // No gender info means no filtering
+          });
         }
       }
     } else if (installation.calendar_id) {
-      cals.push({ calendar_id: installation.calendar_id, staff_name: null, user_id: null });
+      allStaff.push({
+        calendar_id: installation.calendar_id,
+        calendar_name: null,
+        staff_name: null,
+        user_id: null,
+        gender: null,
+        matches_preference: true,
+      });
     }
 
-    if (cals.length === 0) {
-      console.log(`[Package] No calendar/staff found for service: ${service} with gender preference: ${normalizedGender || "(none)"}`);
+    if (allStaff.length === 0) {
+      console.log(`[Package] No calendar/staff found for service: ${service}`);
       return [];
     }
 
-    // DEBUG: Log staff members for this service
-    console.log(`[Package] Checking service: ${service}, calendars: ${cals.map(c => c.calendar_id).join(", ")}`);
-    console.log(`[Package] Staff members for "${service}":`, cals.map(c => ({ name: c.staff_name, user_id: c.user_id })));
+    const isMassage = isMassageService(service, allStaff[0]?.calendar_name || undefined);
+    const matchingStaff = allStaff.filter(s => s.matches_preference);
+    const nonMatchingStaff = allStaff.filter(s => !s.matches_preference);
 
-    serviceCalendars.set(service, cals);
+    console.log(`[Package] Service "${service}" (massage: ${isMassage}): ${matchingStaff.length} matching, ${nonMatchingStaff.length} non-matching staff`);
+
+    // For massage services with gender preference: ONLY use matching staff
+    // For non-massage services: prefer matching, but keep fallback options
+    if (isMassage && normalizedGender && matchingStaff.length === 0) {
+      console.log(`[Package] Massage service "${service}" has no ${normalizedGender} staff - will skip days with no availability`);
+    }
+
+    serviceStaff.set(service, allStaff);
   }
 
   // Fetch free slots for each calendar+staff combination
-  // IMPORTANT: Pass userId to GHL so it checks that staff member's availability across ALL calendars
   const endDateMs = new Date(datesToCheck[datesToCheck.length - 1] + "T23:59:59").getTime();
   const startMs = Math.max(localNow.getTime() + BUFFER_MS, new Date(datesToCheck[0] + "T00:00:00").getTime());
 
   // Map: "calendar_id:user_id" -> { date -> slots[] }
-  // Using composite key to track per-staff availability
   const staffCalendarSlots: Map<string, Map<string, string[]>> = new Map();
   const staffCalendarKeys = new Set<string>();
 
-  for (const cals of serviceCalendars.values()) {
-    for (const cal of cals) {
-      const key = `${cal.calendar_id}:${cal.user_id || "any"}`;
+  for (const staffList of serviceStaff.values()) {
+    for (const staff of staffList) {
+      const key = `${staff.calendar_id}:${staff.user_id || "any"}`;
       staffCalendarKeys.add(key);
     }
   }
@@ -3013,13 +3067,11 @@ async function findPackageDayAvailability(
   for (const key of staffCalendarKeys) {
     const [calendarId, userId] = key.split(":");
 
-    // Build URL with userId if available (this is critical for cross-calendar conflict detection)
     let slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${calendarId}/free-slots?startDate=${startMs}&endDate=${endDateMs}&timezone=${encodeURIComponent(tz)}`;
     if (userId && userId !== "any") {
       slotsUrl += `&userId=${encodeURIComponent(userId)}`;
     }
     console.log(`[Package] Fetching slots for calendar ${calendarId}, userId=${userId || "none"}`);
-    console.log(`[Package] API URL: ${slotsUrl}`);
 
     try {
       const resp = await axios.get(slotsUrl, {
@@ -3037,27 +3089,12 @@ async function findPackageDayAvailability(
         const entry = rawData[dateKey];
         const slots: string[] = Array.isArray(entry) ? entry : entry?.slots || [];
         dateSlots.set(dateKey, slots);
-        // DEBUG: Log slots for each date
-        if (slots.length > 0) {
-          console.log(`[Package] Slots for ${key} on ${dateKey}: ${slots.length} slots, first: ${slots[0]}, last: ${slots[slots.length - 1]}`);
-        } else {
-          console.log(`[Package] Slots for ${key} on ${dateKey}: NO SLOTS`);
-        }
       }
 
       staffCalendarSlots.set(key, dateSlots);
     } catch (err: any) {
       console.error(`[BookPackage] Error fetching slots for ${key}:`, err.message);
       staffCalendarSlots.set(key, new Map());
-    }
-  }
-
-  // Backward compat: also create calendarSlots map for code that uses it
-  const calendarSlots: Map<string, Map<string, string[]>> = new Map();
-  for (const [key, dateSlots] of staffCalendarSlots) {
-    const [calendarId] = key.split(":");
-    if (!calendarSlots.has(calendarId)) {
-      calendarSlots.set(calendarId, dateSlots);
     }
   }
 
@@ -3081,17 +3118,16 @@ async function findPackageDayAvailability(
     };
   };
 
+  // Format date for display
+  const formatDateForDisplay = (dateKey: string): string => {
+    const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const d = new Date(dateKey + "T12:00:00");
+    return `${dayNames[d.getDay()]} ${monthNames[d.getMonth()]} ${d.getDate()}`;
+  };
+
   // Collect valid dates
-  const results: Array<{
-    date: string;
-    slots: Array<{
-      service: string;
-      startTime: string;
-      endTime: string;
-      calendar_id: string;
-      staff_name: string | null;
-    }>;
-  }> = [];
+  const results: PackageDayResult[] = [];
 
   // Try each date
   for (const dateKey of datesToCheck) {
@@ -3100,57 +3136,110 @@ async function findPackageDayAvailability(
     console.log(`[BookPackage] Checking date: ${dateKey}`);
 
     // Try to find slots for all services on this date
-    const plan: Array<{
-      service: string;
-      startTime: string;
-      endTime: string;
-      calendar_id: string;
-      staff_name: string | null;
-    }> = [];
+    const plan: PackageDayResult["slots"] = [];
+    const genderConflicts: GenderConflict[] = [];
 
     let minStartTimeMs = Math.max(localNow.getTime() + BUFFER_MS, new Date(dateKey + "T00:00:00").getTime());
     let dateWorks = true;
 
     for (const service of services) {
-      const cals = serviceCalendars.get(service) || [];
-      let foundSlot = false;
+      const allStaff = serviceStaff.get(service) || [];
+      const isMassage = isMassageService(service, allStaff[0]?.calendar_name || undefined);
 
-      // Try each calendar+staff combination for this service
-      for (const cal of cals) {
-        // Use staff-specific slots key for accurate cross-calendar conflict detection
-        const staffKey = `${cal.calendar_id}:${cal.user_id || "any"}`;
+      // Separate matching and non-matching staff
+      const matchingStaff = allStaff.filter(s => s.matches_preference);
+      const nonMatchingStaff = allStaff.filter(s => !s.matches_preference);
+
+      let foundSlot = false;
+      let usedFallback = false;
+      let fallbackStaff: StaffInfo | null = null;
+
+      // First, try to find a slot with gender-matching staff
+      for (const staff of matchingStaff) {
+        const staffKey = `${staff.calendar_id}:${staff.user_id || "any"}`;
         const dateSlots = staffCalendarSlots.get(staffKey)?.get(dateKey) || [];
 
-        // Find a slot that starts at or after minStartTimeMs and matches time preference
         for (const slotTime of dateSlots) {
           const slotMs = new Date(slotTime).getTime();
-
           if (slotMs < minStartTimeMs) continue;
           if (!matchesTimePreference(slotTime)) continue;
 
-          // Calculate when this service ends (with buffer) for next service
-          const timing = await getCalendarTiming(cal.calendar_id);
+          const timing = await getCalendarTiming(staff.calendar_id);
           const endTimeMs = slotMs + timing.duration;
           const endTimeISO = new Date(endTimeMs).toISOString();
 
-          // Found valid slot for this service
-          console.log(`[Package] FOUND slot for "${service}": ${slotTime} - ${endTimeISO}, staff: ${cal.staff_name}, userId: ${cal.user_id}`);
+          console.log(`[Package] ${isMassage ? "Massage" : "Service"} "${service}" filtered by gender ${normalizedGender}: using ${staff.staff_name}`);
           plan.push({
             service,
             startTime: slotTime,
             endTime: endTimeISO,
-            calendar_id: cal.calendar_id,
-            staff_name: cal.staff_name,
+            calendar_id: staff.calendar_id,
+            staff_name: staff.staff_name,
+            staff_gender: staff.gender,
+            is_gender_fallback: false,
           });
 
-          // Next service starts after this one ends + buffer
           minStartTimeMs = endTimeMs + timing.buffer;
-
           foundSlot = true;
           break;
         }
-
         if (foundSlot) break;
+      }
+
+      // If no matching staff found and this is NOT a massage service (and not strict mode),
+      // try fallback to non-matching staff
+      if (!foundSlot && !isMassage && !strictGender && normalizedGender && nonMatchingStaff.length > 0) {
+        for (const staff of nonMatchingStaff) {
+          const staffKey = `${staff.calendar_id}:${staff.user_id || "any"}`;
+          const dateSlots = staffCalendarSlots.get(staffKey)?.get(dateKey) || [];
+
+          for (const slotTime of dateSlots) {
+            const slotMs = new Date(slotTime).getTime();
+            if (slotMs < minStartTimeMs) continue;
+            if (!matchesTimePreference(slotTime)) continue;
+
+            const timing = await getCalendarTiming(staff.calendar_id);
+            const endTimeMs = slotMs + timing.duration;
+            const endTimeISO = new Date(endTimeMs).toISOString();
+
+            console.log(`[Package] ${service}: no ${normalizedGender} staff, fallback to ${staff.staff_name} (${staff.gender})`);
+            plan.push({
+              service,
+              startTime: slotTime,
+              endTime: endTimeISO,
+              calendar_id: staff.calendar_id,
+              staff_name: staff.staff_name,
+              staff_gender: staff.gender,
+              is_gender_fallback: true,
+            });
+
+            // Record gender conflict
+            const formattedDate = formatDateForDisplay(dateKey);
+            genderConflicts.push({
+              gender_conflict: true,
+              service: service,
+              date: dateKey,
+              available_staff: `${staff.staff_name} (${staff.gender})`,
+              staff_gender: staff.gender || "unknown",
+              message: `No ${normalizedGender} staff available for ${service} on ${formattedDate}. ${staff.staff_name} (${staff.gender}) is available.`,
+            });
+            console.log(`[Package] Gender conflict returned to agent for ${service}`);
+
+            minStartTimeMs = endTimeMs + timing.buffer;
+            foundSlot = true;
+            usedFallback = true;
+            fallbackStaff = staff;
+            break;
+          }
+          if (foundSlot) break;
+        }
+      }
+
+      // If strict gender mode and we're about to use fallback, skip this day
+      if (strictGender && !foundSlot && normalizedGender) {
+        console.log(`[Package] Strict gender mode: skipping ${dateKey}, no ${normalizedGender} ${service} staff`);
+        dateWorks = false;
+        break;
       }
 
       if (!foundSlot) {
@@ -3162,8 +3251,13 @@ async function findPackageDayAvailability(
 
     if (dateWorks && plan.length === services.length) {
       console.log(`[Package] SUCCESS! Found valid day: ${dateKey}`);
-      console.log(`[Package] Plan for ${dateKey}:`, plan.map(s => `${s.service} @ ${s.startTime} by ${s.staff_name}`));
-      results.push({ date: dateKey, slots: plan });
+      console.log(`[Package] Plan for ${dateKey}:`, plan.map(s => `${s.service} @ ${s.startTime} by ${s.staff_name}${s.is_gender_fallback ? " (FALLBACK)" : ""}`));
+
+      const result: PackageDayResult = { date: dateKey, slots: plan };
+      if (genderConflicts.length > 0) {
+        result.gender_conflicts = genderConflicts;
+      }
+      results.push(result);
     }
   }
 
