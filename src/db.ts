@@ -545,17 +545,36 @@ export async function updateTeamMemberGender(
   odMember: string,
   gender: "male" | "female" | null
 ): Promise<boolean> {
-  const { error } = await supabase
+  console.log(`[DB] updateTeamMemberGender: locationId=${locationId}, memberId=${odMember}, gender=${gender}`);
+
+  // First, get the user_id for this member ID
+  const { data: member, error: fetchError } = await supabase
+    .from(SYNCED_TEAM_MEMBERS_TABLE)
+    .select("user_id")
+    .eq("location_id", locationId)
+    .eq("id", odMember)
+    .single();
+
+  if (fetchError || !member) {
+    console.error("[DB] updateTeamMemberGender - failed to find member:", fetchError);
+    return false;
+  }
+
+  console.log(`[DB] updateTeamMemberGender: Found user_id=${member.user_id}`);
+
+  // Update ALL rows for this user_id (they might be in multiple calendars)
+  const { error, count } = await supabase
     .from(SYNCED_TEAM_MEMBERS_TABLE)
     .update({ gender })
     .eq("location_id", locationId)
-    .eq("id", odMember);
+    .eq("user_id", member.user_id);
 
   if (error) {
     console.error("[DB] updateTeamMemberGender error:", error);
     return false;
   }
 
+  console.log(`[DB] updateTeamMemberGender: Updated ${count} rows for user_id=${member.user_id}`);
   return true;
 }
 
