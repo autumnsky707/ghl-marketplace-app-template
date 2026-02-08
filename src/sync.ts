@@ -125,6 +125,47 @@ export async function syncLocation(
       }
     }
 
+    // Fallback: For any userIds not found, try individual GET /users/{userId}
+    const missingUserIds = Array.from(userIds).filter(id => !userDetailsMap.has(id));
+    if (missingUserIds.length > 0) {
+      console.log(`[Sync] Fetching ${missingUserIds.length} users individually via GET /users/{userId}...`);
+
+      for (const userId of missingUserIds) {
+        try {
+          console.log(`[Sync] Fetching user: ${userId}`);
+          const userResp = await client.get(`/users/${userId}`, {
+            headers: { Version: "2021-07-28" },
+          });
+
+          console.log(`[Sync] User ${userId} response:`, JSON.stringify(userResp.data, null, 2));
+
+          const user = userResp.data?.user || userResp.data;
+          if (user) {
+            const name = user.name ||
+                         (user.firstName && user.lastName ? `${user.firstName} ${user.lastName}` : null) ||
+                         user.firstName ||
+                         user.lastName ||
+                         null;
+            const email = user.email || null;
+
+            if (name) {
+              userDetailsMap.set(userId, { name, email });
+              console.log(`[Sync] User ${userId}: ${name} (${email})`);
+            } else {
+              console.log(`[Sync] User ${userId}: No name found in response`);
+            }
+          }
+        } catch (err: any) {
+          console.log(`[Sync] Failed to fetch user ${userId}:`, err?.response?.status || err.message);
+          if (err?.response?.data) {
+            console.log(`[Sync] Error response:`, JSON.stringify(err.response.data, null, 2));
+          }
+        }
+      }
+
+      console.log(`[Sync] After individual fetches: ${userDetailsMap.size} of ${userIds.size} users have names`);
+    }
+
     // Clear old data and insert new
     await clearSyncedData(locationId);
     const { calendarsCount, teamMembersCount } = await upsertSyncedCalendars(locationId, calendars, userDetailsMap);
