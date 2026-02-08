@@ -631,6 +631,34 @@ export async function getUniqueTeamMembers(
 }
 
 /**
+ * Get existing gender values for all team members in a location.
+ * Returns a map of user_id -> gender for preservation during sync.
+ */
+export async function getExistingGenders(
+  locationId: string
+): Promise<Map<string, "male" | "female" | null>> {
+  const { data, error } = await supabase
+    .from(SYNCED_TEAM_MEMBERS_TABLE)
+    .select("user_id, gender")
+    .eq("location_id", locationId);
+
+  if (error || !data) {
+    console.error("[DB] getExistingGenders error:", error);
+    return new Map();
+  }
+
+  const genderMap = new Map<string, "male" | "female" | null>();
+  for (const row of data) {
+    if (row.gender) {
+      genderMap.set(row.user_id, row.gender);
+    }
+  }
+
+  console.log(`[DB] Preserved ${genderMap.size} gender values for ${locationId}`);
+  return genderMap;
+}
+
+/**
  * Clear all synced data for a location.
  */
 export async function clearSyncedData(locationId: string): Promise<void> {
@@ -647,11 +675,13 @@ export async function clearSyncedData(locationId: string): Promise<void> {
 
 /**
  * Upsert synced calendars and team members from GHL API response.
+ * Preserves existing gender values if existingGenders map is provided.
  */
 export async function upsertSyncedCalendars(
   locationId: string,
   calendars: GHLCalendar[],
-  userDetailsMap?: Map<string, { name: string; email: string }>
+  userDetailsMap?: Map<string, { name: string; email: string }>,
+  existingGenders?: Map<string, "male" | "female" | null>
 ): Promise<{ calendarsCount: number; teamMembersCount: number }> {
   let calendarsCount = 0;
   let teamMembersCount = 0;
@@ -703,6 +733,9 @@ export async function upsertSyncedCalendars(
         const isPrimary = tm.isPrimary || tm.is_primary || tm.primary || false;
         const priority = Math.floor(Number(tm.priority || tm.order || 0));
 
+        // Preserve existing gender if available
+        const preservedGender = existingGenders?.get(userId) || null;
+
         const memberRow: Partial<SyncedTeamMember> = {
           location_id: locationId,
           calendar_id: cal.id,
@@ -711,6 +744,7 @@ export async function upsertSyncedCalendars(
           user_email: userEmail,
           is_primary: isPrimary,
           priority: priority,
+          gender: preservedGender,
           synced_at: new Date().toISOString(),
         };
 
