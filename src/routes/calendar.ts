@@ -532,8 +532,8 @@ function isSlotAfternoon(iso: string): boolean {
   const match = iso.match(/T(\d{2}):(\d{2})/);
   if (!match) return false;
   const h = parseInt(match[1], 10);
-  const m = parseInt(match[2], 10);
-  return h > 12 || (h === 12 && m >= 15);
+  // FIX 4: 12:00 PM and later is ALWAYS afternoon (hour >= 12)
+  return h >= 12;
 }
 
 function getSlotMinutes(iso: string): number {
