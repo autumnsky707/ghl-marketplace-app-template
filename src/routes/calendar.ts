@@ -283,7 +283,7 @@ router.post("/free-slots", async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: "No calendar configured for this location" });
     }
 
-    const tz = timezone || installation.timezone || "America/New_York";
+    const tz = timezone || installation.timezone;
 
     // Use luxon for reliable timezone handling
     const localNow = DateTime.now().setZone(tz);
@@ -482,7 +482,11 @@ router.post("/business-hours", async (req: Request, res: Response) => {
     }
 
     const client = await ghl.requests(resolvedLocationId);
-    const tz = installation.timezone || "America/New_York";
+    const tz = installation.timezone;
+    if (!tz) {
+      console.error(`[LocationInfo] ERROR: No timezone configured for location ${resolvedLocationId}`);
+      return res.status(500).json({ success: false, error: "Location timezone not configured" });
+    }
 
     // Uses the same cached reference-week logic as free-slots filtering
     const { openDays, dayInfo } = await getCalendarSchedule(client, calId, tz);
@@ -629,7 +633,11 @@ function parseTimeToMinutes(timeStr: string, timezone?: string): number | null {
   if (timeStr.includes("T") && timeStr.match(/^\d{4}-\d{2}-\d{2}T/)) {
     try {
       // Use luxon to parse the ISO string and convert to the business timezone
-      const tz = timezone || "America/New_York"; // Fallback, but should always be provided
+      if (!timezone) {
+        console.log(`[parseTimeToMinutes] ERROR: timezone is required for ISO string parsing but was not provided`);
+        return null;
+      }
+      const tz = timezone;
       const dt = DateTime.fromISO(timeStr).setZone(tz);
 
       if (!dt.isValid) {
@@ -847,7 +855,12 @@ router.post("/location-info", async (req: Request, res: Response) => {
     }
 
     // Use luxon for reliable timezone handling
-    const tz = installation.timezone || "America/New_York";
+    // TIMEZONE RULE: Must come from installation record, never hardcoded
+    const tz = installation.timezone;
+    if (!tz) {
+      console.error(`[LocationInfo] ERROR: No timezone configured for location ${resolvedLocationId}`);
+      return res.status(500).json({ success: false, error: "Location timezone not configured" });
+    }
     const { todayStr, currentTimeStr } = getLocalTimeInfo(tz);
     console.log(`[LocationInfo] Timezone: ${tz}, Today: ${todayStr}, CurrentTime: ${currentTimeStr}`);
 
@@ -1056,7 +1069,11 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     }
 
     // Use luxon for reliable timezone handling
-    const tz = installation.timezone || "America/New_York";
+    const tz = installation.timezone;
+    if (!tz) {
+      console.error(`[CheckAvailability] ERROR: No timezone configured for location ${resolvedLocationId}`);
+      return res.status(500).json({ success: false, error: "Location timezone not configured" });
+    }
     const timeInfo = getLocalTimeInfo(tz);
     const todayStr = timeInfo.todayStr;
     const currentTimeStr = timeInfo.currentTimeStr;
@@ -1864,7 +1881,11 @@ router.post("/book", async (req: Request, res: Response) => {
         return res.status(500).json({ success: false, error: "Installation lookup failed: " + instErr.message });
       }
 
-      const tz = installation.timezone || "America/New_York";
+      const tz = installation.timezone;
+      if (!tz) {
+        console.error(`[Book] FATAL ERROR: No timezone configured for location ${locationId}`);
+        return res.status(500).json({ success: false, error: "Location timezone not configured" });
+      }
       console.log(`[Book] STEP 3: Getting authenticated GHL client...`);
       let client;
       try {
@@ -2361,7 +2382,11 @@ router.post("/book", async (req: Request, res: Response) => {
       return res.status(500).json({ success: false, error: "Installation lookup failed: " + instErr.message });
     }
 
-    const tz = installation.timezone || "America/New_York";
+    const tz = installation.timezone;
+    if (!tz) {
+      console.error(`[Book] FATAL ERROR: No timezone configured for location ${locationId}`);
+      return res.status(500).json({ success: false, error: "Location timezone not configured" });
+    }
 
     // Helper to build ISO datetime from date + time
     const buildISODateTime = (date: string, time: string): string | null => {
@@ -3031,7 +3056,11 @@ router.post("/book-package", async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, error: "Installation not found" });
     }
 
-    const tz = installation.timezone || "America/New_York";
+    const tz = installation.timezone;
+    if (!tz) {
+      console.error(`[BookPackage] FATAL ERROR: No timezone configured for location ${resolvedLocationId}`);
+      return res.status(500).json({ success: false, error: "Location timezone not configured" });
+    }
     const client = await ghl.requests(resolvedLocationId);
 
     // Get local time using luxon
@@ -3326,7 +3355,11 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
       return res.status(404).json({ success: false, error: "Installation not found" });
     }
 
-    const tz = installation.timezone || "America/New_York";
+    const tz = installation.timezone;
+    if (!tz) {
+      console.error(`[CheckPackage] FATAL ERROR: No timezone configured for location ${resolvedLocationId}`);
+      return res.status(500).json({ success: false, error: "Location timezone not configured" });
+    }
     const localNow = DateTime.now().setZone(tz).toJSDate();
 
     // BUG FIX: If time_preference is undefined but requested_time is provided,
