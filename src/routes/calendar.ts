@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import axios from "axios";
 import { DateTime } from "luxon";
+import * as chrono from "chrono-node";
 import { GHL } from "../ghl";
 import {
   getInstallation,
@@ -2875,94 +2876,56 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
 // ============================================================================
 
 /**
- * Parse requested_date string to ISO date string.
+ * Parse requested_date string to ISO date string using chrono-node.
+ * Handles natural language dates like "today", "tomorrow", "next Monday",
+ * "Monday the 9th", "February 15th", etc.
+ * Returns ISO date string (YYYY-MM-DD) or null if parsing fails.
  */
 function parseRequestedDate(input: string, localNow: Date): string | null {
-  const n = input.toLowerCase().trim();
-  const dayNames = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+  if (!input || typeof input !== "string") return null;
 
-  if (/^\d{4}-\d{2}-\d{2}$/.test(n)) {
-    return n;
-  }
+  const trimmed = input.trim();
+  if (!trimmed) return null;
 
-  if (n === "today") {
-    return localNow.toISOString().split("T")[0];
-  }
-
-  if (n === "tomorrow") {
-    const tomorrow = new Date(localNow);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    return tomorrow.toISOString().split("T")[0];
-  }
-
-  // Day name: "monday", "friday", etc.
-  const dayIdx = dayNames.indexOf(n);
-  if (dayIdx !== -1) {
-    let daysAhead = dayIdx - localNow.getDay();
-    if (daysAhead <= 0) daysAhead += 7;
-    const target = new Date(localNow);
-    target.setDate(target.getDate() + daysAhead);
-    return target.toISOString().split("T")[0];
-  }
-
-  // "next monday", "next friday", etc.
-  const nextDayMatch = n.match(/^next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/);
-  if (nextDayMatch) {
-    const targetDayIdx = dayNames.indexOf(nextDayMatch[1]);
-    if (targetDayIdx !== -1) {
-      let daysAhead = targetDayIdx - localNow.getDay();
-      if (daysAhead <= 0) daysAhead += 7;
-      daysAhead += 7; // "next" means next week
-      const target = new Date(localNow);
-      target.setDate(target.getDate() + daysAhead);
-      return target.toISOString().split("T")[0];
+  // If already ISO format, validate and return
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const parsed = new Date(trimmed + "T00:00:00");
+    if (!isNaN(parsed.getTime())) {
+      return trimmed;
     }
   }
 
-  // "Monday the 9th", "Tuesday the 10th", "Wednesday the 11th", etc.
-  // Matches: "monday the 9th", "tuesday the 10", "wednesday 11th", "thursday the 12"
-  const dayDateMatch = n.match(/^(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s*(?:the\s*)?(\d{1,2})(?:st|nd|rd|th)?$/);
-  if (dayDateMatch) {
-    const targetDayName = dayDateMatch[1];
-    const targetDayOfMonth = parseInt(dayDateMatch[2], 10);
-    const targetDayIdx = dayNames.indexOf(targetDayName);
+  // Use chrono-node for natural language parsing
+  const parsed = chrono.parseDate(trimmed, localNow, { forwardDate: true });
 
-    if (targetDayIdx !== -1 && targetDayOfMonth >= 1 && targetDayOfMonth <= 31) {
-      // Search up to 60 days ahead to find a matching day name + date
-      for (let i = 0; i <= 60; i++) {
-        const candidate = new Date(localNow);
-        candidate.setDate(localNow.getDate() + i);
-
-        if (candidate.getDay() === targetDayIdx && candidate.getDate() === targetDayOfMonth) {
-          console.log(`[DateParse] Matched "${input}" to ${candidate.toISOString().split("T")[0]}`);
-          return candidate.toISOString().split("T")[0];
-        }
-      }
-      console.log(`[DateParse] Could not find "${targetDayName} the ${targetDayOfMonth}" in next 60 days`);
-    }
+  if (!parsed) {
+    console.log(`[DateParse] chrono-node could not parse: "${input}"`);
+    return null;
   }
 
-  // "the 9th", "the 10th", "11th", "12" - just a date number, assume current or next month
-  const dateOnlyMatch = n.match(/^(?:the\s*)?(\d{1,2})(?:st|nd|rd|th)?$/);
-  if (dateOnlyMatch) {
-    const targetDayOfMonth = parseInt(dateOnlyMatch[1], 10);
+  // Validate: must be today or future
+  const today = new Date(localNow);
+  today.setHours(0, 0, 0, 0);
+  const parsedDay = new Date(parsed);
+  parsedDay.setHours(0, 0, 0, 0);
 
-    if (targetDayOfMonth >= 1 && targetDayOfMonth <= 31) {
-      // Try current month first
-      const thisMonth = new Date(localNow);
-      thisMonth.setDate(targetDayOfMonth);
-
-      // If that date is in the past or today, try next month
-      if (thisMonth <= localNow) {
-        thisMonth.setMonth(thisMonth.getMonth() + 1);
-      }
-
-      console.log(`[DateParse] Matched "${input}" to ${thisMonth.toISOString().split("T")[0]}`);
-      return thisMonth.toISOString().split("T")[0];
-    }
+  if (parsedDay < today) {
+    console.log(`[DateParse] Parsed date "${input}" is in the past: ${parsed.toISOString()}`);
+    return null;
   }
 
-  return null;
+  // Validate: within 60 days
+  const maxDate = new Date(localNow);
+  maxDate.setDate(maxDate.getDate() + 60);
+  if (parsedDay > maxDate) {
+    console.log(`[DateParse] Parsed date "${input}" is beyond 60 days: ${parsed.toISOString()}`);
+    return null;
+  }
+
+  // Return ISO date string (YYYY-MM-DD)
+  const result = parsed.toISOString().split("T")[0];
+  console.log(`[DateParse] Matched "${input}" to ${result}`);
+  return result;
 }
 
 /**
