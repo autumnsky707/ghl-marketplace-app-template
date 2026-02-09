@@ -1139,7 +1139,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
 
       console.log(`[CheckAvailability] Package: found ${available_dates.length} available dates with plan_ids`);
 
-      return res.json({
+      const response = {
         success: true,
         package_name: pkg.package_name,
         total_price: pkg.price,
@@ -1148,7 +1148,12 @@ router.post("/check-availability", async (req: Request, res: Response) => {
         currentTime: currentTimeStr,
         timezone: tz,
         available_dates,
-      });
+      };
+
+      // LOG FULL RESPONSE so we can verify plan_id is included for ElevenLabs
+      console.log(`[CheckAvailability] FULL RESPONSE:`, JSON.stringify(response, null, 2));
+
+      return res.json(response);
     }
 
     // ========== SERVICE AVAILABILITY (default) ==========
@@ -3341,14 +3346,19 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
 
     console.log(`[CheckPackage] Found ${available_dates.length} available dates with plan_ids`);
 
-    return res.json({
+    const response = {
       success: true,
       package_name: pkg.package_name,
       total_price: pkg.price,
       total_duration_minutes: pkg.total_duration_minutes,
       services: pkg.services,
       available_dates,
-    });
+    };
+
+    // LOG FULL RESPONSE so we can verify plan_id is included for ElevenLabs
+    console.log(`[CheckPackage] FULL RESPONSE:`, JSON.stringify(response, null, 2));
+
+    return res.json(response);
 
   } catch (error: any) {
     console.error("[CheckPackage] Error:", error?.response?.data || error.message);
