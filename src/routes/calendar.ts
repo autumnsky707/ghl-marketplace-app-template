@@ -1018,21 +1018,30 @@ router.post("/check-availability", async (req: Request, res: Response) => {
         });
       }
 
-      // Format response
+      // Format response - IMPORTANT: start_time is when the PACKAGE starts (first service)
+      // Don't put staff names at the top level - they apply to individual services
       const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
       const available_dates = packagePlans.map((plan) => {
         const dateObj = new Date(plan.date + "T12:00:00");
         const dayName = dayNames[dateObj.getDay()];
 
+        // First slot is when the package STARTS
+        const firstSlot = plan.slots[0];
+        const packageStartTime = formatTimeForVoice(new Date(firstSlot.startTime), tz);
+
         return {
           date: plan.date,
           day_name: dayName,
-          slots: plan.slots.map((slot) => ({
+          // Package start time - this is what the agent should say: "starting at 9:00 AM"
+          start_time: packageStartTime,
+          startTime: firstSlot.startTime,  // ISO timestamp for booking
+          // Individual service details (for internal use, not for voice)
+          services: plan.slots.map((slot) => ({
             service: slot.service,
             start_time: formatTimeForVoice(new Date(slot.startTime), tz),
             end_time: formatTimeForVoice(new Date(slot.endTime), tz),
-            startTime: slot.startTime,  // BUG FIX: Include ISO timestamp for exact booking
-            endTime: slot.endTime,      // BUG FIX: Include ISO timestamp
+            startTime: slot.startTime,
+            endTime: slot.endTime,
             staff_name: slot.staff_name,
           })),
         };
@@ -3062,20 +3071,31 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
       });
     }
 
-    // Format response with human-readable times
+    // Format response - IMPORTANT: start_time is when the PACKAGE starts (first service)
+    // Don't put staff names at the top level - they apply to individual services
     const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
     const available_dates = packagePlans.map((plan) => {
       const dateObj = new Date(plan.date + "T12:00:00");
       const dayName = dayNames[dateObj.getDay()];
 
+      // First slot is when the package STARTS
+      const firstSlot = plan.slots[0];
+      const packageStartTime = formatTimeForVoice(new Date(firstSlot.startTime), tz);
+
       return {
         date: plan.date,
         day_name: dayName,
-        slots: plan.slots.map((slot) => ({
+        // Package start time - this is what the agent should say: "starting at 9:00 AM"
+        start_time: packageStartTime,
+        startTime: firstSlot.startTime,  // ISO timestamp for booking
+        // Individual service details (for internal use, not for voice)
+        services: plan.slots.map((slot) => ({
           service: slot.service,
           start_time: formatTimeForVoice(new Date(slot.startTime), tz),
           end_time: formatTimeForVoice(new Date(slot.endTime), tz),
+          startTime: slot.startTime,
+          endTime: slot.endTime,
           staff_name: slot.staff_name,
         })),
       };
