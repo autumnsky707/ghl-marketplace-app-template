@@ -990,6 +990,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       }
 
       // Find up to 3 days where all services fit
+      // Pass requested_time so package availability respects user's time preference
       const packagePlans = await findPackageDayAvailability(
         resolvedLocationId,
         pkg.services,
@@ -1000,7 +1001,8 @@ router.post("/check-availability", async (req: Request, res: Response) => {
         localNow,
         3,
         therapist_preference,
-        strict_gender === true  // Pass strict gender mode
+        strict_gender === true,  // Pass strict gender mode
+        requested_time  // BUG FIX: Pass requested start time
       );
 
       if (packagePlans.length === 0) {
@@ -1485,8 +1487,10 @@ router.post("/check-availability", async (req: Request, res: Response) => {
         filteredDates = filteredDates.filter(dateFilter);
       }
 
-      // If specific time requested, collect ALL matching slots and sort by proximity
+      // If specific time requested, collect slots NEAR that time only
+      // BUG FIX: Don't return 8 AM when user asked for 10 AM - max 60 min difference
       if (targetMins !== null) {
+        const MAX_TIME_DIFF_MINS = 60;  // Only return slots within 1 hour of requested time
         const allSlots: Array<{ date: string; slotInfo: SlotWithStaff; diff: number }> = [];
 
         for (const dateKey of filteredDates) {
@@ -1500,12 +1504,21 @@ router.post("/check-availability", async (req: Request, res: Response) => {
           for (const slotInfo of slots) {
             const slotMins = getSlotMinutes(slotInfo.slot);
             const diff = Math.abs(slotMins - targetMins);
-            allSlots.push({ date: dateKey, slotInfo, diff });
+
+            // BUG FIX: Only include slots within acceptable range of requested time
+            if (diff <= MAX_TIME_DIFF_MINS) {
+              allSlots.push({ date: dateKey, slotInfo, diff });
+            }
           }
         }
 
         // Sort by proximity to requested time
         allSlots.sort((a, b) => a.diff - b.diff);
+
+        // If no slots within range, log it
+        if (allSlots.length === 0) {
+          console.log(`[Calendar] No slots found within ${MAX_TIME_DIFF_MINS} minutes of requested time ${requested_time}`);
+        }
 
         // Return top slots
         return allSlots.slice(0, maxSlots).map(({ date, slotInfo }) => ({
@@ -1615,10 +1628,13 @@ router.post("/book", async (req: Request, res: Response) => {
       const packageName = body.package_name;
       const selectedDate = body.selected_date;
       const timePreference = body.time_preference;
+      const requestedTime = body.requested_time || body.requestedTime || body.start_time || body.startTime;  // BUG FIX: Accept requested start time
       const providedSlots = body.slots;  // FIX 2: Accept slots directly from check_availability
 
       console.log(`[Book] ===== PACKAGE BOOKING START =====`);
       console.log(`[Book] Request body:`, JSON.stringify(body, null, 2));
+      console.log(`[Book] Requested start time: ${requestedTime || "(none - will use earliest available)"}`);
+
 
       if (!locationId) {
         console.log(`[Book] VALIDATION FAILED: Missing locationId`);
@@ -1804,7 +1820,7 @@ router.post("/book", async (req: Request, res: Response) => {
           return res.status(400).json({ success: false, error: "Missing required field: time_preference (or provide slots array)" });
         }
 
-        console.log(`[Book] No pre-confirmed slots, recalculating for ${selectedDate} ${timePreference}`);
+        console.log(`[Book] No pre-confirmed slots, recalculating for ${selectedDate} ${timePreference} ${requestedTime ? `starting at ${requestedTime}` : ""}`);
 
         // Parse selected_date
         const parsedDate = parseRequestedDate(selectedDate, localNow);
@@ -1813,6 +1829,7 @@ router.post("/book", async (req: Request, res: Response) => {
         }
 
         // Find availability on the selected date
+        // BUG FIX: Pass requestedTime so package starts at user's requested time, not earliest available
         const packagePlans = await findPackageDayAvailability(
           locationId,
           pkg.services,
@@ -1823,7 +1840,8 @@ router.post("/book", async (req: Request, res: Response) => {
           localNow,
           1,
           therapistPreference,
-          strictGender === true
+          strictGender === true,
+          requestedTime  // BUG FIX: Use user's requested start time
         );
 
         packagePlan = packagePlans[0] || null;
@@ -2058,12 +2076,14 @@ router.post("/book", async (req: Request, res: Response) => {
     const calendarId = body.calendarId || body.calendar_id;
     const startTime = body.startTime || body.start_time || body.selected_time;
     const selectedDate = body.selected_date;
+    const requestedTime = body.requested_time || body.requestedTime;  // BUG FIX: Accept requested_time
     const serviceName = body.service_name || body.serviceType || body.service_type;
     const occasion = body.occasion;
     const title = body.title;
 
     console.log(`[Book] Single service mode: ${serviceName || "(no service specified)"}`);
     console.log(`[Book] Customer: ${customerName}, Email: ${customerEmail}, Phone: ${customerPhone}`);
+    console.log(`[Book] Time inputs - startTime: "${startTime}", selectedDate: "${selectedDate}", requestedTime: "${requestedTime}"`);
 
     if (!locationId || !customerName || !customerEmail) {
       console.log(`[Book] VALIDATION FAILED: locationId=${!!locationId}, customerName=${!!customerName}, customerEmail=${!!customerEmail}`);
@@ -2092,9 +2112,31 @@ router.post("/book", async (req: Request, res: Response) => {
 
     const tz = installation.timezone || "America/New_York";
 
+    // Helper to build ISO datetime from date + time
+    const buildISODateTime = (date: string, time: string): string | null => {
+      const timeParsed = parseTimeToMinutes(time);
+      if (timeParsed === null) return null;
+
+      const hours = Math.floor(timeParsed / 60);
+      const mins = timeParsed % 60;
+      const dateTimeStr = `${date}T${hours.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:00`;
+
+      // Get timezone offset using Intl API
+      const tempDate = new Date();
+      const formatter = new Intl.DateTimeFormat("en-US", {
+        timeZone: tz,
+        timeZoneName: "longOffset"
+      });
+      const parts = formatter.formatToParts(tempDate);
+      const offsetPart = parts.find(p => p.type === "timeZoneName");
+      const offsetMatch = offsetPart?.value?.match(/GMT([+-]\d{2}:\d{2})/);
+      const tzOffset = offsetMatch ? offsetMatch[1] : "-10:00";
+
+      return `${dateTimeStr}${tzOffset}`;
+    };
+
     // STEP 2: Resolve startTime - prefer full ISO datetime from slot, otherwise build from date+time
     console.log(`[Book] STEP 2: Resolving start time...`);
-    console.log(`[Book] Raw time values - startTime: "${startTime}", selectedDate: "${selectedDate}"`);
     let resolvedStartTime: string | null = null;
 
     // Option 1: startTime already contains full ISO datetime (from check-availability slot)
@@ -2102,43 +2144,29 @@ router.post("/book", async (req: Request, res: Response) => {
       resolvedStartTime = startTime;
       console.log(`[Book] STEP 2 SUCCESS: Using provided ISO startTime: ${resolvedStartTime}`);
     }
-    // Option 2: Build from selected_date + selected_time
+    // Option 2: Build from selected_date + startTime (time portion)
     else if (selectedDate && startTime) {
-      // BUG FIX: Warn if time doesn't include minutes (could indicate voice-to-text truncation)
-      const hasMinutes = /:/.test(startTime);
-      if (!hasMinutes) {
-        console.warn(`[Book] WARNING: Time "${startTime}" has no colon - minutes may be missing!`);
+      resolvedStartTime = buildISODateTime(selectedDate, startTime);
+      if (resolvedStartTime) {
+        console.log(`[Book] STEP 2 SUCCESS: Built datetime from selected_date + startTime: ${resolvedStartTime}`);
       }
-
-      const timeParsed = parseTimeToMinutes(startTime);
-      if (timeParsed !== null) {
-        const hours = Math.floor(timeParsed / 60);
-        const mins = timeParsed % 60;
-        const dateTimeStr = `${selectedDate}T${hours.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:00`;
-
-        // Get timezone offset using Intl API
-        const tempDate = new Date();
-        const formatter = new Intl.DateTimeFormat("en-US", {
-          timeZone: tz,
-          timeZoneName: "longOffset"
-        });
-        const parts = formatter.formatToParts(tempDate);
-        const offsetPart = parts.find(p => p.type === "timeZoneName");
-        const offsetMatch = offsetPart?.value?.match(/GMT([+-]\d{2}:\d{2})/);
-        const tzOffset = offsetMatch ? offsetMatch[1] : "-10:00";
-
-        resolvedStartTime = `${dateTimeStr}${tzOffset}`;
-        console.log(`[Book] STEP 2 SUCCESS: Built datetime: ${selectedDate} + ${startTime} => ${resolvedStartTime} (offset: ${tzOffset})`);
+    }
+    // Option 3: BUG FIX - Build from selected_date + requested_time (e.g., "10:00 AM")
+    else if (selectedDate && requestedTime) {
+      resolvedStartTime = buildISODateTime(selectedDate, requestedTime);
+      if (resolvedStartTime) {
+        console.log(`[Book] STEP 2 SUCCESS: Built datetime from selected_date + requested_time: ${resolvedStartTime}`);
       } else {
-        console.log(`[Book] STEP 2 FAILED: Could not parse time "${startTime}"`);
+        console.log(`[Book] STEP 2 FAILED: Could not parse requested_time "${requestedTime}"`);
       }
     }
 
     if (!resolvedStartTime) {
       console.log(`[Book] STEP 2 FAILED: No valid start time could be resolved`);
+      console.log(`[Book] Hint: Provide startTime (ISO), or selected_date + startTime, or selected_date + requested_time`);
       return res.status(400).json({
         success: false,
-        error: "Missing required field: startTime (or selected_date + selected_time)",
+        error: "Missing required field: startTime (or selected_date + requested_time like '10:00 AM')",
       });
     }
 
@@ -2693,6 +2721,7 @@ router.post("/book-package", async (req: Request, res: Response) => {
       time_preference,
       requested_date,
       selected_date,
+      requested_time,  // BUG FIX: Accept requested start time
       customer_name,
       phone,
       email,
@@ -2783,7 +2812,8 @@ router.post("/book-package", async (req: Request, res: Response) => {
       localNow,
       1, // Only need 1 result for booking
       therapist_preference,
-      strict_gender === true  // Pass strict gender mode
+      strict_gender === true,  // Pass strict gender mode
+      requested_time  // BUG FIX: Pass requested start time
     );
 
     // If user selected a specific date, verify the result matches
@@ -2956,6 +2986,7 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
       package_name,
       time_preference,
       requested_date,
+      requested_time,  // BUG FIX: Accept requested start time
       therapist_preference,
       strict_gender,  // When true, no gender fallback for any service
     } = req.body;
@@ -3017,7 +3048,8 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
       localNow,
       3, // Return up to 3 available dates
       therapist_preference,
-      strict_gender === true  // Pass strict gender mode
+      strict_gender === true,  // Pass strict gender mode
+      requested_time  // BUG FIX: Pass requested start time
     );
 
     if (packagePlans.length === 0) {
@@ -3281,7 +3313,8 @@ async function findPackageDayAvailability(
   localNow: Date,
   maxResults: number = 1,
   genderPreference?: string,  // "male", "female", or undefined for no preference
-  strictGender: boolean = false  // When true, apply gender filter to ALL services
+  strictGender: boolean = false,  // When true, apply gender filter to ALL services
+  requestedTime?: string  // BUG FIX: Specific start time like "9:00 AM" - package starts AT this time
 ): Promise<Array<{
   date: string;
   slots: Array<{
@@ -3459,6 +3492,13 @@ async function findPackageDayAvailability(
     }>;
   }> = [];
 
+  // BUG FIX: Parse requestedTime to minutes for setting minimum start time
+  let requestedTimeMins: number | null = null;
+  if (requestedTime) {
+    requestedTimeMins = parseTimeToMinutes(requestedTime);
+    console.log(`[Package] User requested start time: ${requestedTime} => ${requestedTimeMins} minutes from midnight`);
+  }
+
   // Try each date
   for (const dateKey of datesToCheck) {
     if (results.length >= maxResults) break;
@@ -3472,7 +3512,18 @@ async function findPackageDayAvailability(
       staff_user_id: string | null;
     }> = [];
 
-    let minStartTimeMs = Math.max(localNow.getTime() + BUFFER_MS, new Date(dateKey + "T00:00:00").getTime());
+    // BUG FIX: If user requested a specific time (e.g., "9 AM"), start at that time, not earliest available
+    let minStartTimeMs: number;
+    if (requestedTimeMins !== null) {
+      // Build the specific start time for this date
+      const hours = Math.floor(requestedTimeMins / 60);
+      const mins = requestedTimeMins % 60;
+      const requestedDateTime = new Date(`${dateKey}T${hours.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:00`);
+      minStartTimeMs = Math.max(localNow.getTime() + BUFFER_MS, requestedDateTime.getTime());
+      console.log(`[Package] Starting package at requested time: ${requestedDateTime.toISOString()}`);
+    } else {
+      minStartTimeMs = Math.max(localNow.getTime() + BUFFER_MS, new Date(dateKey + "T00:00:00").getTime());
+    }
     let dateWorks = true;
 
     // FIX 3: Track consumed slots to prevent double-booking same staff at same time
@@ -3540,12 +3591,38 @@ async function findPackageDayAvailability(
     }
 
     if (dateWorks && plan.length === services.length) {
-      console.log(`[Package] Found valid day: ${dateKey}`);
+      // BUG FIX: Check that the last service doesn't extend past business hours
+      // Default closing time is 5:30 PM (17:30). This prevents offering 3:30 PM for a 4-hour package.
+      const BUSINESS_CLOSING_HOUR = 17;
+      const BUSINESS_CLOSING_MINUTE = 30;
+
+      const lastSlot = plan[plan.length - 1];
+      const lastEndTime = new Date(lastSlot.endTime);
+
+      // Get the local hour/minute of the end time in the business timezone
+      const endTimeLocal = lastEndTime.toLocaleString("en-US", {
+        timeZone: tz,
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false
+      });
+      const [endHourStr, endMinStr] = endTimeLocal.split(":");
+      const endHour = parseInt(endHourStr, 10);
+      const endMin = parseInt(endMinStr, 10);
+      const endTotalMins = endHour * 60 + endMin;
+      const closingTotalMins = BUSINESS_CLOSING_HOUR * 60 + BUSINESS_CLOSING_MINUTE;
+
+      if (endTotalMins > closingTotalMins) {
+        console.log(`[Package] Rejecting ${dateKey} - package ends at ${endTimeLocal} which is after ${BUSINESS_CLOSING_HOUR}:${BUSINESS_CLOSING_MINUTE.toString().padStart(2, "0")} closing`);
+        continue;  // Skip this date, don't add to results
+      }
+
+      console.log(`[Package] Found valid day: ${dateKey} (ends at ${endTimeLocal}, before closing)`);
       results.push({ date: dateKey, slots: plan });
     }
   }
 
-  console.log(`[Package] Found ${results.length} valid days out of ${DAYS_TO_SEARCH} searched`);
+  console.log(`[Package] Found ${results.length} valid days out of ${datesToCheck.length} checked`);
   return results;
 }
 
