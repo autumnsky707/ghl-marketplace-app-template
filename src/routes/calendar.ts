@@ -1028,6 +1028,8 @@ router.post("/check-availability", async (req: Request, res: Response) => {
             service: slot.service,
             start_time: formatTimeForVoice(new Date(slot.startTime), tz),
             end_time: formatTimeForVoice(new Date(slot.endTime), tz),
+            startTime: slot.startTime,  // BUG FIX: Include ISO timestamp for exact booking
+            endTime: slot.endTime,      // BUG FIX: Include ISO timestamp
             staff_name: slot.staff_name,
           })),
         };
@@ -1689,9 +1691,15 @@ router.post("/book", async (req: Request, res: Response) => {
 
       let allSuccessful = true;
 
+      // BUG FIX: Log all slot times upfront to help diagnose time mismatches
+      console.log(`[Book] Package slots to book:`);
+      packagePlan.slots.forEach((s, idx) => {
+        console.log(`[Book]   ${idx + 1}. ${s.service}: ${s.startTime} (staff: ${s.staff_name || "any"})`);
+      });
+
       for (let i = 0; i < packagePlan.slots.length; i++) {
         const slotInfo = packagePlan.slots[i];
-        console.log(`[Book] Booking service ${i + 1}/${packagePlan.slots.length}: ${slotInfo.service}`);
+        console.log(`[Book] Booking service ${i + 1}/${packagePlan.slots.length}: ${slotInfo.service} at ${slotInfo.startTime}`);
 
         try {
           const bookingResult = await bookServiceAppointment(
@@ -1704,7 +1712,8 @@ router.post("/book", async (req: Request, res: Response) => {
             customerEmail,
             customerPhone,
             notes,
-            therapistPreference
+            therapistPreference,
+            slotInfo.staff_user_id || undefined  // BUG FIX: Assign to specific staff
           );
 
           if (!bookingResult.success) {
@@ -1795,13 +1804,22 @@ router.post("/book", async (req: Request, res: Response) => {
     // Resolve startTime - prefer full ISO datetime from slot, otherwise build from date+time
     let resolvedStartTime: string | null = null;
 
+    // BUG FIX: Log raw time values for debugging time mismatches
+    console.log(`[Book] Raw time values - startTime: "${startTime}", selectedDate: "${selectedDate}"`);
+
     // Option 1: startTime already contains full ISO datetime (from check-availability slot)
     if (startTime && startTime.includes("T")) {
       resolvedStartTime = startTime;
-      console.log(`[Book] Using provided startTime: ${resolvedStartTime}`);
+      console.log(`[Book] Using provided ISO startTime: ${resolvedStartTime}`);
     }
     // Option 2: Build from selected_date + selected_time
     else if (selectedDate && startTime) {
+      // BUG FIX: Warn if time doesn't include minutes (could indicate voice-to-text truncation)
+      const hasMinutes = /:/.test(startTime);
+      if (!hasMinutes) {
+        console.warn(`[Book] WARNING: Time "${startTime}" has no colon - minutes may be missing! Consider using full ISO startTime.`);
+      }
+
       const timeParsed = parseTimeToMinutes(startTime);
       if (timeParsed !== null) {
         const hours = Math.floor(timeParsed / 60);
@@ -2429,7 +2447,7 @@ router.post("/book-package", async (req: Request, res: Response) => {
     );
 
     // If user selected a specific date, verify the result matches
-    let packagePlan = packagePlans[0] || null;
+    let packagePlan: typeof packagePlans[0] | null = packagePlans[0] || null;
 
     if (specificDate && packagePlan && packagePlan.date !== specificDate) {
       // The specific date doesn't work, return error
@@ -2482,7 +2500,8 @@ router.post("/book-package", async (req: Request, res: Response) => {
           email,
           phone,
           notes,
-          therapist_preference
+          therapist_preference,
+          slotInfo.staff_user_id || undefined  // BUG FIX: Assign to specific staff
         );
 
         if (!bookingResult.success) {
@@ -2926,6 +2945,7 @@ async function findPackageDayAvailability(
     endTime: string;
     calendar_id: string;
     staff_name: string | null;
+    staff_user_id: string | null;  // BUG FIX: Include user_id for booking assignment
   }>;
 }>> {
   const DAYS_TO_SEARCH = 14;
@@ -3080,6 +3100,7 @@ async function findPackageDayAvailability(
       endTime: string;
       calendar_id: string;
       staff_name: string | null;
+      staff_user_id: string | null;  // BUG FIX: Include user_id for booking assignment
     }>;
   }> = [];
 
@@ -3093,6 +3114,7 @@ async function findPackageDayAvailability(
       endTime: string;
       calendar_id: string;
       staff_name: string | null;
+      staff_user_id: string | null;  // BUG FIX: Include user_id for booking assignment
     }> = [];
 
     let minStartTimeMs = Math.max(localNow.getTime() + BUFFER_MS, new Date(dateKey + "T00:00:00").getTime());
@@ -3121,6 +3143,7 @@ async function findPackageDayAvailability(
             endTime: endTimeISO,
             calendar_id: cal.calendar_id,
             staff_name: cal.staff_name,
+            staff_user_id: cal.user_id,  // BUG FIX: Include user_id for booking assignment
           });
 
           minStartTimeMs = endTimeMs + timing.buffer;
@@ -3159,7 +3182,8 @@ async function bookServiceAppointment(
   customerEmail: string,
   customerPhone: string,
   notes?: string,
-  therapistPreference?: string
+  therapistPreference?: string,
+  staffUserId?: string  // BUG FIX: Assign to specific staff member
 ): Promise<{
   success: boolean;
   appointmentId?: string;
@@ -3210,7 +3234,7 @@ async function bookServiceAppointment(
     }
 
     // Build appointment
-    const appointmentPayload = {
+    const appointmentPayload: Record<string, any> = {
       calendarId,
       locationId,
       contactId,
@@ -3220,6 +3244,13 @@ async function bookServiceAppointment(
       appointmentStatus: "confirmed",
       notes: appointmentNotes || undefined,
     };
+
+    // BUG FIX: Assign to specific staff member so they show as booked
+    // This ensures subsequent bookings use different available staff
+    if (staffUserId) {
+      appointmentPayload.assignedUserId = staffUserId;
+      console.log(`[BookService] Assigning appointment to staff userId: ${staffUserId}`);
+    }
 
     // DEBUG: Log exact payload being sent to GHL
     console.log(`[BookService] Creating appointment with payload:`, JSON.stringify(appointmentPayload, null, 2));
@@ -3238,6 +3269,24 @@ async function bookServiceAppointment(
       appointmentResp.data?.eventId ||
       appointmentResp.data?.appointment?.id ||
       null;
+
+    // BUG FIX: GHL has a SEPARATE "Appointment Notes" entity that shows in the UI
+    // The "notes" field on the appointment object doesn't display in the GHL calendar view
+    // We need to call POST /calendars/appointments/:appointmentId/notes to add visible notes
+    if (appointmentId && appointmentNotes) {
+      try {
+        console.log(`[BookService] Adding appointment note via separate API: "${appointmentNotes}"`);
+        await client.post(
+          `/calendars/appointments/${appointmentId}/notes`,
+          { body: appointmentNotes },
+          { headers: { Version: "2021-07-28" } }
+        );
+        console.log(`[BookService] Appointment note added successfully`);
+      } catch (noteErr: any) {
+        // Don't fail the booking if note creation fails, just log it
+        console.error(`[BookService] Failed to add appointment note:`, noteErr?.response?.data || noteErr.message);
+      }
+    }
 
     return {
       success: true,
