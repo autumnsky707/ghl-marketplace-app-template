@@ -1068,11 +1068,24 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       if (!package_name) {
         return res.status(400).json({ success: false, error: "Missing required field: package_name" });
       }
-      if (!time_preference) {
-        return res.status(400).json({ success: false, error: "Missing required field: time_preference" });
+
+      // BUG FIX: If time_preference is undefined but requested_time is provided,
+      // derive time_preference from the requested time. If neither, skip filtering.
+      let effectiveTimePreference = time_preference;
+      if (!effectiveTimePreference && requested_time) {
+        const requestedMins = parseTimeToMinutes(requested_time, tz);
+        if (requestedMins !== null) {
+          const requestedHour = Math.floor(requestedMins / 60);
+          effectiveTimePreference = requestedHour >= 12 ? "afternoon" : "morning";
+          console.log(`[CheckAvailability] Derived time_preference from requested_time: ${requested_time} => hour ${requestedHour} => "${effectiveTimePreference}"`);
+        }
+      }
+      if (!effectiveTimePreference) {
+        effectiveTimePreference = ""; // Empty string = no preference filtering
+        console.log(`[CheckAvailability] No time_preference provided, will check all available times`);
       }
 
-      console.log(`[CheckAvailability] Package mode: ${package_name}, preference: ${time_preference}`);
+      console.log(`[CheckAvailability] Package mode: ${package_name}, preference: ${effectiveTimePreference || "(any)"}`);
 
       // Look up the package
       const pkg = await getPackageByName(resolvedLocationId, package_name);
@@ -1101,7 +1114,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       const packagePlans = await findPackageDayAvailability(
         resolvedLocationId,
         pkg.services,
-        time_preference,
+        effectiveTimePreference,  // Use derived preference (may be "" for no filtering)
         startDateFilter,
         tz,
         installation,
@@ -1113,7 +1126,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       );
 
       if (packagePlans.length === 0) {
-        const alternativePreference = time_preference === "afternoon" ? "morning" : "afternoon";
+        const alternativePreference = effectiveTimePreference === "afternoon" ? "morning" : "afternoon";
         return res.json({
           success: false,
           package_name: pkg.package_name,
@@ -1994,11 +2007,27 @@ router.post("/book", async (req: Request, res: Response) => {
         if (!selectedDate) {
           return res.status(400).json({ success: false, error: "Missing required field: selected_date (or provide slots array)" });
         }
-        if (!timePreference) {
-          return res.status(400).json({ success: false, error: "Missing required field: time_preference (or provide slots array)" });
+
+        // BUG FIX: If time_preference is undefined but requestedTime is provided,
+        // derive time_preference from the requested time. If neither is provided,
+        // skip the time preference filter entirely.
+        let effectiveTimePreference = timePreference;
+        if (!effectiveTimePreference && requestedTime) {
+          // Parse the requested time to get the hour
+          const requestedMins = parseTimeToMinutes(requestedTime, tz);
+          if (requestedMins !== null) {
+            const requestedHour = Math.floor(requestedMins / 60);
+            effectiveTimePreference = requestedHour >= 12 ? "afternoon" : "morning";
+            console.log(`[Book] Derived time_preference from requestedTime: ${requestedTime} => hour ${requestedHour} => "${effectiveTimePreference}"`);
+          }
+        }
+        // If still no time preference, that's OK - findPackageDayAvailability will skip the filter
+        if (!effectiveTimePreference) {
+          console.log(`[Book] No time_preference provided, will check all available times`);
+          effectiveTimePreference = ""; // Empty string signals no preference filtering
         }
 
-        console.log(`[Book] No pre-confirmed slots, recalculating for ${selectedDate} ${timePreference} ${requestedTime ? `starting at ${requestedTime}` : ""}`);
+        console.log(`[Book] No pre-confirmed slots, recalculating for ${selectedDate} ${effectiveTimePreference || "(any time)"} ${requestedTime ? `starting at ${requestedTime}` : ""}`);
 
         // Parse selected_date
         const parsedDate = parseRequestedDate(selectedDate, localNow);
@@ -2011,7 +2040,7 @@ router.post("/book", async (req: Request, res: Response) => {
         const packagePlans = await findPackageDayAvailability(
           locationId,
           pkg.services,
-          timePreference,
+          effectiveTimePreference,  // Use derived preference (may be "" for no filtering)
           parsedDate,
           tz,
           installation,
@@ -2025,12 +2054,16 @@ router.post("/book", async (req: Request, res: Response) => {
         packagePlan = packagePlans[0] || null;
 
         if (!packagePlan || packagePlan.date !== parsedDate) {
-          const alternativePreference = timePreference === "afternoon" ? "morning" : "afternoon";
+          // Suggest trying a different time if we had a preference
+          const alternativePreference = effectiveTimePreference === "afternoon" ? "morning" : "afternoon";
+          const suggestionText = effectiveTimePreference
+            ? `Would you like to try ${alternativePreference} instead?`
+            : `Would you like to try a different day?`;
           return res.json({
             success: false,
             package_name: pkg.package_name,
             appointments: [],
-            message: `I couldn't find availability for all services in the ${pkg.package_name} on ${parsedDate}. Would you like to try ${alternativePreference} instead of ${timePreference}?`,
+            message: `I couldn't find availability for all services in the ${pkg.package_name} on ${parsedDate}. ${suggestionText}`,
           });
         }
       }
@@ -3271,11 +3304,6 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
     if (!package_name) {
       return res.status(400).json({ success: false, error: "Missing required field: package_name" });
     }
-    if (!time_preference) {
-      return res.status(400).json({ success: false, error: "Missing required field: time_preference" });
-    }
-
-    console.log(`[CheckPackage] Checking availability for: ${package_name}, preference: ${time_preference}, therapist: ${therapist_preference || "(none)"}`);
 
     // Look up the package
     const pkg = await getPackageByName(resolvedLocationId, package_name);
@@ -3301,6 +3329,24 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
     const tz = installation.timezone || "America/New_York";
     const localNow = DateTime.now().setZone(tz).toJSDate();
 
+    // BUG FIX: If time_preference is undefined but requested_time is provided,
+    // derive time_preference from the requested time. If neither, skip filtering.
+    let effectiveTimePreference = time_preference;
+    if (!effectiveTimePreference && requested_time) {
+      const requestedMins = parseTimeToMinutes(requested_time, tz);
+      if (requestedMins !== null) {
+        const requestedHour = Math.floor(requestedMins / 60);
+        effectiveTimePreference = requestedHour >= 12 ? "afternoon" : "morning";
+        console.log(`[CheckPackage] Derived time_preference from requested_time: ${requested_time} => hour ${requestedHour} => "${effectiveTimePreference}"`);
+      }
+    }
+    if (!effectiveTimePreference) {
+      effectiveTimePreference = ""; // Empty string = no preference filtering
+      console.log(`[CheckPackage] No time_preference provided, will check all available times`);
+    }
+
+    console.log(`[CheckPackage] Checking availability for: ${package_name}, preference: ${effectiveTimePreference || "(any)"}, therapist: ${therapist_preference || "(none)"}`);
+
     // Parse requested_date if provided
     let startDateFilter: string | null = null;
     if (requested_date) {
@@ -3312,7 +3358,7 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
     const packagePlans = await findPackageDayAvailability(
       resolvedLocationId,
       pkg.services,
-      time_preference,
+      effectiveTimePreference,  // Use derived preference (may be "" for no filtering)
       startDateFilter,
       tz,
       installation,
@@ -3324,7 +3370,7 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
     );
 
     if (packagePlans.length === 0) {
-      const alternativePreference = time_preference === "afternoon" ? "morning" : "afternoon";
+      const alternativePreference = effectiveTimePreference === "afternoon" ? "morning" : "afternoon";
       return res.json({
         success: false,
         package_name: pkg.package_name,
