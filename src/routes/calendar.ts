@@ -41,6 +41,75 @@ import {
 const router = Router();
 const ghl = new GHL();
 
+// ---------------------------------------------------------------------------
+// PLAN CACHE: Per BOOKING-LOGIC-SPEC Section 7 (Check-vs-Book Consistency)
+// When check_availability builds a package plan, cache it with a short TTL.
+// When book_appointment is called with the plan_id, use the EXACT cached plan
+// instead of recalculating. This eliminates the "check says available, book
+// says not" bug.
+// ---------------------------------------------------------------------------
+interface CachedPlan {
+  locationId: string;
+  packageName: string;
+  plan: {
+    date: string;
+    slots: Array<{
+      service: string;
+      startTime: string;
+      endTime: string;
+      calendar_id: string;
+      staff_name: string | null;
+      staff_user_id: string | null;
+    }>;
+  };
+  createdAt: number;
+}
+
+const planCache = new Map<string, CachedPlan>();
+const PLAN_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function generatePlanId(): string {
+  return `plan_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+}
+
+function cachePlan(planId: string, plan: CachedPlan): void {
+  planCache.set(planId, plan);
+  console.log(`[PlanCache] Cached plan ${planId} for ${plan.packageName} on ${plan.plan.date}`);
+}
+
+function getCachedPlan(planId: string): CachedPlan | null {
+  const cached = planCache.get(planId);
+  if (!cached) {
+    console.log(`[PlanCache] Plan ${planId} not found in cache`);
+    return null;
+  }
+
+  const age = Date.now() - cached.createdAt;
+  if (age > PLAN_CACHE_TTL_MS) {
+    console.log(`[PlanCache] Plan ${planId} expired (age: ${Math.round(age / 1000)}s)`);
+    planCache.delete(planId);
+    return null;
+  }
+
+  console.log(`[PlanCache] Retrieved plan ${planId} (age: ${Math.round(age / 1000)}s)`);
+  return cached;
+}
+
+// Cleanup expired plans every minute
+setInterval(() => {
+  const now = Date.now();
+  let cleaned = 0;
+  for (const [planId, cached] of planCache) {
+    if (now - cached.createdAt > PLAN_CACHE_TTL_MS) {
+      planCache.delete(planId);
+      cleaned++;
+    }
+  }
+  if (cleaned > 0) {
+    console.log(`[PlanCache] Cleaned up ${cleaned} expired plans`);
+  }
+}, 60 * 1000);
+
 /**
  * Get timezone-aware current time info for a location.
  * Uses luxon for reliable timezone handling on servers.
@@ -1020,6 +1089,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
 
       // Format response - IMPORTANT: start_time is when the PACKAGE starts (first service)
       // Don't put staff names at the top level - they apply to individual services
+      // SPEC Section 7: Cache each plan with a plan_id for check-vs-book consistency
       const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
       const available_dates = packagePlans.map((plan) => {
         const dateObj = new Date(plan.date + "T12:00:00");
@@ -1029,9 +1099,29 @@ router.post("/check-availability", async (req: Request, res: Response) => {
         const firstSlot = plan.slots[0];
         const packageStartTime = formatTimeForVoice(new Date(firstSlot.startTime), tz);
 
+        // Generate a plan_id and cache this plan for book_appointment to use
+        const planId = generatePlanId();
+        cachePlan(planId, {
+          locationId: resolvedLocationId,
+          packageName: pkg.package_name,
+          plan: {
+            date: plan.date,
+            slots: plan.slots.map((slot) => ({
+              service: slot.service,
+              startTime: slot.startTime,
+              endTime: slot.endTime,
+              calendar_id: slot.calendar_id,
+              staff_name: slot.staff_name,
+              staff_user_id: slot.staff_user_id,
+            })),
+          },
+          createdAt: Date.now(),
+        });
+
         return {
           date: plan.date,
           day_name: dayName,
+          plan_id: planId,  // IMPORTANT: Pass this to book_appointment to use the cached plan
           // Package start time - this is what the agent should say: "starting at 9:00 AM"
           start_time: packageStartTime,
           startTime: firstSlot.startTime,  // ISO timestamp for booking
@@ -1047,7 +1137,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
         };
       });
 
-      console.log(`[CheckAvailability] Package: found ${available_dates.length} available dates`);
+      console.log(`[CheckAvailability] Package: found ${available_dates.length} available dates with plan_ids`);
 
       return res.json({
         success: true,
@@ -1637,12 +1727,14 @@ router.post("/book", async (req: Request, res: Response) => {
       const packageName = body.package_name;
       const selectedDate = body.selected_date;
       const timePreference = body.time_preference;
-      const requestedTime = body.requested_time || body.requestedTime || body.start_time || body.startTime;  // BUG FIX: Accept requested start time
-      const providedSlots = body.slots;  // FIX 2: Accept slots directly from check_availability
+      const requestedTime = body.requested_time || body.requestedTime || body.start_time || body.startTime;
+      const providedSlots = body.slots;  // Legacy: Accept slots directly from check_availability
+      const planId = body.plan_id;  // SPEC Section 7: Use cached plan for check-vs-book consistency
 
       console.log(`[Book] ===== PACKAGE BOOKING START =====`);
       console.log(`[Book] Request body:`, JSON.stringify(body, null, 2));
-      console.log(`[Book] Requested start time: ${requestedTime || "(none - will use earliest available)"}`);
+      console.log(`[Book] Plan ID: ${planId || "(none)"}`);
+      console.log(`[Book] Requested start time: ${requestedTime || "(none - will use cached plan)"}`);
 
 
       if (!locationId) {
@@ -1742,10 +1834,42 @@ router.post("/book", async (req: Request, res: Response) => {
         }>;
       } | null = null;
 
-      // FIX 2: If slots are provided from check_availability, use them directly
+      // SPEC Section 7: Check-vs-Book Consistency
+      // Priority: 1) plan_id (cached plan), 2) providedSlots (legacy), 3) recalculate (fallback)
       console.log(`[Book] STEP 4: Processing slots...`);
-      if (providedSlots && Array.isArray(providedSlots) && providedSlots.length > 0) {
-        console.log(`[Book] STEP 4A: Using ${providedSlots.length} pre-confirmed slots from check_availability`);
+
+      // PRIORITY 1: Use cached plan from check_availability via plan_id
+      if (planId) {
+        console.log(`[Book] STEP 4A: Looking up cached plan with ID: ${planId}`);
+        const cached = getCachedPlan(planId);
+
+        if (cached) {
+          // Verify this plan belongs to the correct location and package
+          if (cached.locationId !== locationId) {
+            console.log(`[Book] CACHE MISMATCH: Plan location ${cached.locationId} !== request location ${locationId}`);
+            return res.status(400).json({ success: false, error: "Plan ID belongs to a different location" });
+          }
+          if (cached.packageName.toLowerCase() !== packageName.toLowerCase()) {
+            console.log(`[Book] CACHE MISMATCH: Plan package "${cached.packageName}" !== request package "${packageName}"`);
+            return res.status(400).json({ success: false, error: "Plan ID belongs to a different package" });
+          }
+
+          // Use the cached plan directly - it already has all the slot details
+          packagePlan = cached.plan;
+          console.log(`[Book] STEP 4 SUCCESS: Using cached plan from check_availability`);
+          console.log(`[Book] Package date: ${packagePlan.date}`);
+          packagePlan.slots.forEach((s, idx) => {
+            console.log(`[Book]   ${idx + 1}. ${s.service}: ${s.startTime} -> ${s.endTime} (staff: ${s.staff_name || "any"}, userId: ${s.staff_user_id || "none"}, calendar: ${s.calendar_id})`);
+          });
+        } else {
+          console.log(`[Book] CACHE MISS: Plan ${planId} not found or expired`);
+          // Fall through to recalculate
+        }
+      }
+
+      // PRIORITY 2: Use providedSlots from legacy request format
+      if (!packagePlan && providedSlots && Array.isArray(providedSlots) && providedSlots.length > 0) {
+        console.log(`[Book] STEP 4B: Using ${providedSlots.length} pre-confirmed slots from request body`);
         console.log(`[Book] Provided slots:`, JSON.stringify(providedSlots, null, 2));
 
         // Map provided slots to the expected format
@@ -1820,8 +1944,9 @@ router.post("/book", async (req: Request, res: Response) => {
           console.log(`[Book]   ${idx + 1}. ${s.service}: ${s.startTime} -> ${s.endTime} (staff: ${s.staff_name || "any"}, userId: ${s.staff_user_id || "none"}, calendar: ${s.calendar_id})`);
         });
       }
-      // Fall back to recalculating if no slots provided
-      else {
+
+      // PRIORITY 3: Fall back to recalculating if no cached plan or slots provided
+      if (!packagePlan) {
         if (!selectedDate) {
           return res.status(400).json({ success: false, error: "Missing required field: selected_date (or provide slots array)" });
         }
@@ -2771,6 +2896,7 @@ router.post("/book-package", async (req: Request, res: Response) => {
       requested_date,
       selected_date,
       requested_time,  // BUG FIX: Accept requested start time
+      plan_id,  // SPEC Section 7: Use cached plan for check-vs-book consistency
       customer_name,
       phone,
       email,
@@ -2788,14 +2914,21 @@ router.post("/book-package", async (req: Request, res: Response) => {
     if (!package_name) {
       return res.status(400).json({ success: false, error: "Missing required field: package_name" });
     }
-    if (!time_preference) {
-      return res.status(400).json({ success: false, error: "Missing required field: time_preference" });
+    // time_preference is optional if plan_id is provided
+    if (!time_preference && !plan_id) {
+      return res.status(400).json({ success: false, error: "Missing required field: time_preference (or provide plan_id)" });
     }
     if (!customer_name || !phone || !email) {
       return res.status(400).json({ success: false, error: "Missing required fields: customer_name, phone, email" });
     }
 
     console.log(`[BookPackage] Starting package booking: ${package_name} for ${customer_name}`);
+    console.log(`[BookPackage] Plan ID: ${plan_id || "(none)"}`);
+    console.log(`[BookPackage] Requested time: ${requested_time || "(none)"}`);
+    console.log(`[BookPackage] Selected date: ${selected_date || "(none)"}`);
+    console.log(`[BookPackage] Time preference: ${time_preference || "(none)"}`);
+    console.log(`[BookPackage] Therapist preference: ${therapist_preference || "(none)"}`);
+    console.log(`[BookPackage] Strict gender: ${strict_gender || false}`);
 
     // Step 1: Look up the package
     const pkg = await getPackageByName(resolvedLocationId, package_name);
@@ -2845,37 +2978,81 @@ router.post("/book-package", async (req: Request, res: Response) => {
       if (parsed) startDateFilter = parsed;
     }
 
-    // Step 3: Find a day where ALL services can be booked consecutively
-    console.log(`[BookPackage] Finding a day where all ${pkg.services.length} services fit...`);
-    if (specificDate) {
-      console.log(`[BookPackage] User selected specific date: ${specificDate}`);
+    // Step 3: Get package plan (from cache or recalculate)
+    // SPEC Section 7: Use cached plan for check-vs-book consistency
+    let packagePlan: {
+      date: string;
+      slots: Array<{
+        service: string;
+        startTime: string;
+        endTime: string;
+        calendar_id: string;
+        staff_name: string | null;
+        staff_user_id: string | null;
+      }>;
+    } | null = null;
+
+    // PRIORITY 1: Use cached plan from check_availability via plan_id
+    if (plan_id) {
+      console.log(`[BookPackage] Looking up cached plan with ID: ${plan_id}`);
+      const cached = getCachedPlan(plan_id);
+
+      if (cached) {
+        // Verify this plan belongs to the correct location and package
+        if (cached.locationId !== resolvedLocationId) {
+          console.log(`[BookPackage] CACHE MISMATCH: Plan location ${cached.locationId} !== request location ${resolvedLocationId}`);
+          return res.status(400).json({ success: false, error: "Plan ID belongs to a different location" });
+        }
+        if (cached.packageName.toLowerCase() !== package_name.toLowerCase()) {
+          console.log(`[BookPackage] CACHE MISMATCH: Plan package "${cached.packageName}" !== request package "${package_name}"`);
+          return res.status(400).json({ success: false, error: "Plan ID belongs to a different package" });
+        }
+
+        // Use the cached plan directly
+        packagePlan = cached.plan;
+        console.log(`[BookPackage] Using cached plan from check_availability`);
+        console.log(`[BookPackage] Package date: ${packagePlan.date}`);
+        packagePlan.slots.forEach((s, idx) => {
+          console.log(`[BookPackage]   ${idx + 1}. ${s.service}: ${s.startTime} -> ${s.endTime} (staff: ${s.staff_name || "any"}, calendar: ${s.calendar_id})`);
+        });
+      } else {
+        console.log(`[BookPackage] CACHE MISS: Plan ${plan_id} not found or expired, falling back to recalculate`);
+      }
     }
 
-    const packagePlans = await findPackageDayAvailability(
-      resolvedLocationId,
-      pkg.services,
-      time_preference,
-      startDateFilter,
-      tz,
-      installation,
-      localNow,
-      1, // Only need 1 result for booking
-      therapist_preference,
-      strict_gender === true,  // Pass strict gender mode
-      requested_time  // BUG FIX: Pass requested start time
-    );
+    // PRIORITY 2: Fall back to recalculating if no cached plan
+    if (!packagePlan) {
+      console.log(`[BookPackage] Finding a day where all ${pkg.services.length} services fit...`);
+      if (specificDate) {
+        console.log(`[BookPackage] User selected specific date: ${specificDate}`);
+      }
 
-    // If user selected a specific date, verify the result matches
-    let packagePlan: typeof packagePlans[0] | null = packagePlans[0] || null;
+      const packagePlans = await findPackageDayAvailability(
+        resolvedLocationId,
+        pkg.services,
+        time_preference,
+        startDateFilter,
+        tz,
+        installation,
+        localNow,
+        1, // Only need 1 result for booking
+        therapist_preference,
+        strict_gender === true,  // Pass strict gender mode
+        requested_time  // BUG FIX: Pass requested start time
+      );
 
-    if (specificDate && packagePlan && packagePlan.date !== specificDate) {
-      // The specific date doesn't work, return error
-      console.log(`[BookPackage] Selected date ${specificDate} doesn't have availability`);
-      packagePlan = null;
+      // If user selected a specific date, verify the result matches
+      packagePlan = packagePlans[0] || null;
+
+      if (specificDate && packagePlan && packagePlan.date !== specificDate) {
+        // The specific date doesn't work, return error
+        console.log(`[BookPackage] Selected date ${specificDate} doesn't have availability`);
+        packagePlan = null;
+      }
     }
 
     if (!packagePlan) {
-      // No single day found - suggest alternative
+      // No plan found - suggest alternative
       const alternativePreference = time_preference === "afternoon" ? "morning" : "afternoon";
       const dateContext = specificDate ? ` on ${specificDate}` : "";
       return res.json({
@@ -3113,6 +3290,7 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
 
     // Format response - IMPORTANT: start_time is when the PACKAGE starts (first service)
     // Don't put staff names at the top level - they apply to individual services
+    // SPEC Section 7: Cache each plan with a plan_id for check-vs-book consistency
     const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
     const available_dates = packagePlans.map((plan) => {
@@ -3123,9 +3301,29 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
       const firstSlot = plan.slots[0];
       const packageStartTime = formatTimeForVoice(new Date(firstSlot.startTime), tz);
 
+      // Generate a plan_id and cache this plan for book_appointment to use
+      const planId = generatePlanId();
+      cachePlan(planId, {
+        locationId: resolvedLocationId,
+        packageName: pkg.package_name,
+        plan: {
+          date: plan.date,
+          slots: plan.slots.map((slot) => ({
+            service: slot.service,
+            startTime: slot.startTime,
+            endTime: slot.endTime,
+            calendar_id: slot.calendar_id,
+            staff_name: slot.staff_name,
+            staff_user_id: slot.staff_user_id,
+          })),
+        },
+        createdAt: Date.now(),
+      });
+
       return {
         date: plan.date,
         day_name: dayName,
+        plan_id: planId,  // IMPORTANT: Pass this to book_appointment to use the cached plan
         // Package start time - this is what the agent should say: "starting at 9:00 AM"
         start_time: packageStartTime,
         startTime: firstSlot.startTime,  // ISO timestamp for booking
@@ -3141,7 +3339,7 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
       };
     });
 
-    console.log(`[CheckPackage] Found ${available_dates.length} available dates`);
+    console.log(`[CheckPackage] Found ${available_dates.length} available dates with plan_ids`);
 
     return res.json({
       success: true,
@@ -3519,47 +3717,12 @@ async function findPackageDayAvailability(
     }
   }
 
-  // INFER CLOSING TIME FROM GHL DATA: Find the latest slot time for each date
-  // The latest available slot + slot duration = approximate business closing time
-  // This avoids hardcoding business hours - each business's hours come from GHL
-  const inferredClosingByDate: Map<string, number> = new Map();  // dateKey -> closing time in minutes from midnight
-
-  for (const [_key, dateSlots] of staffCalendarSlots) {
-    for (const [dateKey, slots] of dateSlots) {
-      if (slots.length === 0) continue;
-
-      // Find the latest slot for this date
-      let latestSlotMs = 0;
-      for (const slot of slots) {
-        const slotMs = new Date(slot).getTime();
-        if (slotMs > latestSlotMs) latestSlotMs = slotMs;
-      }
-
-      if (latestSlotMs > 0) {
-        // Convert to local time minutes from midnight
-        const latestDate = new Date(latestSlotMs);
-        const localTime = latestDate.toLocaleString("en-US", {
-          timeZone: tz,
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: false
-        });
-        const [hourStr, minStr] = localTime.split(":");
-        const hour = parseInt(hourStr, 10);
-        const min = parseInt(minStr, 10);
-        // Add typical slot duration (60 min) to get closing time
-        const closingMins = hour * 60 + min + 60;
-
-        // Keep the latest closing time we've seen for this date
-        const existing = inferredClosingByDate.get(dateKey) || 0;
-        if (closingMins > existing) {
-          inferredClosingByDate.set(dateKey, closingMins);
-        }
-      }
-    }
-  }
-
-  console.log(`[Package] Inferred closing times from GHL slots:`, Object.fromEntries(inferredClosingByDate));
+  // SPEC Section 8 & 22: Do NOT infer closing time from GHL slots.
+  // GHL free-slots only returns slots within business hours. If a slot exists
+  // in the API response, it's within business hours by definition.
+  // The old closing time inference was broken because existing appointments
+  // consume later slots, making the "last available slot" appear earlier than
+  // actual closing time.
 
   // Helper to check time preference
   const matchesTimePreference = (slotTime: string): boolean => {
@@ -3693,38 +3856,19 @@ async function findPackageDayAvailability(
     }
 
     if (dateWorks && plan.length === services.length) {
-      // Check that the last service doesn't extend past business closing time
-      // Closing time is INFERRED from GHL free-slots data (latest slot + duration)
-      const inferredClosing = inferredClosingByDate.get(dateKey);
-
-      if (inferredClosing) {
-        const lastSlot = plan[plan.length - 1];
-        const lastEndTime = new Date(lastSlot.endTime);
-
-        // Get the local hour/minute of the end time in the business timezone
-        const endTimeLocal = lastEndTime.toLocaleString("en-US", {
-          timeZone: tz,
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: false
-        });
-        const [endHourStr, endMinStr] = endTimeLocal.split(":");
-        const endHour = parseInt(endHourStr, 10);
-        const endMin = parseInt(endMinStr, 10);
-        const endTotalMins = endHour * 60 + endMin;
-
-        if (endTotalMins > inferredClosing) {
-          const closingHour = Math.floor(inferredClosing / 60);
-          const closingMin = inferredClosing % 60;
-          console.log(`[Package] Rejecting ${dateKey} - package ends at ${endTimeLocal} which is after inferred closing ${closingHour}:${closingMin.toString().padStart(2, "0")}`);
-          continue;  // Skip this date, don't add to results
-        }
-
-        console.log(`[Package] Found valid day: ${dateKey} (ends at ${endTimeLocal}, before inferred closing)`);
-      } else {
-        // No closing time inferred (shouldn't happen if we have slots), accept the plan
-        console.log(`[Package] Found valid day: ${dateKey} (no closing time inferred, accepting)`);
-      }
+      // SPEC Section 8 & 22: Trust GHL free-slots data.
+      // If we found valid GHL slots for ALL services in sequence, the package
+      // fits within business hours by definition. GHL wouldn't return a slot
+      // that extends past closing time.
+      const lastSlot = plan[plan.length - 1];
+      const lastEndTime = new Date(lastSlot.endTime);
+      const endTimeLocal = lastEndTime.toLocaleString("en-US", {
+        timeZone: tz,
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false
+      });
+      console.log(`[Package] Found valid day: ${dateKey} (package ends at ${endTimeLocal})`);
 
       results.push({ date: dateKey, slots: plan });
     }
