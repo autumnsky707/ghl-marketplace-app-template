@@ -1919,15 +1919,55 @@ router.post("/book", async (req: Request, res: Response) => {
             console.log(`[Book]   First 5 slots: ${availableSlots.slice(0, 5).join(", ")}`);
           }
 
-          // Check if our exact slot time is still in the available slots
+          // Check if our slot time is still in the available slots
+          // Use a 2-minute tolerance to handle timezone/rounding differences
+          const TOLERANCE_MS = 2 * 60 * 1000; // 2 minutes
           const targetMs = slotDate.getTime();
-          const slotStillAvailable = availableSlots.some(availSlot => {
-            const availMs = new Date(availSlot).getTime();
-            return availMs === targetMs;
-          });
+
+          // Also check if the slot is in the past (for same-day bookings)
+          const nowMs = Date.now();
+          const isSlotInPast = targetMs < nowMs;
 
           console.log(`[Book]   Target time: ${slot.startTime} (${targetMs}ms)`);
+          console.log(`[Book]   Current time: ${new Date().toISOString()} (${nowMs}ms)`);
+          console.log(`[Book]   Is slot in past: ${isSlotInPast}`);
+
+          if (isSlotInPast) {
+            console.log(`[Book] RE-VALIDATION FAILED: ${slot.service} at ${slot.startTime} is in the past`);
+            return res.json({
+              success: false,
+              package_name: pkg.package_name,
+              appointments: [],
+              message: `The ${slot.service} slot at ${slot.startTime} is no longer available because the time has passed. Let me find new options for you.`,
+            });
+          }
+
+          const slotStillAvailable = availableSlots.some(availSlot => {
+            const availMs = new Date(availSlot).getTime();
+            const diff = Math.abs(availMs - targetMs);
+            if (diff <= TOLERANCE_MS) {
+              console.log(`[Book]     Matched: ${availSlot} (diff: ${diff}ms)`);
+              return true;
+            }
+            return false;
+          });
+
           console.log(`[Book]   Slot still available: ${slotStillAvailable}`);
+
+          // Log closest match if not found
+          if (!slotStillAvailable && availableSlots.length > 0) {
+            let closestDiff = Infinity;
+            let closestSlot = "";
+            availableSlots.forEach(availSlot => {
+              const availMs = new Date(availSlot).getTime();
+              const diff = Math.abs(availMs - targetMs);
+              if (diff < closestDiff) {
+                closestDiff = diff;
+                closestSlot = availSlot;
+              }
+            });
+            console.log(`[Book]   Closest available slot: ${closestSlot} (diff: ${closestDiff}ms = ${Math.round(closestDiff / 60000)} minutes)`);
+          }
 
           if (!slotStillAvailable) {
             console.log(`[Book] RE-VALIDATION FAILED: ${slot.service} at ${slot.startTime} is no longer available`);
@@ -3763,11 +3803,21 @@ async function bookServiceAppointment(
     const bufferEndMs = endTimeMs + slotBuffer * 60 * 1000;
     const bufferEndISO = new Date(bufferEndMs).toISOString();
 
-    // Build notes with therapist preference if provided
+    // Build notes - ONLY add therapist preference to MASSAGE services
+    // Other services (body treatment, facial) don't need therapist gender preference
     let appointmentNotes = notes || "";
     if (therapistPreference && ["male", "female"].includes(therapistPreference.toLowerCase())) {
-      const prefNote = `Therapist preference: ${therapistPreference.toLowerCase()}`;
-      appointmentNotes = appointmentNotes ? `${appointmentNotes} | ${prefNote}` : prefNote;
+      // Check if this is a massage service using the existing helper
+      const calendarName = syncedCalendar?.calendar_name || "";
+      const isMassage = isMassageService(serviceName, calendarName);
+
+      if (isMassage) {
+        const prefNote = `Therapist preference: ${therapistPreference.toLowerCase()}`;
+        appointmentNotes = appointmentNotes ? `${appointmentNotes} | ${prefNote}` : prefNote;
+        console.log(`[BookService] Added therapist preference to massage service: ${serviceName}`);
+      } else {
+        console.log(`[BookService] Skipping therapist preference for non-massage service: ${serviceName}`);
+      }
     }
 
     // Build appointment
