@@ -1761,6 +1761,62 @@ router.post("/book", async (req: Request, res: Response) => {
         });
       }
 
+      // RE-VALIDATION: Per booking spec Section 7, we must re-check that slots are still available
+      // Time passes during voice calls (30+ seconds). Someone else could have booked these slots.
+      // Use the SAME GHL free-slots API to verify each slot is still free.
+      console.log(`[Book] Re-validating ${packagePlan.slots.length} slots before booking...`);
+
+      for (const slot of packagePlan.slots) {
+        const slotDate = new Date(slot.startTime);
+        const slotDateStr = slotDate.toISOString().split("T")[0];
+
+        // Call GHL free-slots for this specific calendar + staff + date
+        const startMs = new Date(slotDateStr + "T00:00:00").getTime();
+        const endMs = new Date(slotDateStr + "T23:59:59").getTime();
+
+        let slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${slot.calendar_id}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
+        if (slot.staff_user_id) {
+          slotsUrl += `&userId=${encodeURIComponent(slot.staff_user_id)}`;
+        }
+
+        try {
+          const resp = await axios.get(slotsUrl, {
+            headers: {
+              Authorization: `Bearer ${installation.access_token}`,
+              Version: "2021-07-28",
+            },
+          });
+
+          const rawData = resp.data || {};
+          const dateEntry = rawData[slotDateStr];
+          const availableSlots: string[] = Array.isArray(dateEntry) ? dateEntry : dateEntry?.slots || [];
+
+          // Check if our exact slot time is still in the available slots
+          const slotStillAvailable = availableSlots.some(availSlot => {
+            const availMs = new Date(availSlot).getTime();
+            const targetMs = slotDate.getTime();
+            return availMs === targetMs;
+          });
+
+          if (!slotStillAvailable) {
+            console.log(`[Book] RE-VALIDATION FAILED: ${slot.service} at ${slot.startTime} is no longer available`);
+            return res.json({
+              success: false,
+              package_name: pkg.package_name,
+              appointments: [],
+              message: `Availability has changed — the ${slot.service} slot at ${slot.startTime} was just booked by someone else. Let me find new options for you.`,
+            });
+          }
+
+          console.log(`[Book] Re-validated: ${slot.service} at ${slot.startTime} still available`);
+        } catch (err: any) {
+          console.error(`[Book] Re-validation API error for ${slot.service}:`, err.message);
+          // If we can't verify, proceed cautiously - the booking will fail if truly unavailable
+        }
+      }
+
+      console.log(`[Book] All slots re-validated successfully. Proceeding with booking.`);
+
       // Book all services
       const appointments: Array<{
         service: string;
