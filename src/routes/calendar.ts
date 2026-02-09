@@ -3242,11 +3242,15 @@ async function findPackageDayAvailability(
       endTime: string;
       calendar_id: string;
       staff_name: string | null;
-      staff_user_id: string | null;  // BUG FIX: Include user_id for booking assignment
+      staff_user_id: string | null;
     }> = [];
 
     let minStartTimeMs = Math.max(localNow.getTime() + BUFFER_MS, new Date(dateKey + "T00:00:00").getTime());
     let dateWorks = true;
+
+    // FIX 3: Track consumed slots to prevent double-booking same staff at same time
+    // Format: "staffKey:slotTimeMs" -> endTimeMs
+    const consumedSlots: Map<string, number> = new Map();
 
     for (const service of services) {
       const cals = serviceCalendars.get(service) || [];
@@ -3261,9 +3265,30 @@ async function findPackageDayAvailability(
           if (slotMs < minStartTimeMs) continue;
           if (!matchesTimePreference(slotTime)) continue;
 
+          // FIX 3: Check if this staff member is already booked at this time
+          // Look for any consumed slot for this staff that would overlap
+          let slotConsumed = false;
+          for (const [consumedKey, consumedEndMs] of consumedSlots) {
+            if (consumedKey.startsWith(staffKey + ":")) {
+              const consumedStartMs = parseInt(consumedKey.split(":").pop()!, 10);
+              // Check for overlap: new slot starts before consumed ends
+              if (slotMs < consumedEndMs && slotMs >= consumedStartMs) {
+                slotConsumed = true;
+                break;
+              }
+            }
+          }
+          if (slotConsumed) {
+            console.log(`[Package] Skipping ${staffKey} at ${slotTime} - already booked for another service`);
+            continue;
+          }
+
           const timing = await getCalendarTiming(cal.calendar_id);
           const endTimeMs = slotMs + timing.duration;
           const endTimeISO = new Date(endTimeMs).toISOString();
+
+          // FIX 3: Mark this slot as consumed for this staff
+          consumedSlots.set(`${staffKey}:${slotMs}`, endTimeMs + timing.buffer);
 
           plan.push({
             service,
@@ -3271,7 +3296,7 @@ async function findPackageDayAvailability(
             endTime: endTimeISO,
             calendar_id: cal.calendar_id,
             staff_name: cal.staff_name,
-            staff_user_id: cal.user_id,  // BUG FIX: Include user_id for booking assignment
+            staff_user_id: cal.user_id,
           });
 
           minStartTimeMs = endTimeMs + timing.buffer;
