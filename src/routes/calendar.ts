@@ -1437,7 +1437,20 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     };
 
     // Parse date filter if requested_date is provided
-    const dateFilter = requested_date ? parseDateRequest(requested_date) : null;
+    // BUG FIX: Use chrono-node (parseRequestedDate) for consistent date parsing
+    // The internal parseDateRequest doesn't handle formats like "Monday the 16th"
+    let dateFilter: ((dateKey: string) => boolean) | null = null;
+    if (requested_date) {
+      const parsedDate = parseRequestedDate(requested_date, localNow);
+      if (parsedDate) {
+        console.log(`[Calendar] Parsed requested_date "${requested_date}" to "${parsedDate}" using chrono-node`);
+        dateFilter = (dateKey) => dateKey === parsedDate;
+      } else {
+        // Fall back to internal parser for formats chrono-node doesn't handle well
+        console.log(`[Calendar] chrono-node couldn't parse "${requested_date}", trying internal parser`);
+        dateFilter = parseDateRequest(requested_date);
+      }
+    }
 
     // Determine time filter function
     let timeFilterFn: ((slot: string) => boolean) | null = null;
@@ -1604,22 +1617,52 @@ router.post("/book", async (req: Request, res: Response) => {
       const timePreference = body.time_preference;
       const providedSlots = body.slots;  // FIX 2: Accept slots directly from check_availability
 
+      console.log(`[Book] ===== PACKAGE BOOKING START =====`);
+      console.log(`[Book] Request body:`, JSON.stringify(body, null, 2));
+
       if (!locationId) {
+        console.log(`[Book] VALIDATION FAILED: Missing locationId`);
         return res.status(400).json({ success: false, error: "Missing required field: locationId" });
       }
       if (!packageName) {
+        console.log(`[Book] VALIDATION FAILED: Missing package_name`);
         return res.status(400).json({ success: false, error: "Missing required field: package_name" });
       }
       if (!customerName || !customerPhone || !customerEmail) {
+        console.log(`[Book] VALIDATION FAILED: Missing customer info - name: ${!!customerName}, phone: ${!!customerPhone}, email: ${!!customerEmail}`);
         return res.status(400).json({ success: false, error: "Missing required fields: customer_name, phone, email" });
       }
 
       console.log(`[Book] PACKAGE mode: ${packageName} for ${customerName}`);
+      console.log(`[Book] Customer: ${customerName}, Email: ${customerEmail}, Phone: ${customerPhone}`);
+      console.log(`[Book] Selected date: ${selectedDate}, Time preference: ${timePreference}`);
+      console.log(`[Book] Provided slots: ${providedSlots ? JSON.stringify(providedSlots) : "(none)"}`);
 
-      // Look up the package
-      const pkg = await getPackageByName(locationId, packageName);
+      // STEP 1: Look up the package
+      console.log(`[Book] STEP 1: Looking up package "${packageName}"...`);
+      let pkg;
+      try {
+        pkg = await getPackageByName(locationId, packageName);
+        if (pkg) {
+          console.log(`[Book] STEP 1 SUCCESS: Package found - "${pkg.package_name}" with ${pkg.services?.length || 0} services: ${pkg.services?.join(", ") || "none"}`);
+        } else {
+          console.log(`[Book] STEP 1 FAILED: Package "${packageName}" NOT FOUND`);
+        }
+      } catch (pkgErr: any) {
+        console.error(`[Book] STEP 1 FATAL ERROR: Package lookup threw exception`);
+        console.error(`[Book] Error message:`, pkgErr.message);
+        console.error(`[Book] Stack trace:`, pkgErr.stack);
+        return res.status(500).json({ success: false, error: "Package lookup failed: " + pkgErr.message });
+      }
+
       if (!pkg) {
-        const allPackages = await getPackages(locationId);
+        let allPackages: any[] = [];
+        try {
+          allPackages = await getPackages(locationId);
+          console.log(`[Book] Available packages for location:`, allPackages.map(p => p.package_name).join(", ") || "none");
+        } catch (e: any) {
+          console.error(`[Book] Failed to list packages:`, e.message);
+        }
         const suggestion = allPackages.length > 0 ? allPackages[0].package_name : null;
         return res.status(404).json({
           success: false,
@@ -1630,14 +1673,36 @@ router.post("/book", async (req: Request, res: Response) => {
         });
       }
 
-      // Get installation for timezone and auth
-      const installation = await getInstallation(locationId);
-      if (!installation) {
-        return res.status(404).json({ success: false, error: "Installation not found" });
+      // STEP 2: Get installation for timezone and auth
+      console.log(`[Book] STEP 2: Getting installation for location ${locationId}...`);
+      let installation;
+      try {
+        installation = await getInstallation(locationId);
+        if (installation) {
+          console.log(`[Book] STEP 2 SUCCESS: Installation found - timezone: ${installation.timezone}, calendar: ${installation.calendar_id}`);
+        } else {
+          console.log(`[Book] STEP 2 FAILED: Installation not found for location ${locationId}`);
+          return res.status(404).json({ success: false, error: "Installation not found" });
+        }
+      } catch (instErr: any) {
+        console.error(`[Book] STEP 2 FATAL ERROR: Installation lookup threw exception`);
+        console.error(`[Book] Error message:`, instErr.message);
+        console.error(`[Book] Stack trace:`, instErr.stack);
+        return res.status(500).json({ success: false, error: "Installation lookup failed: " + instErr.message });
       }
 
       const tz = installation.timezone || "America/New_York";
-      const client = await ghl.requests(locationId);
+      console.log(`[Book] STEP 3: Getting authenticated GHL client...`);
+      let client;
+      try {
+        client = await ghl.requests(locationId);
+        console.log(`[Book] STEP 3 SUCCESS: GHL client obtained`);
+      } catch (clientErr: any) {
+        console.error(`[Book] STEP 3 FATAL ERROR: Failed to get GHL client`);
+        console.error(`[Book] Error message:`, clientErr.message);
+        console.error(`[Book] Stack trace:`, clientErr.stack);
+        return res.status(500).json({ success: false, error: "Failed to authenticate with GHL: " + clientErr.message });
+      }
       const localNow = DateTime.now().setZone(tz).toJSDate();
 
       let packagePlan: {
@@ -1653,8 +1718,10 @@ router.post("/book", async (req: Request, res: Response) => {
       } | null = null;
 
       // FIX 2: If slots are provided from check_availability, use them directly
+      console.log(`[Book] STEP 4: Processing slots...`);
       if (providedSlots && Array.isArray(providedSlots) && providedSlots.length > 0) {
-        console.log(`[Book] Using ${providedSlots.length} pre-confirmed slots from check_availability`);
+        console.log(`[Book] STEP 4A: Using ${providedSlots.length} pre-confirmed slots from check_availability`);
+        console.log(`[Book] Provided slots:`, JSON.stringify(providedSlots, null, 2));
 
         // Map provided slots to the expected format
         const mappedSlots: Array<{
@@ -1666,34 +1733,53 @@ router.post("/book", async (req: Request, res: Response) => {
           staff_user_id: string | null;
         }> = [];
 
-        for (const slot of providedSlots) {
+        for (let slotIdx = 0; slotIdx < providedSlots.length; slotIdx++) {
+          const slot = providedSlots[slotIdx];
+          console.log(`[Book] Mapping slot ${slotIdx + 1}/${providedSlots.length}: service="${slot.service}"`);
+
           // Get calendar_id for this service
-          const syncedCals = await getSyncedCalendarsForService(locationId, slot.service);
-          const calendarId = syncedCals[0]?.calendar_id || installation.calendar_id;
+          try {
+            const syncedCals = await getSyncedCalendarsForService(locationId, slot.service);
+            console.log(`[Book]   Found ${syncedCals.length} calendars for service "${slot.service}"`);
+            const calendarId = syncedCals[0]?.calendar_id || installation.calendar_id;
 
-          if (!calendarId) {
-            console.error(`[Book] No calendar found for service: ${slot.service}`);
-            continue;
+            if (!calendarId) {
+              console.error(`[Book]   SKIPPING: No calendar found for service: ${slot.service}`);
+              continue;
+            }
+            console.log(`[Book]   Using calendar: ${calendarId}`);
+
+            // Get staff user_id if staff_name is provided
+            let staffUserId: string | null = null;
+            if (slot.staff_name) {
+              console.log(`[Book]   Looking up staff "${slot.staff_name}"...`);
+              const members = await getSyncedTeamMembers(locationId, calendarId);
+              console.log(`[Book]   Found ${members.length} team members on calendar`);
+              const matchingMember = members.find(m =>
+                m.user_name?.toLowerCase() === slot.staff_name?.toLowerCase()
+              );
+              staffUserId = matchingMember?.user_id || null;
+              console.log(`[Book]   Staff lookup result: ${staffUserId ? `found userId ${staffUserId}` : "NOT FOUND"}`);
+            }
+
+            mappedSlots.push({
+              service: slot.service as string,
+              startTime: slot.startTime as string,
+              endTime: slot.endTime as string,
+              calendar_id: calendarId,
+              staff_name: slot.staff_name || null,
+              staff_user_id: staffUserId,
+            });
+            console.log(`[Book]   Slot ${slotIdx + 1} mapped successfully`);
+          } catch (mapErr: any) {
+            console.error(`[Book]   FATAL ERROR mapping slot ${slotIdx + 1}:`, mapErr.message);
+            console.error(`[Book]   Stack:`, mapErr.stack);
           }
+        }
 
-          // Get staff user_id if staff_name is provided
-          let staffUserId: string | null = null;
-          if (slot.staff_name) {
-            const members = await getSyncedTeamMembers(locationId, calendarId);
-            const matchingMember = members.find(m =>
-              m.user_name?.toLowerCase() === slot.staff_name?.toLowerCase()
-            );
-            staffUserId = matchingMember?.user_id || null;
-          }
-
-          mappedSlots.push({
-            service: slot.service as string,
-            startTime: slot.startTime as string,
-            endTime: slot.endTime as string,
-            calendar_id: calendarId,
-            staff_name: slot.staff_name || null,
-            staff_user_id: staffUserId,
-          });
+        if (mappedSlots.length === 0) {
+          console.error(`[Book] STEP 4 FAILED: No slots could be mapped!`);
+          return res.status(500).json({ success: false, error: "Failed to map any slots for booking" });
         }
 
         // Extract date from first slot
@@ -1704,9 +1790,9 @@ router.post("/book", async (req: Request, res: Response) => {
           slots: mappedSlots,
         };
 
-        console.log(`[Book] Mapped slots for date ${firstSlotDate}:`);
+        console.log(`[Book] STEP 4 SUCCESS: Mapped ${mappedSlots.length} slots for date ${firstSlotDate}:`);
         mappedSlots.forEach((s, idx) => {
-          console.log(`[Book]   ${idx + 1}. ${s.service}: ${s.startTime} (staff: ${s.staff_name || "any"})`);
+          console.log(`[Book]   ${idx + 1}. ${s.service}: ${s.startTime} -> ${s.endTime} (staff: ${s.staff_name || "any"}, userId: ${s.staff_user_id || "none"}, calendar: ${s.calendar_id})`);
         });
       }
       // Fall back to recalculating if no slots provided
@@ -1765,9 +1851,15 @@ router.post("/book", async (req: Request, res: Response) => {
       // RE-VALIDATION: Per booking spec Section 7, we must re-check that slots are still available
       // Time passes during voice calls (30+ seconds). Someone else could have booked these slots.
       // Use the SAME GHL free-slots API to verify each slot is still free.
+      console.log(`[Book] ===== STEP 5: RE-VALIDATION START =====`);
       console.log(`[Book] Re-validating ${packagePlan.slots.length} slots before booking...`);
+      console.log(`[Book] Package plan date: ${packagePlan.date}`);
+      console.log(`[Book] Package plan slots:`, JSON.stringify(packagePlan.slots, null, 2));
 
-      for (const slot of packagePlan.slots) {
+      for (let revalIdx = 0; revalIdx < packagePlan.slots.length; revalIdx++) {
+        const slot = packagePlan.slots[revalIdx];
+        console.log(`[Book] Re-validation ${revalIdx + 1}/${packagePlan.slots.length}: ${slot.service}`);
+
         const slotDate = new Date(slot.startTime);
         const slotDateStr = slotDate.toISOString().split("T")[0];
 
@@ -1780,6 +1872,8 @@ router.post("/book", async (req: Request, res: Response) => {
           slotsUrl += `&userId=${encodeURIComponent(slot.staff_user_id)}`;
         }
 
+        console.log(`[Book]   API URL: ${slotsUrl}`);
+
         try {
           const resp = await axios.get(slotsUrl, {
             headers: {
@@ -1788,16 +1882,25 @@ router.post("/book", async (req: Request, res: Response) => {
             },
           });
 
+          console.log(`[Book]   API response status: ${resp.status}`);
           const rawData = resp.data || {};
           const dateEntry = rawData[slotDateStr];
           const availableSlots: string[] = Array.isArray(dateEntry) ? dateEntry : dateEntry?.slots || [];
 
+          console.log(`[Book]   Found ${availableSlots.length} available slots for ${slotDateStr}`);
+          if (availableSlots.length > 0) {
+            console.log(`[Book]   First 5 slots: ${availableSlots.slice(0, 5).join(", ")}`);
+          }
+
           // Check if our exact slot time is still in the available slots
+          const targetMs = slotDate.getTime();
           const slotStillAvailable = availableSlots.some(availSlot => {
             const availMs = new Date(availSlot).getTime();
-            const targetMs = slotDate.getTime();
             return availMs === targetMs;
           });
+
+          console.log(`[Book]   Target time: ${slot.startTime} (${targetMs}ms)`);
+          console.log(`[Book]   Slot still available: ${slotStillAvailable}`);
 
           if (!slotStillAvailable) {
             console.log(`[Book] RE-VALIDATION FAILED: ${slot.service} at ${slot.startTime} is no longer available`);
@@ -1809,16 +1912,20 @@ router.post("/book", async (req: Request, res: Response) => {
             });
           }
 
-          console.log(`[Book] Re-validated: ${slot.service} at ${slot.startTime} still available`);
+          console.log(`[Book]   PASS: ${slot.service} at ${slot.startTime} still available`);
         } catch (err: any) {
-          console.error(`[Book] Re-validation API error for ${slot.service}:`, err.message);
+          console.error(`[Book]   Re-validation API ERROR for ${slot.service}:`);
+          console.error(`[Book]   Error message:`, err.message);
+          console.error(`[Book]   Response status:`, err?.response?.status);
+          console.error(`[Book]   Response data:`, JSON.stringify(err?.response?.data));
           // If we can't verify, proceed cautiously - the booking will fail if truly unavailable
         }
       }
 
-      console.log(`[Book] All slots re-validated successfully. Proceeding with booking.`);
+      console.log(`[Book] STEP 5 SUCCESS: All ${packagePlan.slots.length} slots re-validated. Proceeding with booking.`);
 
-      // Book all services
+      // STEP 6: Book all services
+      console.log(`[Book] ===== STEP 6: BOOKING SERVICES =====`);
       const appointments: Array<{
         service: string;
         date?: string;
@@ -1833,17 +1940,21 @@ router.post("/book", async (req: Request, res: Response) => {
 
       let allSuccessful = true;
 
-      // BUG FIX: Log all slot times upfront to help diagnose time mismatches
-      console.log(`[Book] Package slots to book:`);
+      console.log(`[Book] Booking ${packagePlan.slots.length} services...`);
       packagePlan.slots.forEach((s, idx) => {
-        console.log(`[Book]   ${idx + 1}. ${s.service}: ${s.startTime} (staff: ${s.staff_name || "any"})`);
+        console.log(`[Book]   ${idx + 1}. ${s.service}: ${s.startTime} -> ${s.endTime} (staff: ${s.staff_name || "any"}, userId: ${s.staff_user_id || "none"})`);
       });
 
       for (let i = 0; i < packagePlan.slots.length; i++) {
         const slotInfo = packagePlan.slots[i];
-        console.log(`[Book] Booking service ${i + 1}/${packagePlan.slots.length}: ${slotInfo.service} at ${slotInfo.startTime}`);
+        console.log(`[Book] ===== Booking service ${i + 1}/${packagePlan.slots.length}: ${slotInfo.service} =====`);
+        console.log(`[Book]   Calendar: ${slotInfo.calendar_id}`);
+        console.log(`[Book]   Start time: ${slotInfo.startTime}`);
+        console.log(`[Book]   Staff: ${slotInfo.staff_name || "any"} (userId: ${slotInfo.staff_user_id || "none"})`);
+        console.log(`[Book]   Customer: ${customerName}, ${customerEmail}, ${customerPhone}`);
 
         try {
+          console.log(`[Book]   Calling bookServiceAppointment...`);
           const bookingResult = await bookServiceAppointment(
             client,
             locationId,
@@ -1858,12 +1969,16 @@ router.post("/book", async (req: Request, res: Response) => {
             slotInfo.staff_user_id || undefined  // BUG FIX: Assign to specific staff
           );
 
+          console.log(`[Book]   bookServiceAppointment result:`, JSON.stringify(bookingResult));
+
           if (!bookingResult.success) {
+            console.log(`[Book]   FAILED: ${bookingResult.error}`);
             appointments.push({ service: slotInfo.service, status: "failed", error: bookingResult.error });
             allSuccessful = false;
             continue;
           }
 
+          console.log(`[Book]   SUCCESS: appointmentId=${bookingResult.appointmentId}, endTime=${bookingResult.endTime}`);
           const startDate = new Date(slotInfo.startTime);
           const endDate = new Date(bookingResult.endTime!);
           appointments.push({
@@ -1877,14 +1992,24 @@ router.post("/book", async (req: Request, res: Response) => {
             status: "confirmed",
           });
         } catch (err: any) {
+          console.error(`[Book]   FATAL ERROR booking ${slotInfo.service}:`);
+          console.error(`[Book]   Error message:`, err.message);
+          console.error(`[Book]   Stack trace:`, err.stack);
           appointments.push({ service: slotInfo.service, status: "failed", error: err.message });
           allSuccessful = false;
         }
       }
 
       const confirmedAppointments = appointments.filter((a) => a.status === "confirmed");
+      const failedAppointments = appointments.filter((a) => a.status === "failed");
+
+      console.log(`[Book] Booking complete: ${confirmedAppointments.length} confirmed, ${failedAppointments.length} failed`);
+      if (failedAppointments.length > 0) {
+        console.log(`[Book] Failed services:`, failedAppointments.map(a => `${a.service}: ${a.error}`).join(", "));
+      }
 
       if (confirmedAppointments.length === 0) {
+        console.log(`[Book] ALL BOOKINGS FAILED - returning error response`);
         return res.json({
           success: false,
           package_name: pkg.package_name,
@@ -1896,6 +2021,7 @@ router.post("/book", async (req: Request, res: Response) => {
       if (!allSuccessful) {
         const bookedServices = confirmedAppointments.map((a) => a.service).join(", ");
         const failedService = appointments.find((a) => a.status === "failed")?.service;
+        console.log(`[Book] PARTIAL SUCCESS - ${bookedServices} booked, ${failedService} failed`);
         return res.json({
           success: false,
           partial: true,
@@ -1908,7 +2034,12 @@ router.post("/book", async (req: Request, res: Response) => {
 
       // Full success
       const confirmationMessage = buildPackageConfirmation(pkg.package_name, confirmedAppointments, pkg.price, tz);
-      console.log(`[Book] Package booked successfully: ${confirmedAppointments.length} services`);
+      console.log(`[Book] ===== PACKAGE BOOKING SUCCESS =====`);
+      console.log(`[Book] Package: ${pkg.package_name}`);
+      console.log(`[Book] Services booked: ${confirmedAppointments.length}`);
+      confirmedAppointments.forEach((a, idx) => {
+        console.log(`[Book]   ${idx + 1}. ${a.service}: ${a.start_time} - ${a.end_time} (apptId: ${a.appointment_id})`);
+      });
 
       return res.json({
         success: true,
@@ -1921,6 +2052,9 @@ router.post("/book", async (req: Request, res: Response) => {
     }
 
     // ========== SERVICE BOOKING (default) ==========
+    console.log(`[Book] ===== SINGLE SERVICE BOOKING START =====`);
+    console.log(`[Book] Request body:`, JSON.stringify(body, null, 2));
+
     const calendarId = body.calendarId || body.calendar_id;
     const startTime = body.startTime || body.start_time || body.selected_time;
     const selectedDate = body.selected_date;
@@ -1928,38 +2062,52 @@ router.post("/book", async (req: Request, res: Response) => {
     const occasion = body.occasion;
     const title = body.title;
 
+    console.log(`[Book] Single service mode: ${serviceName || "(no service specified)"}`);
+    console.log(`[Book] Customer: ${customerName}, Email: ${customerEmail}, Phone: ${customerPhone}`);
+
     if (!locationId || !customerName || !customerEmail) {
+      console.log(`[Book] VALIDATION FAILED: locationId=${!!locationId}, customerName=${!!customerName}, customerEmail=${!!customerEmail}`);
       return res.status(400).json({
         success: false,
         error: "Missing required fields: locationId, customerName, customerEmail",
       });
     }
 
-    // 1. Look up installation first (needed for timezone)
-    const installation = await getInstallation(locationId);
-    if (!installation) {
-      return res.status(404).json({ success: false, error: "Installation not found" });
+    // STEP 1: Look up installation first (needed for timezone)
+    console.log(`[Book] STEP 1: Getting installation for location ${locationId}...`);
+    let installation;
+    try {
+      installation = await getInstallation(locationId);
+      if (installation) {
+        console.log(`[Book] STEP 1 SUCCESS: Installation found - timezone: ${installation.timezone}, calendar: ${installation.calendar_id}`);
+      } else {
+        console.log(`[Book] STEP 1 FAILED: Installation not found`);
+        return res.status(404).json({ success: false, error: "Installation not found" });
+      }
+    } catch (instErr: any) {
+      console.error(`[Book] STEP 1 FATAL ERROR:`, instErr.message);
+      console.error(`[Book] Stack:`, instErr.stack);
+      return res.status(500).json({ success: false, error: "Installation lookup failed: " + instErr.message });
     }
 
     const tz = installation.timezone || "America/New_York";
 
-    // Resolve startTime - prefer full ISO datetime from slot, otherwise build from date+time
-    let resolvedStartTime: string | null = null;
-
-    // BUG FIX: Log raw time values for debugging time mismatches
+    // STEP 2: Resolve startTime - prefer full ISO datetime from slot, otherwise build from date+time
+    console.log(`[Book] STEP 2: Resolving start time...`);
     console.log(`[Book] Raw time values - startTime: "${startTime}", selectedDate: "${selectedDate}"`);
+    let resolvedStartTime: string | null = null;
 
     // Option 1: startTime already contains full ISO datetime (from check-availability slot)
     if (startTime && startTime.includes("T")) {
       resolvedStartTime = startTime;
-      console.log(`[Book] Using provided ISO startTime: ${resolvedStartTime}`);
+      console.log(`[Book] STEP 2 SUCCESS: Using provided ISO startTime: ${resolvedStartTime}`);
     }
     // Option 2: Build from selected_date + selected_time
     else if (selectedDate && startTime) {
       // BUG FIX: Warn if time doesn't include minutes (could indicate voice-to-text truncation)
       const hasMinutes = /:/.test(startTime);
       if (!hasMinutes) {
-        console.warn(`[Book] WARNING: Time "${startTime}" has no colon - minutes may be missing! Consider using full ISO startTime.`);
+        console.warn(`[Book] WARNING: Time "${startTime}" has no colon - minutes may be missing!`);
       }
 
       const timeParsed = parseTimeToMinutes(startTime);
@@ -1980,35 +2128,38 @@ router.post("/book", async (req: Request, res: Response) => {
         const tzOffset = offsetMatch ? offsetMatch[1] : "-10:00";
 
         resolvedStartTime = `${dateTimeStr}${tzOffset}`;
-        console.log(`[Book] Built datetime: ${selectedDate} + ${startTime} => ${resolvedStartTime} (offset: ${tzOffset})`);
+        console.log(`[Book] STEP 2 SUCCESS: Built datetime: ${selectedDate} + ${startTime} => ${resolvedStartTime} (offset: ${tzOffset})`);
+      } else {
+        console.log(`[Book] STEP 2 FAILED: Could not parse time "${startTime}"`);
       }
     }
 
     if (!resolvedStartTime) {
+      console.log(`[Book] STEP 2 FAILED: No valid start time could be resolved`);
       return res.status(400).json({
         success: false,
         error: "Missing required field: startTime (or selected_date + selected_time)",
       });
     }
 
-    console.log("[Book] SERVICE mode for", customerName);
-    console.log("[Book] locationId:", locationId);
-    console.log("[Book] resolvedStartTime:", resolvedStartTime);
-    console.log("[Book] service:", serviceName);
-
-    // 2. Resolve calendar_id - prioritize explicit calendarId, then lookup by service, then default
+    // STEP 3: Resolve calendar_id
+    console.log(`[Book] STEP 3: Finding calendar for service...`);
     let resolvedCalendarId = calendarId;
     let slotDuration = 60;
     let slotBuffer = 0;
 
     if (!resolvedCalendarId && serviceName) {
-      // Look up calendar for this service (same logic as check-availability)
-      const syncedCals = await getSyncedCalendarsForService(locationId, serviceName);
-      if (syncedCals.length > 0) {
-        resolvedCalendarId = syncedCals[0].calendar_id;
-        slotDuration = syncedCals[0].slot_duration || 60;
-        slotBuffer = syncedCals[0].slot_buffer || 0;
-        console.log(`[Book] Found calendar for service "${serviceName}": ${resolvedCalendarId}`);
+      try {
+        const syncedCals = await getSyncedCalendarsForService(locationId, serviceName);
+        console.log(`[Book] Found ${syncedCals.length} calendars for service "${serviceName}"`);
+        if (syncedCals.length > 0) {
+          resolvedCalendarId = syncedCals[0].calendar_id;
+          slotDuration = syncedCals[0].slot_duration || 60;
+          slotBuffer = syncedCals[0].slot_buffer || 0;
+          console.log(`[Book] STEP 3 SUCCESS: Calendar found: ${resolvedCalendarId} (duration: ${slotDuration}min, buffer: ${slotBuffer}min)`);
+        }
+      } catch (calErr: any) {
+        console.error(`[Book] Calendar lookup error:`, calErr.message);
       }
     }
 
@@ -2019,15 +2170,20 @@ router.post("/book", async (req: Request, res: Response) => {
     }
 
     if (!resolvedCalendarId) {
+      console.log(`[Book] STEP 3 FAILED: No calendar configured for this location`);
       return res.status(400).json({ success: false, error: "No calendar configured for this location" });
     }
 
     // Get calendar settings if not already loaded
     if (slotDuration === 60) {
-      const syncedCalendar = await getSyncedCalendarById(locationId, resolvedCalendarId);
-      if (syncedCalendar) {
-        slotDuration = syncedCalendar.slot_duration || 60;
-        slotBuffer = syncedCalendar.slot_buffer || 0;
+      try {
+        const syncedCalendar = await getSyncedCalendarById(locationId, resolvedCalendarId);
+        if (syncedCalendar) {
+          slotDuration = syncedCalendar.slot_duration || 60;
+          slotBuffer = syncedCalendar.slot_buffer || 0;
+        }
+      } catch (e: any) {
+        console.error(`[Book] Calendar settings lookup error:`, e.message);
       }
     }
     console.log(`[Book] Calendar settings: duration=${slotDuration}min, buffer=${slotBuffer}min`);
@@ -2035,18 +2191,26 @@ router.post("/book", async (req: Request, res: Response) => {
     // Allow override via request body
     const durationMinutes = body.duration_minutes || body.durationMinutes || slotDuration;
 
-    // 2. Get authenticated client (refreshes token if expired)
-    const client = await ghl.requests(locationId);
+    // STEP 4: Get authenticated client
+    console.log(`[Book] STEP 4: Getting authenticated GHL client...`);
+    let client;
+    try {
+      client = await ghl.requests(locationId);
+      console.log(`[Book] STEP 4 SUCCESS: GHL client obtained`);
+    } catch (clientErr: any) {
+      console.error(`[Book] STEP 4 FATAL ERROR:`, clientErr.message);
+      console.error(`[Book] Stack:`, clientErr.stack);
+      return res.status(500).json({ success: false, error: "Failed to authenticate with GHL: " + clientErr.message });
+    }
 
-    // 3. Create or upsert contact in GHL
+    // STEP 5: Create or upsert contact in GHL
+    console.log(`[Book] STEP 5: Contact upsert starting...`);
     const nameParts = customerName.trim().split(/\s+/);
     const firstName = nameParts[0];
     const lastName = nameParts.slice(1).join(" ") || "";
 
     const normalizedPhone = customerPhone ? normalizePhone(customerPhone) : null;
-    if (customerPhone) {
-      console.log(`[Calendar] Phone normalization: "${customerPhone}" -> "${normalizedPhone}"`);
-    }
+    console.log(`[Book] Phone normalization: "${customerPhone}" -> "${normalizedPhone}"`);
 
     const contactPayload: Record<string, string> = {
       locationId,
@@ -2055,6 +2219,8 @@ router.post("/book", async (req: Request, res: Response) => {
     };
     if (lastName) contactPayload.lastName = lastName;
     if (normalizedPhone) contactPayload.phone = normalizedPhone;
+
+    console.log(`[Book] Contact payload:`, JSON.stringify(contactPayload));
 
     let contactId: string;
     try {
@@ -2065,16 +2231,19 @@ router.post("/book", async (req: Request, res: Response) => {
       if (!contactId) {
         throw new Error("No contact ID returned from upsert");
       }
-      console.log(`[Calendar] Contact upserted: ${contactId} (${customerEmail})`);
+      console.log(`[Book] STEP 5 SUCCESS: Contact upserted - contactId: ${contactId}`);
     } catch (err: any) {
-      console.error("[Calendar] Contact upsert failed:", err?.response?.data || err.message);
+      console.error(`[Book] STEP 5 FAILED: Contact upsert error`);
+      console.error(`[Book] Error message:`, err.message);
+      console.error(`[Book] Response data:`, JSON.stringify(err?.response?.data));
       return res.status(500).json({
         success: false,
         error: "Failed to create/upsert contact: " + (err?.response?.data?.message || err.message),
       });
     }
 
-    // 4. Book the appointment
+    // STEP 6: Book the appointment
+    console.log(`[Book] STEP 6: Creating appointment...`);
     // Convert to UTC ISO format for GHL API
     const startISO = new Date(resolvedStartTime).toISOString();
     const startTimeMs = new Date(resolvedStartTime).getTime();
@@ -2110,18 +2279,27 @@ router.post("/book", async (req: Request, res: Response) => {
 
     console.log("[Book] ===== GHL APPOINTMENT REQUEST =====");
     console.log("[Book] Full payload:", JSON.stringify(appointmentPayload, null, 2));
-    console.log("[Book] Notes field value:", JSON.stringify(appointmentNotes));
-    console.log("[Book] Notes field type:", typeof appointmentNotes);
 
-    const appointmentResp = await client.post(
-      "/calendars/events/appointments",
-      appointmentPayload,
-      { headers: { Version: "2021-07-28" } }
-    );
-
-    console.log("[Book] ===== CREATE APPOINTMENT RESPONSE =====");
-    console.log("[Book] Status:", appointmentResp.status);
-    console.log("[Book] Response:", JSON.stringify(appointmentResp.data, null, 2));
+    let appointmentResp;
+    try {
+      appointmentResp = await client.post(
+        "/calendars/events/appointments",
+        appointmentPayload,
+        { headers: { Version: "2021-07-28" } }
+      );
+      console.log("[Book] ===== GHL APPOINTMENT RESPONSE =====");
+      console.log("[Book] Status:", appointmentResp.status);
+      console.log("[Book] Response:", JSON.stringify(appointmentResp.data, null, 2));
+    } catch (apptErr: any) {
+      console.error(`[Book] STEP 6 FATAL ERROR: Appointment creation failed`);
+      console.error(`[Book] Error message:`, apptErr.message);
+      console.error(`[Book] Response status:`, apptErr?.response?.status);
+      console.error(`[Book] Response data:`, JSON.stringify(apptErr?.response?.data));
+      return res.status(500).json({
+        success: false,
+        error: "Appointment creation failed: " + (apptErr?.response?.data?.message || apptErr.message),
+      });
+    }
 
     const appointmentId =
       appointmentResp.data?.id ||
@@ -2130,15 +2308,13 @@ router.post("/book", async (req: Request, res: Response) => {
       appointmentResp.data?.appointment?.id ||
       null;
 
-    console.log(`[Calendar] Appointment booked: ${appointmentId} for contact ${contactId}`);
+    console.log(`[Book] STEP 6 SUCCESS: Appointment booked - appointmentId: ${appointmentId}`);
 
-    // 5. Create Internal Note via Appointment Notes API
-    // GHL V2 Notes API: POST /calendars/appointments/:appointmentId/notes
-    // Body format: { body: "note text" }
+    // STEP 7: Create Internal Note via Appointment Notes API
+    console.log(`[Book] STEP 7: Adding appointment note...`);
     if (appointmentNotes && appointmentId) {
       try {
         const notePayload = { body: appointmentNotes };
-        console.log(`[Book] ===== ADDING APPOINTMENT NOTE =====`);
         console.log(`[Book] Notes API URL: /calendars/appointments/${appointmentId}/notes`);
         console.log(`[Book] Notes API payload:`, JSON.stringify(notePayload));
 
@@ -2147,18 +2323,24 @@ router.post("/book", async (req: Request, res: Response) => {
           notePayload,
           { headers: { Version: "2021-07-28" } }
         );
-        console.log(`[Book] Notes API status:`, noteResp.status);
-        console.log(`[Book] Notes API response:`, JSON.stringify(noteResp.data));
+        console.log(`[Book] STEP 7 SUCCESS: Note added - status: ${noteResp.status}`);
       } catch (noteErr: any) {
-        console.error("[Book] Notes API FAILED:");
+        console.error("[Book] STEP 7 FAILED: Notes API error");
         console.error("[Book] Status:", noteErr?.response?.status);
         console.error("[Book] Error:", JSON.stringify(noteErr?.response?.data || noteErr.message));
       }
     } else {
-      console.log(`[Book] Skipping Notes API: appointmentNotes="${appointmentNotes}", appointmentId="${appointmentId}"`);
+      console.log(`[Book] STEP 7 SKIPPED: No notes to add (appointmentNotes="${appointmentNotes}", appointmentId="${appointmentId}"`);
     }
 
-    // 6. Return success with timing info for multi-service booking
+    // STEP 8: Return success
+    console.log(`[Book] ===== SINGLE SERVICE BOOKING SUCCESS =====`);
+    console.log(`[Book] Appointment ID: ${appointmentId}`);
+    console.log(`[Book] Contact ID: ${contactId}`);
+    console.log(`[Book] Start: ${startISO}`);
+    console.log(`[Book] End: ${endISO}`);
+    console.log(`[Book] Service: ${serviceName || "(none)"}`);
+
     return res.json({
       success: true,
       appointmentId,
@@ -2171,7 +2353,10 @@ router.post("/book", async (req: Request, res: Response) => {
       data: appointmentResp.data,
     });
   } catch (error: any) {
-    console.error("[Calendar] book error:", error?.response?.data || error.message);
+    console.error("[Book] ===== FATAL UNCAUGHT ERROR =====");
+    console.error("[Book] Error message:", error.message);
+    console.error("[Book] Stack trace:", error.stack);
+    console.error("[Book] Response data:", JSON.stringify(error?.response?.data));
     return res.status(500).json({
       success: false,
       error: error?.response?.data?.message || error.message,
@@ -3112,13 +3297,23 @@ async function findPackageDayAvailability(
   const BUFFER_MS = 15 * 60 * 1000;
 
   // Build list of dates to check
+  // BUG FIX: If requestedDate is provided, ONLY check that specific date
+  // Don't search 14 days when user asks for "Monday the 16th"
   const datesToCheck: string[] = [];
-  const startDate = requestedDate ? new Date(requestedDate + "T00:00:00") : new Date(localNow);
 
-  for (let i = 0; i < DAYS_TO_SEARCH; i++) {
-    const checkDate = new Date(startDate);
-    checkDate.setDate(startDate.getDate() + i);
-    datesToCheck.push(checkDate.toISOString().split("T")[0]);
+  if (requestedDate) {
+    // User asked for a specific date - ONLY check that date
+    datesToCheck.push(requestedDate);
+    console.log(`[Package] Checking ONLY requested date: ${requestedDate}`);
+  } else {
+    // No specific date - search next 14 days
+    const startDate = new Date(localNow);
+    for (let i = 0; i < DAYS_TO_SEARCH; i++) {
+      const checkDate = new Date(startDate);
+      checkDate.setDate(startDate.getDate() + i);
+      datesToCheck.push(checkDate.toISOString().split("T")[0]);
+    }
+    console.log(`[Package] Searching next ${DAYS_TO_SEARCH} days starting from today`);
   }
 
   console.log(`[BookPackage] Checking ${datesToCheck.length} dates for all ${services.length} services`);
@@ -3376,13 +3571,22 @@ async function bookServiceAppointment(
   bufferEnd?: string;
   error?: string;
 }> {
+  console.log(`[BookService] ===== START: ${serviceName} =====`);
+  console.log(`[BookService] Calendar: ${calendarId}`);
+  console.log(`[BookService] Start time: ${startTime}`);
+  console.log(`[BookService] Customer: ${customerName}, ${customerEmail}, ${customerPhone}`);
+  console.log(`[BookService] Staff userId: ${staffUserId || "(none)"}`);
+
   try {
     // Get calendar settings for duration and buffer
+    console.log(`[BookService] Getting calendar settings...`);
     const syncedCalendar = await getSyncedCalendarById(locationId, calendarId);
     const slotDuration = syncedCalendar?.slot_duration || 60;
     const slotBuffer = syncedCalendar?.slot_buffer || 15;
+    console.log(`[BookService] Calendar settings: duration=${slotDuration}min, buffer=${slotBuffer}min`);
 
     // Create/upsert contact
+    console.log(`[BookService] Upserting contact...`);
     const nameParts = customerName.trim().split(/\s+/);
     const firstName = nameParts[0];
     const lastName = nameParts.slice(1).join(" ") || "";
@@ -3395,13 +3599,16 @@ async function bookServiceAppointment(
     if (lastName) contactPayload.lastName = lastName;
     if (customerPhone) contactPayload.phone = normalizePhoneForBooking(customerPhone);
 
+    console.log(`[BookService] Contact payload:`, JSON.stringify(contactPayload));
     const contactResp = await client.post("/contacts/upsert", contactPayload, {
       headers: { Version: "2021-07-28" },
     });
     const contactId = contactResp.data?.contact?.id;
     if (!contactId) {
-      return { success: false, error: "Failed to create contact" };
+      console.error(`[BookService] Contact upsert returned no ID:`, JSON.stringify(contactResp.data));
+      return { success: false, error: "Failed to create contact - no ID returned" };
     }
+    console.log(`[BookService] Contact upserted: ${contactId}`);
 
     // Calculate times
     const startISO = new Date(startTime).toISOString();
@@ -3488,6 +3695,10 @@ async function bookServiceAppointment(
       console.log(`[BookService] Skipping Notes API: appointmentNotes="${appointmentNotes}", appointmentId="${appointmentId}"`);
     }
 
+    console.log(`[BookService] ===== SUCCESS: ${serviceName} =====`);
+    console.log(`[BookService] Appointment ID: ${appointmentId}`);
+    console.log(`[BookService] End time: ${endISO}`);
+
     return {
       success: true,
       appointmentId,
@@ -3495,6 +3706,12 @@ async function bookServiceAppointment(
       bufferEnd: bufferEndISO,
     };
   } catch (err: any) {
+    console.error(`[BookService] ===== FATAL ERROR: ${serviceName} =====`);
+    console.error(`[BookService] Error message:`, err.message);
+    console.error(`[BookService] Stack trace:`, err.stack);
+    console.error(`[BookService] Response status:`, err?.response?.status);
+    console.error(`[BookService] Response data:`, JSON.stringify(err?.response?.data));
+
     return {
       success: false,
       error: err?.response?.data?.message || err.message,
