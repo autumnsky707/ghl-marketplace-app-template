@@ -612,11 +612,47 @@ function getSlotMinutes(iso: string): number {
   return parseInt(match[1], 10) * 60 + parseInt(match[2], 10);
 }
 
-function parseTimeToMinutes(timeStr: string): number | null {
+/**
+ * Parse a time string to minutes from midnight.
+ * Handles:
+ * 1. ISO strings like "2026-02-12T12:00:00-10:00" — extracts time in the given timezone
+ * 2. Simple 12-hour format like "12:00 PM" or "9:00am"
+ * 3. Simple 24-hour format like "12:00" or "09:00"
+ *
+ * IMPORTANT: For ISO strings, the timezone parameter is required to convert correctly.
+ * The timezone should come from the installation record, never hardcoded.
+ */
+function parseTimeToMinutes(timeStr: string, timezone?: string): number | null {
+  if (!timeStr) return null;
+
+  // Check if this is an ISO string (contains "T" and looks like a date)
+  if (timeStr.includes("T") && timeStr.match(/^\d{4}-\d{2}-\d{2}T/)) {
+    try {
+      // Use luxon to parse the ISO string and convert to the business timezone
+      const tz = timezone || "America/New_York"; // Fallback, but should always be provided
+      const dt = DateTime.fromISO(timeStr).setZone(tz);
+
+      if (!dt.isValid) {
+        console.log(`[parseTimeToMinutes] Invalid ISO date: ${timeStr}`);
+        return null;
+      }
+
+      const hour = dt.hour;
+      const min = dt.minute;
+      console.log(`[parseTimeToMinutes] ISO string ${timeStr} => ${hour}:${min.toString().padStart(2, "0")} in ${tz} => ${hour * 60 + min} minutes`);
+      return hour * 60 + min;
+    } catch (err) {
+      console.log(`[parseTimeToMinutes] Error parsing ISO string: ${timeStr}`, err);
+      return null;
+    }
+  }
+
+  // Simple time format parsing (12-hour or 24-hour)
   const normalized = timeStr.toLowerCase().replace(/\s+/g, "");
   const match12 = normalized.match(/^(\d{1,2}):?(\d{2})?(am|pm)?$/);
   const match24 = normalized.match(/^(\d{1,2}):(\d{2})$/);
   let hour = 0, min = 0;
+
   if (match12) {
     hour = parseInt(match12[1], 10);
     min = match12[2] ? parseInt(match12[2], 10) : 0;
@@ -626,8 +662,10 @@ function parseTimeToMinutes(timeStr: string): number | null {
     hour = parseInt(match24[1], 10);
     min = parseInt(match24[2], 10);
   } else {
+    console.log(`[parseTimeToMinutes] Could not parse time format: ${timeStr}`);
     return null;
   }
+
   return hour * 60 + min;
 }
 
@@ -1566,7 +1604,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     }
 
     // Target time for sorting (if requested_time is provided)
-    const targetMins = requested_time ? parseTimeToMinutes(requested_time) : null;
+    const targetMins = requested_time ? parseTimeToMinutes(requested_time, tz) : null;
 
     // How many slots to return: 5 if specific time requested, otherwise 3
     const maxSlots = targetMins !== null ? 5 : 3;
@@ -1844,7 +1882,8 @@ router.post("/book", async (req: Request, res: Response) => {
       console.log(`[Book] STEP 4: Processing slots...`);
 
       // PRIORITY 1: Use cached plan from check_availability via plan_id
-      if (planId) {
+      // Treat empty string as falsy (ElevenLabs sometimes sends "" instead of null)
+      if (planId && planId.trim() !== "") {
         console.log(`[Book] STEP 4A: Looking up cached plan with ID: ${planId}`);
         const cached = getCachedPlan(planId);
 
@@ -2293,7 +2332,7 @@ router.post("/book", async (req: Request, res: Response) => {
 
     // Helper to build ISO datetime from date + time
     const buildISODateTime = (date: string, time: string): string | null => {
-      const timeParsed = parseTimeToMinutes(time);
+      const timeParsed = parseTimeToMinutes(time, tz);
       if (timeParsed === null) return null;
 
       const hours = Math.floor(timeParsed / 60);
@@ -2998,7 +3037,8 @@ router.post("/book-package", async (req: Request, res: Response) => {
     } | null = null;
 
     // PRIORITY 1: Use cached plan from check_availability via plan_id
-    if (plan_id) {
+    // Treat empty string as falsy (ElevenLabs sometimes sends "" instead of null)
+    if (plan_id && plan_id.trim() !== "") {
       console.log(`[BookPackage] Looking up cached plan with ID: ${plan_id}`);
       const cached = getCachedPlan(plan_id);
 
@@ -3768,10 +3808,11 @@ async function findPackageDayAvailability(
   }> = [];
 
   // BUG FIX: Parse requestedTime to minutes for setting minimum start time
+  // IMPORTANT: Pass timezone from installation record for correct ISO string parsing
   let requestedTimeMins: number | null = null;
   if (requestedTime) {
-    requestedTimeMins = parseTimeToMinutes(requestedTime);
-    console.log(`[Package] User requested start time: ${requestedTime} => ${requestedTimeMins} minutes from midnight`);
+    requestedTimeMins = parseTimeToMinutes(requestedTime, tz);
+    console.log(`[Package] User requested start time: ${requestedTime} => ${requestedTimeMins} minutes from midnight (timezone: ${tz})`);
   }
 
   // Try each date
