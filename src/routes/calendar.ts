@@ -41,14 +41,6 @@ import {
 const router = Router();
 const ghl = new GHL();
 
-// ============================================================================
-// BUSINESS HOURS CONFIGURATION
-// These defaults are used when checking if package appointments fit within
-// business hours. TODO: Read from GHL calendar openHours data when available.
-// ============================================================================
-const DEFAULT_BUSINESS_CLOSING_HOUR = 17;    // 5:00 PM (17:00)
-const DEFAULT_BUSINESS_CLOSING_MINUTE = 0;   // :00
-
 /**
  * Get timezone-aware current time info for a location.
  * Uses luxon for reliable timezone handling on servers.
@@ -695,12 +687,12 @@ router.post("/business-info", async (req: Request, res: Response) => {
     // Get packages
     const packages = await getPackages(resolvedLocationId);
 
-    // Build services list: prefer synced data, fall back to manual config
-    const servicesList = syncedServices.length > 0 ? syncedServices : (info?.services || ["massage", "facial", "body treatment"]);
+    // Build services list from synced GHL calendars (no hardcoded defaults - this is a platform)
+    const servicesList = syncedServices.length > 0 ? syncedServices : (info?.services || []);
 
     return res.json({
       success: true,
-      business_name: info?.business_name || "Our Spa",
+      business_name: info?.business_name || null,  // No hardcoded default - read from GHL
       services: servicesList,
       staff: staffNames,
       packages: packages.map((p) => ({
@@ -710,7 +702,7 @@ router.post("/business-info", async (req: Request, res: Response) => {
         price: p.price,
         description: p.description,
       })),
-      greeting: info?.greeting || "Welcome! How can I help you today?",
+      greeting: info?.greeting || null,  // No hardcoded default - read from GHL
       synced_calendars: syncedCalendars.map((c) => ({
         calendar_id: c.calendar_id,
         calendar_name: c.calendar_name,
@@ -833,7 +825,7 @@ router.post("/location-info", async (req: Request, res: Response) => {
 
     return res.json({
       success: true,
-      business_name: info?.business_name || "Our Spa",
+      business_name: info?.business_name || null,  // No hardcoded default - read from GHL
       business_hours,
       services,
       packages: packagesFormatted,
@@ -3467,6 +3459,48 @@ async function findPackageDayAvailability(
     }
   }
 
+  // INFER CLOSING TIME FROM GHL DATA: Find the latest slot time for each date
+  // The latest available slot + slot duration = approximate business closing time
+  // This avoids hardcoding business hours - each business's hours come from GHL
+  const inferredClosingByDate: Map<string, number> = new Map();  // dateKey -> closing time in minutes from midnight
+
+  for (const [_key, dateSlots] of staffCalendarSlots) {
+    for (const [dateKey, slots] of dateSlots) {
+      if (slots.length === 0) continue;
+
+      // Find the latest slot for this date
+      let latestSlotMs = 0;
+      for (const slot of slots) {
+        const slotMs = new Date(slot).getTime();
+        if (slotMs > latestSlotMs) latestSlotMs = slotMs;
+      }
+
+      if (latestSlotMs > 0) {
+        // Convert to local time minutes from midnight
+        const latestDate = new Date(latestSlotMs);
+        const localTime = latestDate.toLocaleString("en-US", {
+          timeZone: tz,
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false
+        });
+        const [hourStr, minStr] = localTime.split(":");
+        const hour = parseInt(hourStr, 10);
+        const min = parseInt(minStr, 10);
+        // Add typical slot duration (60 min) to get closing time
+        const closingMins = hour * 60 + min + 60;
+
+        // Keep the latest closing time we've seen for this date
+        const existing = inferredClosingByDate.get(dateKey) || 0;
+        if (closingMins > existing) {
+          inferredClosingByDate.set(dateKey, closingMins);
+        }
+      }
+    }
+  }
+
+  console.log(`[Package] Inferred closing times from GHL slots:`, Object.fromEntries(inferredClosingByDate));
+
   // Helper to check time preference
   const matchesTimePreference = (slotTime: string): boolean => {
     const slotInTz = new Date(slotTime).toLocaleString("en-US", { timeZone: tz, hour12: false });
@@ -3599,30 +3633,39 @@ async function findPackageDayAvailability(
     }
 
     if (dateWorks && plan.length === services.length) {
-      // BUG FIX: Check that the last service doesn't extend past business hours
-      // Uses configurable constants from top of file (DEFAULT_BUSINESS_CLOSING_HOUR/MINUTE)
-      const lastSlot = plan[plan.length - 1];
-      const lastEndTime = new Date(lastSlot.endTime);
+      // Check that the last service doesn't extend past business closing time
+      // Closing time is INFERRED from GHL free-slots data (latest slot + duration)
+      const inferredClosing = inferredClosingByDate.get(dateKey);
 
-      // Get the local hour/minute of the end time in the business timezone
-      const endTimeLocal = lastEndTime.toLocaleString("en-US", {
-        timeZone: tz,
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false
-      });
-      const [endHourStr, endMinStr] = endTimeLocal.split(":");
-      const endHour = parseInt(endHourStr, 10);
-      const endMin = parseInt(endMinStr, 10);
-      const endTotalMins = endHour * 60 + endMin;
-      const closingTotalMins = DEFAULT_BUSINESS_CLOSING_HOUR * 60 + DEFAULT_BUSINESS_CLOSING_MINUTE;
+      if (inferredClosing) {
+        const lastSlot = plan[plan.length - 1];
+        const lastEndTime = new Date(lastSlot.endTime);
 
-      if (endTotalMins > closingTotalMins) {
-        console.log(`[Package] Rejecting ${dateKey} - package ends at ${endTimeLocal} which is after ${DEFAULT_BUSINESS_CLOSING_HOUR}:${DEFAULT_BUSINESS_CLOSING_MINUTE.toString().padStart(2, "0")} closing`);
-        continue;  // Skip this date, don't add to results
+        // Get the local hour/minute of the end time in the business timezone
+        const endTimeLocal = lastEndTime.toLocaleString("en-US", {
+          timeZone: tz,
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false
+        });
+        const [endHourStr, endMinStr] = endTimeLocal.split(":");
+        const endHour = parseInt(endHourStr, 10);
+        const endMin = parseInt(endMinStr, 10);
+        const endTotalMins = endHour * 60 + endMin;
+
+        if (endTotalMins > inferredClosing) {
+          const closingHour = Math.floor(inferredClosing / 60);
+          const closingMin = inferredClosing % 60;
+          console.log(`[Package] Rejecting ${dateKey} - package ends at ${endTimeLocal} which is after inferred closing ${closingHour}:${closingMin.toString().padStart(2, "0")}`);
+          continue;  // Skip this date, don't add to results
+        }
+
+        console.log(`[Package] Found valid day: ${dateKey} (ends at ${endTimeLocal}, before inferred closing)`);
+      } else {
+        // No closing time inferred (shouldn't happen if we have slots), accept the plan
+        console.log(`[Package] Found valid day: ${dateKey} (no closing time inferred, accepting)`);
       }
 
-      console.log(`[Package] Found valid day: ${dateKey} (ends at ${endTimeLocal}, before closing)`);
       results.push({ date: dateKey, slots: plan });
     }
   }
