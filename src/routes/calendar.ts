@@ -2109,9 +2109,9 @@ router.post("/book", async (req: Request, res: Response) => {
     };
 
     console.log("[Book] ===== GHL APPOINTMENT REQUEST =====");
-    console.log("[Book] calendarId:", resolvedCalendarId);
-    console.log("[Book] startTime:", startISO);
-    console.log("[Book] endTime:", endISO);
+    console.log("[Book] Full payload:", JSON.stringify(appointmentPayload, null, 2));
+    console.log("[Book] Notes field value:", JSON.stringify(appointmentNotes));
+    console.log("[Book] Notes field type:", typeof appointmentNotes);
 
     const appointmentResp = await client.post(
       "/calendars/events/appointments",
@@ -2119,8 +2119,9 @@ router.post("/book", async (req: Request, res: Response) => {
       { headers: { Version: "2021-07-28" } }
     );
 
-    console.log("[Calendar] ===== CREATE APPOINTMENT RESPONSE =====");
-    console.log("[Calendar] Response:", JSON.stringify(appointmentResp.data, null, 2));
+    console.log("[Book] ===== CREATE APPOINTMENT RESPONSE =====");
+    console.log("[Book] Status:", appointmentResp.status);
+    console.log("[Book] Response:", JSON.stringify(appointmentResp.data, null, 2));
 
     const appointmentId =
       appointmentResp.data?.id ||
@@ -2132,17 +2133,29 @@ router.post("/book", async (req: Request, res: Response) => {
     console.log(`[Calendar] Appointment booked: ${appointmentId} for contact ${contactId}`);
 
     // 5. Create Internal Note via Appointment Notes API
+    // GHL V2 Notes API: POST /calendars/appointments/:appointmentId/notes
+    // Body format: { body: "note text" }
     if (appointmentNotes && appointmentId) {
       try {
+        const notePayload = { body: appointmentNotes };
+        console.log(`[Book] ===== ADDING APPOINTMENT NOTE =====`);
+        console.log(`[Book] Notes API URL: /calendars/appointments/${appointmentId}/notes`);
+        console.log(`[Book] Notes API payload:`, JSON.stringify(notePayload));
+
         const noteResp = await client.post(
           `/calendars/appointments/${appointmentId}/notes`,
-          { body: appointmentNotes },
+          notePayload,
           { headers: { Version: "2021-07-28" } }
         );
-        console.log(`[Calendar] Note created for ${appointmentId}:`, JSON.stringify(noteResp.data));
+        console.log(`[Book] Notes API status:`, noteResp.status);
+        console.log(`[Book] Notes API response:`, JSON.stringify(noteResp.data));
       } catch (noteErr: any) {
-        console.error("[Calendar] Note creation failed:", noteErr?.response?.status, noteErr?.response?.data || noteErr.message);
+        console.error("[Book] Notes API FAILED:");
+        console.error("[Book] Status:", noteErr?.response?.status);
+        console.error("[Book] Error:", JSON.stringify(noteErr?.response?.data || noteErr.message));
       }
+    } else {
+      console.log(`[Book] Skipping Notes API: appointmentNotes="${appointmentNotes}", appointmentId="${appointmentId}"`);
     }
 
     // 6. Return success with timing info for multi-service booking
@@ -3425,15 +3438,21 @@ async function bookServiceAppointment(
     }
 
     // DEBUG: Log exact payload being sent to GHL
-    console.log(`[BookService] Creating appointment with payload:`, JSON.stringify(appointmentPayload, null, 2));
-    console.log(`[BookService] Notes being sent: "${appointmentNotes || '(none)'}"`);
-    console.log(`[BookService] therapistPreference param was: "${therapistPreference || '(none)'}"`);
+    console.log(`[BookService] ===== GHL APPOINTMENT REQUEST =====`);
+    console.log(`[BookService] Full payload:`, JSON.stringify(appointmentPayload, null, 2));
+    console.log(`[BookService] Notes field value:`, JSON.stringify(appointmentNotes));
+    console.log(`[BookService] Notes field type:`, typeof appointmentNotes);
+    console.log(`[BookService] assignedUserId:`, staffUserId || "(none)");
 
     const appointmentResp = await client.post(
       "/calendars/events/appointments",
       appointmentPayload,
       { headers: { Version: "2021-07-28" } }
     );
+
+    console.log(`[BookService] ===== CREATE APPOINTMENT RESPONSE =====`);
+    console.log(`[BookService] Status:`, appointmentResp.status);
+    console.log(`[BookService] Response:`, JSON.stringify(appointmentResp.data, null, 2));
 
     const appointmentId =
       appointmentResp.data?.id ||
@@ -3442,22 +3461,31 @@ async function bookServiceAppointment(
       appointmentResp.data?.appointment?.id ||
       null;
 
-    // BUG FIX: GHL has a SEPARATE "Appointment Notes" entity that shows in the UI
+    // GHL has a SEPARATE "Appointment Notes" entity that shows in the UI
     // The "notes" field on the appointment object doesn't display in the GHL calendar view
     // We need to call POST /calendars/appointments/:appointmentId/notes to add visible notes
     if (appointmentId && appointmentNotes) {
       try {
-        console.log(`[BookService] Adding appointment note via separate API: "${appointmentNotes}"`);
-        await client.post(
+        const notePayload = { body: appointmentNotes };
+        console.log(`[BookService] ===== ADDING APPOINTMENT NOTE =====`);
+        console.log(`[BookService] Notes API URL: /calendars/appointments/${appointmentId}/notes`);
+        console.log(`[BookService] Notes API payload:`, JSON.stringify(notePayload));
+
+        const noteResp = await client.post(
           `/calendars/appointments/${appointmentId}/notes`,
-          { body: appointmentNotes },
+          notePayload,
           { headers: { Version: "2021-07-28" } }
         );
-        console.log(`[BookService] Appointment note added successfully`);
+        console.log(`[BookService] Notes API status:`, noteResp.status);
+        console.log(`[BookService] Notes API response:`, JSON.stringify(noteResp.data));
       } catch (noteErr: any) {
         // Don't fail the booking if note creation fails, just log it
-        console.error(`[BookService] Failed to add appointment note:`, noteErr?.response?.data || noteErr.message);
+        console.error(`[BookService] Notes API FAILED:`);
+        console.error(`[BookService] Status:`, noteErr?.response?.status);
+        console.error(`[BookService] Error:`, JSON.stringify(noteErr?.response?.data || noteErr.message));
       }
+    } else {
+      console.log(`[BookService] Skipping Notes API: appointmentNotes="${appointmentNotes}", appointmentId="${appointmentId}"`);
     }
 
     return {
