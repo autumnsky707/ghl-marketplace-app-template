@@ -2778,6 +2778,49 @@ function parseRequestedDate(input: string, localNow: Date): string | null {
     }
   }
 
+  // "Monday the 9th", "Tuesday the 10th", "Wednesday the 11th", etc.
+  // Matches: "monday the 9th", "tuesday the 10", "wednesday 11th", "thursday the 12"
+  const dayDateMatch = n.match(/^(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s*(?:the\s*)?(\d{1,2})(?:st|nd|rd|th)?$/);
+  if (dayDateMatch) {
+    const targetDayName = dayDateMatch[1];
+    const targetDayOfMonth = parseInt(dayDateMatch[2], 10);
+    const targetDayIdx = dayNames.indexOf(targetDayName);
+
+    if (targetDayIdx !== -1 && targetDayOfMonth >= 1 && targetDayOfMonth <= 31) {
+      // Search up to 60 days ahead to find a matching day name + date
+      for (let i = 0; i <= 60; i++) {
+        const candidate = new Date(localNow);
+        candidate.setDate(localNow.getDate() + i);
+
+        if (candidate.getDay() === targetDayIdx && candidate.getDate() === targetDayOfMonth) {
+          console.log(`[DateParse] Matched "${input}" to ${candidate.toISOString().split("T")[0]}`);
+          return candidate.toISOString().split("T")[0];
+        }
+      }
+      console.log(`[DateParse] Could not find "${targetDayName} the ${targetDayOfMonth}" in next 60 days`);
+    }
+  }
+
+  // "the 9th", "the 10th", "11th", "12" - just a date number, assume current or next month
+  const dateOnlyMatch = n.match(/^(?:the\s*)?(\d{1,2})(?:st|nd|rd|th)?$/);
+  if (dateOnlyMatch) {
+    const targetDayOfMonth = parseInt(dateOnlyMatch[1], 10);
+
+    if (targetDayOfMonth >= 1 && targetDayOfMonth <= 31) {
+      // Try current month first
+      const thisMonth = new Date(localNow);
+      thisMonth.setDate(targetDayOfMonth);
+
+      // If that date is in the past or today, try next month
+      if (thisMonth <= localNow) {
+        thisMonth.setMonth(thisMonth.getMonth() + 1);
+      }
+
+      console.log(`[DateParse] Matched "${input}" to ${thisMonth.toISOString().split("T")[0]}`);
+      return thisMonth.toISOString().split("T")[0];
+    }
+  }
+
   return null;
 }
 
