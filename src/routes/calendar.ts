@@ -1601,6 +1601,7 @@ router.post("/book", async (req: Request, res: Response) => {
       const packageName = body.package_name;
       const selectedDate = body.selected_date;
       const timePreference = body.time_preference;
+      const providedSlots = body.slots;  // FIX 2: Accept slots directly from check_availability
 
       if (!locationId) {
         return res.status(400).json({ success: false, error: "Missing required field: locationId" });
@@ -1608,17 +1609,11 @@ router.post("/book", async (req: Request, res: Response) => {
       if (!packageName) {
         return res.status(400).json({ success: false, error: "Missing required field: package_name" });
       }
-      if (!selectedDate) {
-        return res.status(400).json({ success: false, error: "Missing required field: selected_date" });
-      }
-      if (!timePreference) {
-        return res.status(400).json({ success: false, error: "Missing required field: time_preference" });
-      }
       if (!customerName || !customerPhone || !customerEmail) {
         return res.status(400).json({ success: false, error: "Missing required fields: customer_name, phone, email" });
       }
 
-      console.log(`[Book] PACKAGE mode: ${packageName} for ${customerName} on ${selectedDate}`);
+      console.log(`[Book] PACKAGE mode: ${packageName} for ${customerName}`);
 
       // Look up the package
       const pkg = await getPackageByName(locationId, packageName);
@@ -1644,35 +1639,125 @@ router.post("/book", async (req: Request, res: Response) => {
       const client = await ghl.requests(locationId);
       const localNow = DateTime.now().setZone(tz).toJSDate();
 
-      // Parse selected_date
-      const parsedDate = parseRequestedDate(selectedDate, localNow);
-      if (!parsedDate) {
-        return res.status(400).json({ success: false, error: "Invalid selected_date format" });
+      let packagePlan: {
+        date: string;
+        slots: Array<{
+          service: string;
+          startTime: string;
+          endTime: string;
+          calendar_id: string;
+          staff_name: string | null;
+          staff_user_id: string | null;
+        }>;
+      } | null = null;
+
+      // FIX 2: If slots are provided from check_availability, use them directly
+      if (providedSlots && Array.isArray(providedSlots) && providedSlots.length > 0) {
+        console.log(`[Book] Using ${providedSlots.length} pre-confirmed slots from check_availability`);
+
+        // Map provided slots to the expected format
+        const mappedSlots: Array<{
+          service: string;
+          startTime: string;
+          endTime: string;
+          calendar_id: string;
+          staff_name: string | null;
+          staff_user_id: string | null;
+        }> = [];
+
+        for (const slot of providedSlots) {
+          // Get calendar_id for this service
+          const syncedCals = await getSyncedCalendarsForService(locationId, slot.service);
+          const calendarId = syncedCals[0]?.calendar_id || installation.calendar_id;
+
+          if (!calendarId) {
+            console.error(`[Book] No calendar found for service: ${slot.service}`);
+            continue;
+          }
+
+          // Get staff user_id if staff_name is provided
+          let staffUserId: string | null = null;
+          if (slot.staff_name) {
+            const members = await getSyncedTeamMembers(locationId, calendarId);
+            const matchingMember = members.find(m =>
+              m.user_name?.toLowerCase() === slot.staff_name?.toLowerCase()
+            );
+            staffUserId = matchingMember?.user_id || null;
+          }
+
+          mappedSlots.push({
+            service: slot.service as string,
+            startTime: slot.startTime as string,
+            endTime: slot.endTime as string,
+            calendar_id: calendarId,
+            staff_name: slot.staff_name || null,
+            staff_user_id: staffUserId,
+          });
+        }
+
+        // Extract date from first slot
+        const firstSlotDate = new Date(mappedSlots[0].startTime).toISOString().split("T")[0];
+
+        packagePlan = {
+          date: firstSlotDate,
+          slots: mappedSlots,
+        };
+
+        console.log(`[Book] Mapped slots for date ${firstSlotDate}:`);
+        mappedSlots.forEach((s, idx) => {
+          console.log(`[Book]   ${idx + 1}. ${s.service}: ${s.startTime} (staff: ${s.staff_name || "any"})`);
+        });
+      }
+      // Fall back to recalculating if no slots provided
+      else {
+        if (!selectedDate) {
+          return res.status(400).json({ success: false, error: "Missing required field: selected_date (or provide slots array)" });
+        }
+        if (!timePreference) {
+          return res.status(400).json({ success: false, error: "Missing required field: time_preference (or provide slots array)" });
+        }
+
+        console.log(`[Book] No pre-confirmed slots, recalculating for ${selectedDate} ${timePreference}`);
+
+        // Parse selected_date
+        const parsedDate = parseRequestedDate(selectedDate, localNow);
+        if (!parsedDate) {
+          return res.status(400).json({ success: false, error: "Invalid selected_date format" });
+        }
+
+        // Find availability on the selected date
+        const packagePlans = await findPackageDayAvailability(
+          locationId,
+          pkg.services,
+          timePreference,
+          parsedDate,
+          tz,
+          installation,
+          localNow,
+          1,
+          therapistPreference,
+          strictGender === true
+        );
+
+        packagePlan = packagePlans[0] || null;
+
+        if (!packagePlan || packagePlan.date !== parsedDate) {
+          const alternativePreference = timePreference === "afternoon" ? "morning" : "afternoon";
+          return res.json({
+            success: false,
+            package_name: pkg.package_name,
+            appointments: [],
+            message: `I couldn't find availability for all services in the ${pkg.package_name} on ${parsedDate}. Would you like to try ${alternativePreference} instead of ${timePreference}?`,
+          });
+        }
       }
 
-      // Find availability on the selected date
-      const packagePlans = await findPackageDayAvailability(
-        locationId,
-        pkg.services,
-        timePreference,
-        parsedDate,
-        tz,
-        installation,
-        localNow,
-        1,
-        therapistPreference,
-        strictGender === true  // Pass strict gender mode
-      );
-
-      const packagePlan = packagePlans[0] || null;
-
-      if (!packagePlan || packagePlan.date !== parsedDate) {
-        const alternativePreference = timePreference === "afternoon" ? "morning" : "afternoon";
+      if (!packagePlan) {
         return res.json({
           success: false,
           package_name: pkg.package_name,
           appointments: [],
-          message: `I couldn't find availability for all services in the ${pkg.package_name} on ${parsedDate}. Would you like to try ${alternativePreference} instead of ${timePreference}?`,
+          message: `Could not determine slots for booking.`,
         });
       }
 
