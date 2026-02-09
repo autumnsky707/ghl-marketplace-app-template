@@ -41,6 +41,14 @@ import {
 const router = Router();
 const ghl = new GHL();
 
+// ============================================================================
+// BUSINESS HOURS CONFIGURATION
+// These defaults are used when checking if package appointments fit within
+// business hours. TODO: Read from GHL calendar openHours data when available.
+// ============================================================================
+const DEFAULT_BUSINESS_CLOSING_HOUR = 17;    // 5:00 PM (17:00)
+const DEFAULT_BUSINESS_CLOSING_MINUTE = 0;   // :00
+
 /**
  * Get timezone-aware current time info for a location.
  * Uses luxon for reliable timezone handling on servers.
@@ -3592,10 +3600,7 @@ async function findPackageDayAvailability(
 
     if (dateWorks && plan.length === services.length) {
       // BUG FIX: Check that the last service doesn't extend past business hours
-      // Default closing time is 5:30 PM (17:30). This prevents offering 3:30 PM for a 4-hour package.
-      const BUSINESS_CLOSING_HOUR = 17;
-      const BUSINESS_CLOSING_MINUTE = 30;
-
+      // Uses configurable constants from top of file (DEFAULT_BUSINESS_CLOSING_HOUR/MINUTE)
       const lastSlot = plan[plan.length - 1];
       const lastEndTime = new Date(lastSlot.endTime);
 
@@ -3610,10 +3615,10 @@ async function findPackageDayAvailability(
       const endHour = parseInt(endHourStr, 10);
       const endMin = parseInt(endMinStr, 10);
       const endTotalMins = endHour * 60 + endMin;
-      const closingTotalMins = BUSINESS_CLOSING_HOUR * 60 + BUSINESS_CLOSING_MINUTE;
+      const closingTotalMins = DEFAULT_BUSINESS_CLOSING_HOUR * 60 + DEFAULT_BUSINESS_CLOSING_MINUTE;
 
       if (endTotalMins > closingTotalMins) {
-        console.log(`[Package] Rejecting ${dateKey} - package ends at ${endTimeLocal} which is after ${BUSINESS_CLOSING_HOUR}:${BUSINESS_CLOSING_MINUTE.toString().padStart(2, "0")} closing`);
+        console.log(`[Package] Rejecting ${dateKey} - package ends at ${endTimeLocal} which is after ${DEFAULT_BUSINESS_CLOSING_HOUR}:${DEFAULT_BUSINESS_CLOSING_MINUTE.toString().padStart(2, "0")} closing`);
         continue;  // Skip this date, don't add to results
       }
 
