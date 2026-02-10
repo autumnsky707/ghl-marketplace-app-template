@@ -1086,19 +1086,22 @@ router.post("/check-availability", async (req: Request, res: Response) => {
         return res.status(400).json({ success: false, error: "Missing required field: package_name" });
       }
 
-      // BUG FIX: If time_preference is undefined but requested_time is provided,
-      // derive time_preference from the requested time. If neither, skip filtering.
-      let effectiveTimePreference = time_preference;
-      if (!effectiveTimePreference && requested_time) {
+      // FIX: requested_time OVERRIDES time_preference when they conflict
+      // If customer says "12 PM" but time_preference says "morning", use afternoon
+      let effectiveTimePreference = time_preference || "";
+      if (requested_time) {
         const requestedMins = parseTimeToMinutes(requested_time, tz);
         if (requestedMins !== null) {
           const requestedHour = Math.floor(requestedMins / 60);
-          effectiveTimePreference = requestedHour >= 12 ? "afternoon" : "morning";
+          const derivedPreference = requestedHour >= 12 ? "afternoon" : "morning";
+          if (effectiveTimePreference && effectiveTimePreference !== derivedPreference) {
+            console.log(`[CheckAvailability] OVERRIDE: time_preference "${effectiveTimePreference}" conflicts with requested_time ${requested_time}, using "${derivedPreference}"`);
+          }
+          effectiveTimePreference = derivedPreference;
           console.log(`[CheckAvailability] Derived time_preference from requested_time: ${requested_time} => hour ${requestedHour} => "${effectiveTimePreference}"`);
         }
       }
       if (!effectiveTimePreference) {
-        effectiveTimePreference = ""; // Empty string = no preference filtering
         console.log(`[CheckAvailability] No time_preference provided, will check all available times`);
       }
 
@@ -1916,10 +1919,21 @@ router.post("/book", async (req: Request, res: Response) => {
       console.log(`[Book] STEP 4: Processing slots...`);
 
       // PRIORITY 1: Use cached plan from check_availability via plan_id
-      // Treat empty string as falsy (ElevenLabs sometimes sends "" instead of null)
-      if (planId && planId.trim() !== "") {
+      // Validate plan_id format: server IDs look like "plan_1739145600000_abc123de"
+      // ElevenLabs fabrications look like "plan_1", "plan_2" - reject these
+      const isValidPlanIdFormat = planId &&
+        typeof planId === 'string' &&
+        planId.trim() !== '' &&
+        planId.startsWith('plan_') &&
+        planId.length > 15; // Server IDs are much longer than "plan_1"
+
+      if (planId && !isValidPlanIdFormat) {
+        console.log(`[Book] Ignoring invalid plan_id: "${planId}" (does not match server format, likely fabricated by AI)`);
+      }
+
+      if (isValidPlanIdFormat) {
         console.log(`[Book] STEP 4A: Looking up cached plan with ID: ${planId}`);
-        const cached = getCachedPlan(planId);
+        const cached = getCachedPlan(planId.trim());
 
         if (cached) {
           // Verify this plan belongs to the correct location and package
@@ -2562,10 +2576,19 @@ router.post("/book", async (req: Request, res: Response) => {
     const formattedServiceType = serviceName ? toTitleCase(serviceName) : null;
     const appointmentTitle = formattedServiceType || title || "Appointment";
 
-    // Build notes
+    // Build notes - ONLY add therapist preference to massage services
     const noteParts: string[] = [];
     if (formattedServiceType) noteParts.push(formattedServiceType);
-    if (therapistPreference) noteParts.push(`Therapist preference: ${therapistPreference}`);
+    // Check if this is a massage service before adding therapist preference
+    if (therapistPreference && ["male", "female"].includes(therapistPreference.toLowerCase())) {
+      const isMassage = isMassageService(serviceName || "");
+      if (isMassage) {
+        noteParts.push(`Therapist preference: ${therapistPreference}`);
+        console.log(`[Book] Added therapist preference to massage service: ${serviceName}`);
+      } else {
+        console.log(`[Book] Skipping therapist preference for non-massage service: ${serviceName}`);
+      }
+    }
     if (occasion) noteParts.push(`Occasion: ${occasion}`);
     if (notes) noteParts.push(notes);
     const appointmentNotes = noteParts.join(". ");
@@ -3099,10 +3122,21 @@ router.post("/book-package", async (req: Request, res: Response) => {
     } | null = null;
 
     // PRIORITY 1: Use cached plan from check_availability via plan_id
-    // Treat empty string as falsy (ElevenLabs sometimes sends "" instead of null)
-    if (plan_id && plan_id.trim() !== "") {
+    // Validate plan_id format: server IDs look like "plan_1739145600000_abc123de"
+    // ElevenLabs fabrications look like "plan_1", "plan_2" - reject these
+    const isValidPlanIdFormat = plan_id &&
+      typeof plan_id === 'string' &&
+      plan_id.trim() !== '' &&
+      plan_id.startsWith('plan_') &&
+      plan_id.length > 15;
+
+    if (plan_id && !isValidPlanIdFormat) {
+      console.log(`[BookPackage] Ignoring invalid plan_id: "${plan_id}" (does not match server format, likely fabricated by AI)`);
+    }
+
+    if (isValidPlanIdFormat) {
       console.log(`[BookPackage] Looking up cached plan with ID: ${plan_id}`);
-      const cached = getCachedPlan(plan_id);
+      const cached = getCachedPlan(plan_id.trim());
 
       if (cached) {
         // Verify this plan belongs to the correct location and package
@@ -3362,19 +3396,22 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
     }
     const localNow = DateTime.now().setZone(tz).toJSDate();
 
-    // BUG FIX: If time_preference is undefined but requested_time is provided,
-    // derive time_preference from the requested time. If neither, skip filtering.
-    let effectiveTimePreference = time_preference;
-    if (!effectiveTimePreference && requested_time) {
+    // FIX: requested_time OVERRIDES time_preference when they conflict
+    // If customer says "12 PM" but time_preference says "morning", use afternoon
+    let effectiveTimePreference = time_preference || "";
+    if (requested_time) {
       const requestedMins = parseTimeToMinutes(requested_time, tz);
       if (requestedMins !== null) {
         const requestedHour = Math.floor(requestedMins / 60);
-        effectiveTimePreference = requestedHour >= 12 ? "afternoon" : "morning";
+        const derivedPreference = requestedHour >= 12 ? "afternoon" : "morning";
+        if (effectiveTimePreference && effectiveTimePreference !== derivedPreference) {
+          console.log(`[CheckPackage] OVERRIDE: time_preference "${effectiveTimePreference}" conflicts with requested_time ${requested_time}, using "${derivedPreference}"`);
+        }
+        effectiveTimePreference = derivedPreference;
         console.log(`[CheckPackage] Derived time_preference from requested_time: ${requested_time} => hour ${requestedHour} => "${effectiveTimePreference}"`);
       }
     }
     if (!effectiveTimePreference) {
-      effectiveTimePreference = ""; // Empty string = no preference filtering
       console.log(`[CheckPackage] No time_preference provided, will check all available times`);
     }
 
@@ -3699,9 +3736,9 @@ async function findPackageDayAvailability(
   installation: any,
   localNow: Date,
   maxResults: number = 1,
-  genderPreference?: string,  // "male", "female", or undefined for no preference
-  strictGender: boolean = false,  // When true, apply gender filter to ALL services
-  requestedTime?: string  // BUG FIX: Specific start time like "9:00 AM" - package starts AT this time
+  genderPreference?: string,
+  strictGender: boolean = false,
+  requestedTime?: string
 ): Promise<Array<{
   date: string;
   slots: Array<{
@@ -3710,110 +3747,155 @@ async function findPackageDayAvailability(
     endTime: string;
     calendar_id: string;
     staff_name: string | null;
-    staff_user_id: string | null;  // BUG FIX: Include user_id for booking assignment
+    staff_user_id: string | null;
   }>;
 }>> {
   const DAYS_TO_SEARCH = 14;
-  const BUFFER_MS = 15 * 60 * 1000;
+  const BUFFER_MINUTES = 15;
+  const MAX_GAP_MINUTES = 30; // Maximum gap between services
+
+  // Helper: format minutes to readable time
+  const formatMins = (mins: number): string => {
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    const period = h >= 12 ? "PM" : "AM";
+    const displayH = h > 12 ? h - 12 : (h === 0 ? 12 : h);
+    return `${displayH}:${m.toString().padStart(2, "0")} ${period}`;
+  };
+
+  // Helper: convert minutes to ISO string for a given date
+  const minutesToISO = (mins: number, dateStr: string): string => {
+    const hours = Math.floor(mins / 60);
+    const minutes = mins % 60;
+    const dt = DateTime.fromObject(
+      { year: parseInt(dateStr.slice(0, 4)), month: parseInt(dateStr.slice(5, 7)), day: parseInt(dateStr.slice(8, 10)), hour: hours, minute: minutes },
+      { zone: tz }
+    );
+    return dt.toISO() || `${dateStr}T${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:00`;
+  };
+
+  console.log(`[Package] === CHECKING PACKAGE for ${requestedDate || "next " + DAYS_TO_SEARCH + " days"} ===`);
+  console.log(`[Package] Services: ${services.join(", ")}`);
+  console.log(`[Package] Time preference: ${timePreference || "(none)"}, Requested time: ${requestedTime || "(none)"}`);
+  console.log(`[Package] Gender preference: ${genderPreference || "(none)"} (${strictGender ? "all services" : "massage only"})`);
+
+  // Parse requested time to minutes
+  let requestedTimeMins: number | null = null;
+  if (requestedTime) {
+    requestedTimeMins = parseTimeToMinutes(requestedTime, tz);
+    console.log(`[Package] Requested start time: ${requestedTime} => ${requestedTimeMins !== null ? formatMins(requestedTimeMins) : "PARSE FAILED"}`);
+  }
 
   // Build list of dates to check
-  // BUG FIX: If requestedDate is provided, ONLY check that specific date
-  // Don't search 14 days when user asks for "Monday the 16th"
   const datesToCheck: string[] = [];
-
   if (requestedDate) {
-    // User asked for a specific date - ONLY check that date
     datesToCheck.push(requestedDate);
     console.log(`[Package] Checking ONLY requested date: ${requestedDate}`);
   } else {
-    // No specific date - search next 14 days
-    const startDate = new Date(localNow);
     for (let i = 0; i < DAYS_TO_SEARCH; i++) {
-      const checkDate = new Date(startDate);
-      checkDate.setDate(startDate.getDate() + i);
+      const checkDate = new Date(localNow);
+      checkDate.setDate(localNow.getDate() + i);
       datesToCheck.push(checkDate.toISOString().split("T")[0]);
     }
-    console.log(`[Package] Searching next ${DAYS_TO_SEARCH} days starting from today`);
   }
 
-  console.log(`[BookPackage] Checking ${datesToCheck.length} dates for all ${services.length} services`);
-  console.log(`[BookPackage] Gender preference: ${genderPreference || "(none)"}, strict mode: ${strictGender}`);
-
-  // Normalize gender preference
   const normalizedGender = genderPreference?.toLowerCase() as "male" | "female" | undefined;
 
-  // Get calendars and staff for each service
-  const serviceCalendars: Map<string, Array<{ calendar_id: string; calendar_name: string | null; staff_name: string | null; user_id: string | null }>> = new Map();
+  // ══════════════════════════════════════════════════════════════════
+  // PHASE 1: Build service info with eligible staff for each service
+  // ══════════════════════════════════════════════════════════════════
+
+  interface StaffEntry {
+    calendar_id: string;
+    calendar_name: string | null;
+    staff_name: string | null;
+    user_id: string | null;
+    duration_minutes: number;
+  }
+
+  const serviceStaffMap: Map<string, StaffEntry[]> = new Map();
 
   for (const service of services) {
     const syncedCals = await getSyncedCalendarsForService(locationId, service);
-    const cals: Array<{ calendar_id: string; calendar_name: string | null; staff_name: string | null; user_id: string | null }> = [];
+    const staffEntries: StaffEntry[] = [];
 
-    if (syncedCals.length > 0) {
-      for (const cal of syncedCals) {
-        let members = await getSyncedTeamMembers(locationId, cal.calendar_id);
-        const isMassage = isMassageService(service, cal.calendar_name || undefined);
+    for (const cal of syncedCals) {
+      let members = await getSyncedTeamMembers(locationId, cal.calendar_id);
+      const isMassage = isMassageService(service, cal.calendar_name || undefined);
 
-        // SIMPLE RULE: Only filter by gender for massage services (or if strict_gender is true)
-        const shouldFilterByGender = normalizedGender && (isMassage || strictGender);
+      // Gender filter: only for massage services (or if strictGender)
+      const shouldFilterByGender = normalizedGender && (isMassage || strictGender);
 
-        if (shouldFilterByGender) {
-          const beforeCount = members.length;
-          members = members.filter(m => m.gender === normalizedGender);
-          console.log(`[Package] ${isMassage ? "Massage" : "Strict mode"} "${service}" filtered by gender ${normalizedGender}: ${beforeCount} -> ${members.length} staff`);
-        }
-
-        // Add staff members
-        for (const member of members) {
-          cals.push({
-            calendar_id: cal.calendar_id,
-            calendar_name: cal.calendar_name,
-            staff_name: member.user_name,
-            user_id: member.user_id,
-          });
-        }
-
-        // Fallback if no members found (only if not filtering by gender)
-        if (members.length === 0 && !shouldFilterByGender) {
-          cals.push({ calendar_id: cal.calendar_id, calendar_name: cal.calendar_name, staff_name: null, user_id: null });
-        }
+      if (shouldFilterByGender) {
+        const beforeCount = members.length;
+        members = members.filter(m => m.gender === normalizedGender || m.gender === null);
+        console.log(`[Package] Service "${service}" ${isMassage ? "(massage)" : "(strict)"} filtered by ${normalizedGender}: ${beforeCount} -> ${members.length} staff`);
       }
-    } else if (installation.calendar_id) {
-      cals.push({ calendar_id: installation.calendar_id, calendar_name: null, staff_name: null, user_id: null });
+
+      const duration = cal.slot_duration || 60;
+
+      for (const member of members) {
+        staffEntries.push({
+          calendar_id: cal.calendar_id,
+          calendar_name: cal.calendar_name,
+          staff_name: member.user_name,
+          user_id: member.user_id,
+          duration_minutes: duration,
+        });
+      }
+
+      // Fallback if no members (only if not filtering by gender)
+      if (members.length === 0 && !shouldFilterByGender) {
+        staffEntries.push({
+          calendar_id: cal.calendar_id,
+          calendar_name: cal.calendar_name,
+          staff_name: null,
+          user_id: null,
+          duration_minutes: duration,
+        });
+      }
     }
 
-    if (cals.length === 0) {
-      const isMassage = isMassageService(service);
-      if (isMassage && normalizedGender) {
-        console.log(`[Package] Massage "${service}" has no ${normalizedGender} staff available`);
-      } else if (strictGender && normalizedGender) {
-        console.log(`[Package] Strict mode: "${service}" has no ${normalizedGender} staff available`);
-      } else {
-        console.log(`[Package] No calendar/staff found for service: ${service}`);
-      }
+    // Also check installation.calendar_id as fallback
+    if (staffEntries.length === 0 && installation.calendar_id) {
+      staffEntries.push({
+        calendar_id: installation.calendar_id,
+        calendar_name: null,
+        staff_name: null,
+        user_id: null,
+        duration_minutes: 60,
+      });
+    }
+
+    if (staffEntries.length === 0) {
+      console.log(`[Package] FAIL: No eligible staff for service "${service}"`);
       return [];
     }
 
-    console.log(`[Package] Service "${service}": ${cals.length} staff options`);
-    serviceCalendars.set(service, cals);
+    console.log(`[Package] Service "${service}": ${staffEntries.length} eligible staff`);
+    serviceStaffMap.set(service, staffEntries);
   }
 
-  // Fetch free slots for each calendar+staff combination
+  // ══════════════════════════════════════════════════════════════════
+  // PHASE 2: Fetch free-slots for each unique calendar+staff combo
+  // ══════════════════════════════════════════════════════════════════
+
   const endDateMs = new Date(datesToCheck[datesToCheck.length - 1] + "T23:59:59").getTime();
-  const startMs = Math.max(localNow.getTime() + BUFFER_MS, new Date(datesToCheck[0] + "T00:00:00").getTime());
+  const startMs = new Date(datesToCheck[0] + "T00:00:00").getTime();
 
-  const staffCalendarSlots: Map<string, Map<string, string[]>> = new Map();
-  const staffCalendarKeys = new Set<string>();
-
-  for (const cals of serviceCalendars.values()) {
-    for (const cal of cals) {
-      const key = `${cal.calendar_id}:${cal.user_id || "any"}`;
-      staffCalendarKeys.add(key);
+  // Build unique keys for all staff entries
+  const staffKeys = new Set<string>();
+  for (const entries of serviceStaffMap.values()) {
+    for (const entry of entries) {
+      staffKeys.add(`${entry.calendar_id}:${entry.user_id || "any"}`);
     }
   }
 
-  // Fetch slots for each calendar+staff combination
-  for (const key of staffCalendarKeys) {
+  // Fetch slots for each calendar+staff - store as minutes from midnight
+  // staffSlotsMap: key -> dateStr -> array of slot minutes
+  const staffSlotsMap: Map<string, Map<string, number[]>> = new Map();
+
+  const fetchPromises = Array.from(staffKeys).map(async (key) => {
     const [calendarId, userId] = key.split(":");
 
     let slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${calendarId}/free-slots?startDate=${startMs}&endDate=${endDateMs}&timezone=${encodeURIComponent(tz)}`;
@@ -3830,50 +3912,42 @@ async function findPackageDayAvailability(
       });
 
       const rawData = resp.data || {};
-      const dateSlots: Map<string, string[]> = new Map();
+      const dateSlots: Map<string, number[]> = new Map();
 
       for (const dateKey of Object.keys(rawData)) {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) continue;
         const entry = rawData[dateKey];
-        const slots: string[] = Array.isArray(entry) ? entry : entry?.slots || [];
-        dateSlots.set(dateKey, slots);
+        const isoSlots: string[] = Array.isArray(entry) ? entry : entry?.slots || [];
+
+        // Convert ISO slots to minutes from midnight
+        const minuteSlots: number[] = [];
+        for (const isoStr of isoSlots) {
+          const mins = parseTimeToMinutes(isoStr, tz);
+          if (mins !== null) minuteSlots.push(mins);
+        }
+        minuteSlots.sort((a, b) => a - b);
+        dateSlots.set(dateKey, minuteSlots);
       }
 
-      staffCalendarSlots.set(key, dateSlots);
+      staffSlotsMap.set(key, dateSlots);
     } catch (err: any) {
-      console.error(`[BookPackage] Error fetching slots for ${key}:`, err.message);
-      staffCalendarSlots.set(key, new Map());
+      console.error(`[Package] Error fetching slots for ${key}:`, err.message);
+      staffSlotsMap.set(key, new Map());
     }
+  });
+
+  await Promise.all(fetchPromises);
+
+  // Log slot counts per staff
+  for (const [key, dateSlots] of staffSlotsMap) {
+    const totalSlots = Array.from(dateSlots.values()).reduce((sum, arr) => sum + arr.length, 0);
+    console.log(`[Package] Staff ${key}: ${totalSlots} total slots across ${dateSlots.size} days`);
   }
 
-  // SPEC Section 8 & 22: Do NOT infer closing time from GHL slots.
-  // GHL free-slots only returns slots within business hours. If a slot exists
-  // in the API response, it's within business hours by definition.
-  // The old closing time inference was broken because existing appointments
-  // consume later slots, making the "last available slot" appear earlier than
-  // actual closing time.
+  // ══════════════════════════════════════════════════════════════════
+  // PHASE 3: For each date, try to build valid chains
+  // ══════════════════════════════════════════════════════════════════
 
-  // Helper to check time preference
-  const matchesTimePreference = (slotTime: string): boolean => {
-    const slotInTz = new Date(slotTime).toLocaleString("en-US", { timeZone: tz, hour12: false });
-    const hourMatch = slotInTz.match(/(\d{1,2}):/);
-    const localHour = hourMatch ? parseInt(hourMatch[1], 10) : new Date(slotTime).getHours();
-
-    if (timePreference === "morning" && localHour >= 12) return false;
-    if (timePreference === "afternoon" && localHour < 12) return false;
-    return true;
-  };
-
-  // Helper to get calendar duration + buffer
-  const getCalendarTiming = async (calendarId: string): Promise<{ duration: number; buffer: number }> => {
-    const syncedCalendar = await getSyncedCalendarById(locationId, calendarId);
-    return {
-      duration: (syncedCalendar?.slot_duration || 60) * 60 * 1000,
-      buffer: (syncedCalendar?.slot_buffer || 15) * 60 * 1000,
-    };
-  };
-
-  // Collect valid dates
   const results: Array<{
     date: string;
     slots: Array<{
@@ -3882,125 +3956,188 @@ async function findPackageDayAvailability(
       endTime: string;
       calendar_id: string;
       staff_name: string | null;
-      staff_user_id: string | null;  // BUG FIX: Include user_id for booking assignment
+      staff_user_id: string | null;
     }>;
   }> = [];
 
-  // BUG FIX: Parse requestedTime to minutes for setting minimum start time
-  // IMPORTANT: Pass timezone from installation record for correct ISO string parsing
-  let requestedTimeMins: number | null = null;
-  if (requestedTime) {
-    requestedTimeMins = parseTimeToMinutes(requestedTime, tz);
-    console.log(`[Package] User requested start time: ${requestedTime} => ${requestedTimeMins} minutes from midnight (timezone: ${tz})`);
-  }
+  // Get current time in minutes for today
+  const nowLuxon = DateTime.now().setZone(tz);
+  const todayStr = nowLuxon.toFormat("yyyy-MM-dd");
+  const nowMinutes = nowLuxon.hour * 60 + nowLuxon.minute + BUFFER_MINUTES;
 
-  // Try each date
   for (const dateKey of datesToCheck) {
     if (results.length >= maxResults) break;
 
-    const plan: Array<{
-      service: string;
-      startTime: string;
-      endTime: string;
-      calendar_id: string;
-      staff_name: string | null;
-      staff_user_id: string | null;
-    }> = [];
+    console.log(`[Package] --- Checking ${dateKey} ---`);
 
-    // BUG FIX: If user requested a specific time (e.g., "9 AM"), start at that time, not earliest available
-    let minStartTimeMs: number;
-    if (requestedTimeMins !== null) {
-      // Build the specific start time for this date
-      const hours = Math.floor(requestedTimeMins / 60);
-      const mins = requestedTimeMins % 60;
-      const requestedDateTime = new Date(`${dateKey}T${hours.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:00`);
-      minStartTimeMs = Math.max(localNow.getTime() + BUFFER_MS, requestedDateTime.getTime());
-      console.log(`[Package] Starting package at requested time: ${requestedDateTime.toISOString()}`);
-    } else {
-      minStartTimeMs = Math.max(localNow.getTime() + BUFFER_MS, new Date(dateKey + "T00:00:00").getTime());
+    // Get first service staff entries
+    const firstService = services[0];
+    const firstServiceStaff = serviceStaffMap.get(firstService) || [];
+
+    // Collect all possible start times for the first service
+    interface StartOption {
+      startMins: number;
+      staff: StaffEntry;
+      staffKey: string;
     }
-    let dateWorks = true;
+    const startOptions: StartOption[] = [];
 
-    // FIX 3: Track consumed slots to prevent double-booking same staff at same time
-    // Format: "staffKey:slotTimeMs" -> endTimeMs
-    const consumedSlots: Map<string, number> = new Map();
+    for (const staff of firstServiceStaff) {
+      const staffKey = `${staff.calendar_id}:${staff.user_id || "any"}`;
+      const daySlots = staffSlotsMap.get(staffKey)?.get(dateKey) || [];
 
-    for (const service of services) {
-      const cals = serviceCalendars.get(service) || [];
-      let foundSlot = false;
+      for (const slotMins of daySlots) {
+        // Skip past slots for today
+        if (dateKey === todayStr && slotMins < nowMinutes) continue;
 
-      for (const cal of cals) {
-        const staffKey = `${cal.calendar_id}:${cal.user_id || "any"}`;
-        const dateSlots = staffCalendarSlots.get(staffKey)?.get(dateKey) || [];
+        // Apply time preference filter ONLY to first service
+        if (requestedTimeMins !== null) {
+          // Specific time requested - only within 15 minutes of requested time
+          if (slotMins < requestedTimeMins || slotMins > requestedTimeMins + 15) continue;
+        } else if (timePreference === "morning" && slotMins >= 720) {
+          continue;
+        } else if (timePreference === "afternoon" && slotMins < 720) {
+          continue;
+        }
 
-        for (const slotTime of dateSlots) {
-          const slotMs = new Date(slotTime).getTime();
-          if (slotMs < minStartTimeMs) continue;
-          if (!matchesTimePreference(slotTime)) continue;
+        startOptions.push({ startMins: slotMins, staff, staffKey });
+      }
+    }
 
-          // FIX 3: Check if this staff member is already booked at this time
-          // Look for any consumed slot for this staff that would overlap
-          let slotConsumed = false;
-          for (const [consumedKey, consumedEndMs] of consumedSlots) {
-            if (consumedKey.startsWith(staffKey + ":")) {
-              const consumedStartMs = parseInt(consumedKey.split(":").pop()!, 10);
-              // Check for overlap: new slot starts before consumed ends
-              if (slotMs < consumedEndMs && slotMs >= consumedStartMs) {
-                slotConsumed = true;
-                break;
-              }
+    // Sort by start time
+    startOptions.sort((a, b) => a.startMins - b.startMins);
+
+    if (startOptions.length === 0) {
+      console.log(`[Package] No valid start times for first service "${firstService}" on ${dateKey}`);
+      continue;
+    }
+
+    console.log(`[Package] ${startOptions.length} possible start times for first service`);
+
+    // Try each start option
+    let chainAttempts = 0;
+    let foundValidChain = false;
+
+    for (const startOpt of startOptions) {
+      if (foundValidChain) break;
+      chainAttempts++;
+
+      const chain: Array<{
+        service: string;
+        startTime: string;
+        endTime: string;
+        calendar_id: string;
+        staff_name: string | null;
+        staff_user_id: string | null;
+      }> = [];
+
+      // Track staff assignments: userId -> array of {start, end} in minutes
+      const usedStaffTimes: Map<string, Array<{ start: number; end: number }>> = new Map();
+
+      // Add first service to chain
+      const firstEndMins = startOpt.startMins + startOpt.staff.duration_minutes;
+      chain.push({
+        service: firstService,
+        startTime: minutesToISO(startOpt.startMins, dateKey),
+        endTime: minutesToISO(firstEndMins, dateKey),
+        calendar_id: startOpt.staff.calendar_id,
+        staff_name: startOpt.staff.staff_name,
+        staff_user_id: startOpt.staff.user_id,
+      });
+
+      // Mark staff as used
+      if (startOpt.staff.user_id) {
+        usedStaffTimes.set(startOpt.staff.user_id, [{ start: startOpt.startMins, end: firstEndMins }]);
+      }
+
+      console.log(`[Package] Trying chain: ${firstService} with ${startOpt.staff.staff_name || "any"} at ${formatMins(startOpt.startMins)}`);
+
+      let chainValid = true;
+      let previousEndMins = firstEndMins;
+
+      // Try to chain subsequent services
+      for (let i = 1; i < services.length; i++) {
+        const service = services[i];
+        const earliestStart = previousEndMins + BUFFER_MINUTES;
+        const latestStart = earliestStart + MAX_GAP_MINUTES;
+
+        console.log(`[Package]   Service ${i + 1} "${service}": needs slot between ${formatMins(earliestStart)} and ${formatMins(latestStart)}`);
+
+        const serviceStaff = serviceStaffMap.get(service) || [];
+        let foundSlot = false;
+
+        for (const staff of serviceStaff) {
+          const staffKey = `${staff.calendar_id}:${staff.user_id || "any"}`;
+          const daySlots = staffSlotsMap.get(staffKey)?.get(dateKey) || [];
+
+          // Check if this staff is already busy
+          if (staff.user_id) {
+            const staffTimes = usedStaffTimes.get(staff.user_id) || [];
+            const wouldOverlap = staffTimes.some(t => {
+              // Check if [earliestStart, earliestStart + duration] overlaps with [t.start, t.end]
+              const newEnd = earliestStart + staff.duration_minutes;
+              return earliestStart < t.end && newEnd > t.start;
+            });
+            if (wouldOverlap) {
+              console.log(`[Package]     Staff "${staff.staff_name}" is already assigned during this time, skipping`);
+              continue;
             }
           }
-          if (slotConsumed) {
-            console.log(`[Package] Skipping ${staffKey} at ${slotTime} - already booked for another service`);
-            continue;
+
+          // Find a slot within the acceptable range
+          const matchingSlot = daySlots.find(m => m >= earliestStart && m <= latestStart);
+
+          if (matchingSlot !== undefined) {
+            const endMins = matchingSlot + staff.duration_minutes;
+
+            chain.push({
+              service,
+              startTime: minutesToISO(matchingSlot, dateKey),
+              endTime: minutesToISO(endMins, dateKey),
+              calendar_id: staff.calendar_id,
+              staff_name: staff.staff_name,
+              staff_user_id: staff.user_id,
+            });
+
+            // Mark staff as used
+            if (staff.user_id) {
+              const existing = usedStaffTimes.get(staff.user_id) || [];
+              existing.push({ start: matchingSlot, end: endMins });
+              usedStaffTimes.set(staff.user_id, existing);
+            }
+
+            console.log(`[Package]     ✓ Found: ${staff.staff_name || "any"} at ${formatMins(matchingSlot)}`);
+            previousEndMins = endMins;
+            foundSlot = true;
+            break;
+          } else {
+            // Find why no slot matched
+            const slotsAfter = daySlots.filter(m => m >= earliestStart);
+            if (slotsAfter.length === 0) {
+              console.log(`[Package]     Staff "${staff.staff_name}" has no slots at or after ${formatMins(earliestStart)}`);
+            } else {
+              const firstAvailable = slotsAfter[0];
+              console.log(`[Package]     Staff "${staff.staff_name}" has slot at ${formatMins(firstAvailable)} but gap is ${firstAvailable - earliestStart + BUFFER_MINUTES}min (max ${MAX_GAP_MINUTES})`);
+            }
           }
+        }
 
-          const timing = await getCalendarTiming(cal.calendar_id);
-          const endTimeMs = slotMs + timing.duration;
-          const endTimeISO = new Date(endTimeMs).toISOString();
-
-          // FIX 3: Mark this slot as consumed for this staff
-          consumedSlots.set(`${staffKey}:${slotMs}`, endTimeMs + timing.buffer);
-
-          plan.push({
-            service,
-            startTime: slotTime,
-            endTime: endTimeISO,
-            calendar_id: cal.calendar_id,
-            staff_name: cal.staff_name,
-            staff_user_id: cal.user_id,
-          });
-
-          minStartTimeMs = endTimeMs + timing.buffer;
-          foundSlot = true;
+        if (!foundSlot) {
+          console.log(`[Package]   ✗ CHAIN BROKEN: No staff available for "${service}" between ${formatMins(earliestStart)} and ${formatMins(latestStart)}`);
+          chainValid = false;
           break;
         }
-        if (foundSlot) break;
       }
 
-      if (!foundSlot) {
-        dateWorks = false;
-        break;
+      if (chainValid && chain.length === services.length) {
+        console.log(`[Package] ✓ Valid chain found starting at ${formatMins(startOpt.startMins)}`);
+        results.push({ date: dateKey, slots: chain });
+        foundValidChain = true;
       }
     }
 
-    if (dateWorks && plan.length === services.length) {
-      // SPEC Section 8 & 22: Trust GHL free-slots data.
-      // If we found valid GHL slots for ALL services in sequence, the package
-      // fits within business hours by definition. GHL wouldn't return a slot
-      // that extends past closing time.
-      const lastSlot = plan[plan.length - 1];
-      const lastEndTime = new Date(lastSlot.endTime);
-      const endTimeLocal = lastEndTime.toLocaleString("en-US", {
-        timeZone: tz,
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false
-      });
-      console.log(`[Package] Found valid day: ${dateKey} (package ends at ${endTimeLocal})`);
-
-      results.push({ date: dateKey, slots: plan });
+    if (!foundValidChain) {
+      console.log(`[Package] No valid chains found for ${dateKey} after ${chainAttempts} attempts`);
     }
   }
 
