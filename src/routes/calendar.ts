@@ -310,11 +310,11 @@ router.post("/free-slots", async (req: Request, res: Response) => {
     const BUFFER_MS = 15 * 60 * 1000;
     const nowPlusBuffer = localNow.toMillis() + BUFFER_MS;
 
-    // Convert dates to Unix milliseconds for GHL API
+    // Convert dates to Unix milliseconds for GHL API (using Luxon with business timezone)
     // Use the later of the requested start or "now + 15 min" so past slots aren't fetched
-    const requestedStartMs = new Date(calculatedStartDate).getTime();
+    const requestedStartMs = DateTime.fromISO(calculatedStartDate, { zone: tz }).startOf("day").toMillis();
     const startMs = Math.max(requestedStartMs, nowPlusBuffer);
-    const endMs = new Date(calculatedEndDate).getTime();
+    const endMs = DateTime.fromISO(calculatedEndDate, { zone: tz }).endOf("day").toMillis();
 
     const slotsUrl = `/calendars/${installation.calendar_id}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
 
@@ -1276,7 +1276,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       // Parse requested_date if provided
       let startDateFilter: string | null = null;
       if (requested_date) {
-        const parsed = parseRequestedDate(requested_date, localNow);
+        const parsed = parseRequestedDate(requested_date, localNow, tz);
         if (parsed) startDateFilter = parsed;
       }
 
@@ -1527,9 +1527,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     }
 
     // Use tz, localNow, todayStr already defined at top of endpoint
-    const tomorrowDate = new Date(localNow);
-    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
-    const tomorrowStr = tomorrowDate.toISOString().split("T")[0];
+    const tomorrowStr = DateTime.fromISO(todayStr, { zone: tz }).plus({ days: 1 }).toFormat("yyyy-MM-dd");
 
     // Format today's date for the agent (e.g., "Thursday, February 5th, 2026")
     const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -1555,14 +1553,16 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     // This lets the agent find slots that start after the previous service ends
     let minSlotTimeMs = nowPlusBuffer;
     if (start_after) {
-      const startAfterMs = new Date(start_after).getTime();
+      const startAfterMs = DateTime.fromISO(start_after, { zone: tz }).toMillis();
       if (!isNaN(startAfterMs)) {
         minSlotTimeMs = Math.max(minSlotTimeMs, startAfterMs);
         console.log(`[Calendar] start_after filter: only slots >= ${start_after}`);
       }
     }
 
-    const startMs = Math.max(new Date(todayStr).getTime(), minSlotTimeMs);
+    // GHL requires epoch milliseconds in business timezone
+    const todayStartMs = DateTime.fromISO(todayStr, { zone: tz }).startOf("day").toMillis();
+    const startMs = Math.max(todayStartMs, minSlotTimeMs);
 
     // Slot type with staff info
     type SlotWithStaff = { slot: string; staff_name: string | null; staff_id: string | null; calendar_id: string; calendar_name: string | null };
@@ -1575,9 +1575,8 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       staffId: string | null,
       daysAhead: number
     ): Promise<Record<string, SlotWithStaff[]>> => {
-      const endDate = new Date(localNow);
-      endDate.setDate(endDate.getDate() + daysAhead);
-      const endMs = endDate.getTime();
+      // GHL requires epoch milliseconds in business timezone
+      const endMs = DateTime.fromISO(todayStr, { zone: tz }).plus({ days: daysAhead }).endOf("day").toMillis();
 
       // Build URL - include userId if filtering by specific staff member (for gender preference)
       let slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${calendarId}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
@@ -1607,7 +1606,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
         const slots: string[] = Array.isArray(entry) ? entry : (entry?.slots || []);
         // Filter slots: must be >= minSlotTimeMs (accounts for both "now + buffer" AND start_after)
         const futureSlots = slots.filter(slot => {
-          const slotMs = new Date(slot).getTime();
+          const slotMs = DateTime.fromISO(slot, { zone: tz }).toMillis();
           return slotMs >= minSlotTimeMs;
         });
         if (futureSlots.length > 0) {
@@ -1663,11 +1662,12 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       console.log(`[Calendar]   today's slots: ${availabilityByDate[todayStr].length} total`);
     }
 
-    // Helper: get label
+    // Helper: get label (use Luxon for timezone-aware day-of-week)
     const getLabel = (dateKey: string): string => {
       if (dateKey === todayStr) return "today";
       if (dateKey === tomorrowStr) return "tomorrow";
-      return DAY_NAMES[new Date(dateKey + "T00:00:00").getDay()];
+      const dt = DateTime.fromISO(dateKey, { zone: tz });
+      return DAY_NAMES[dt.weekday % 7]; // Luxon uses 1=Mon, 7=Sun; DAY_NAMES uses 0=Sun
     };
 
     // Helper: parse natural language date requests into a date filter function
@@ -1690,52 +1690,49 @@ router.post("/check-availability", async (req: Request, res: Response) => {
         return (dateKey) => dateKey === tomorrowStr;
       }
 
-      // "this weekend" - Saturday and Sunday of current week
+      // "this weekend" - Saturday and Sunday of current week (using Luxon for timezone-safe dates)
       if (n === "this weekend" || n === "weekend") {
-        const saturday = new Date(localNow);
-        const daysToSat = 6 - localNow.getDay();
-        saturday.setDate(saturday.getDate() + daysToSat);
-        const satStr = saturday.toISOString().split("T")[0];
-        const sunday = new Date(saturday);
-        sunday.setDate(sunday.getDate() + 1);
-        const sunStr = sunday.toISOString().split("T")[0];
+        const nowDt = DateTime.fromISO(todayStr, { zone: tz });
+        const daysToSat = 6 - (nowDt.weekday % 7); // Luxon weekday: 1=Mon...7=Sun
+        const saturday = nowDt.plus({ days: daysToSat });
+        const satStr = saturday.toFormat("yyyy-MM-dd");
+        const sunStr = saturday.plus({ days: 1 }).toFormat("yyyy-MM-dd");
         return (dateKey) => dateKey === satStr || dateKey === sunStr;
       }
 
-      // "next week" - starting from next Monday
+      // "next week" - starting from next Monday (using Luxon)
       if (n === "next week") {
-        const nextMonday = new Date(localNow);
-        const daysToMon = (8 - localNow.getDay()) % 7 || 7; // days until next Monday
-        nextMonday.setDate(nextMonday.getDate() + daysToMon);
-        const nextMondayStr = nextMonday.toISOString().split("T")[0];
+        const nowDt = DateTime.fromISO(todayStr, { zone: tz });
+        const daysToMon = (8 - (nowDt.weekday % 7)) % 7 || 7; // days until next Monday
+        const nextMondayStr = nowDt.plus({ days: daysToMon }).toFormat("yyyy-MM-dd");
         return (dateKey) => dateKey >= nextMondayStr;
       }
 
-      // "next [day]" - e.g., "next Monday", "next Friday"
+      // "next [day]" - e.g., "next Monday", "next Friday" (using Luxon)
       const nextDayMatch = n.match(/^next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/);
       if (nextDayMatch) {
         const dayName = nextDayMatch[1];
         const targetDayIdx = DAY_NAMES.findIndex(d => d.toLowerCase() === dayName);
         if (targetDayIdx !== -1) {
-          let daysAhead = targetDayIdx - localNow.getDay();
+          const nowDt = DateTime.fromISO(todayStr, { zone: tz });
+          const currentDayIdx = nowDt.weekday % 7; // Convert Luxon weekday to 0=Sun format
+          let daysAhead = targetDayIdx - currentDayIdx;
           if (daysAhead <= 0) daysAhead += 7;
           // "next Monday" means the Monday of NEXT week, not this week
           if (daysAhead < 7) daysAhead += 7;
-          const target = new Date(localNow);
-          target.setDate(target.getDate() + daysAhead);
-          const targetStr = target.toISOString().split("T")[0];
+          const targetStr = nowDt.plus({ days: daysAhead }).toFormat("yyyy-MM-dd");
           return (dateKey) => dateKey === targetStr;
         }
       }
 
-      // Single day name: "Friday", "Monday", etc. - next occurrence
+      // Single day name: "Friday", "Monday", etc. - next occurrence (using Luxon)
       const dayIdx = DAY_NAMES.findIndex(d => d.toLowerCase() === n);
       if (dayIdx !== -1) {
-        let daysAhead = dayIdx - localNow.getDay();
+        const nowDt = DateTime.fromISO(todayStr, { zone: tz });
+        const currentDayIdx = nowDt.weekday % 7; // Convert Luxon weekday to 0=Sun format
+        let daysAhead = dayIdx - currentDayIdx;
         if (daysAhead <= 0) daysAhead += 7;
-        const target = new Date(localNow);
-        target.setDate(target.getDate() + daysAhead);
-        const targetStr = target.toISOString().split("T")[0];
+        const targetStr = nowDt.plus({ days: daysAhead }).toFormat("yyyy-MM-dd");
         return (dateKey) => dateKey === targetStr;
       }
 
@@ -1769,7 +1766,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     // The internal parseDateRequest doesn't handle formats like "Monday the 16th"
     let dateFilter: ((dateKey: string) => boolean) | null = null;
     if (requested_date) {
-      const parsedDate = parseRequestedDate(requested_date, localNow);
+      const parsedDate = parseRequestedDate(requested_date, localNow, tz);
       if (parsedDate) {
         console.log(`[Calendar] Parsed requested_date "${requested_date}" to "${parsedDate}" using chrono-node`);
         dateFilter = (dateKey) => dateKey === parsedDate;
@@ -2176,8 +2173,8 @@ router.post("/book", async (req: Request, res: Response) => {
           return res.status(500).json({ success: false, error: "Failed to map any slots for booking" });
         }
 
-        // Extract date from first slot
-        const firstSlotDate = new Date(mappedSlots[0].startTime).toISOString().split("T")[0];
+        // Extract date from first slot (use Luxon to preserve business timezone date)
+        const firstSlotDate = DateTime.fromISO(mappedSlots[0].startTime, { zone: tz }).toFormat("yyyy-MM-dd");
 
         packagePlan = {
           date: firstSlotDate,
@@ -2218,7 +2215,7 @@ router.post("/book", async (req: Request, res: Response) => {
         console.log(`[Book] No pre-confirmed slots, recalculating for ${selectedDate} ${effectiveTimePreference || "(any time)"} ${requestedTime ? `starting at ${requestedTime}` : ""}`);
 
         // Parse selected_date
-        const parsedDate = parseRequestedDate(selectedDate, localNow);
+        const parsedDate = parseRequestedDate(selectedDate, localNow, tz);
         if (!parsedDate) {
           return res.status(400).json({ success: false, error: "Invalid selected_date format" });
         }
@@ -2277,12 +2274,18 @@ router.post("/book", async (req: Request, res: Response) => {
         const slot = packagePlan.slots[revalIdx];
         console.log(`[Book] Re-validation ${revalIdx + 1}/${packagePlan.slots.length}: ${slot.service}`);
 
-        const slotDate = new Date(slot.startTime);
-        const slotDateStr = slotDate.toISOString().split("T")[0];
+        // Parse slot time in business timezone to get correct date (NOT UTC!)
+        const slotDateTime = DateTime.fromISO(slot.startTime, { zone: tz });
+        const slotDateStr = slotDateTime.toFormat("yyyy-MM-dd");
 
         // Call GHL free-slots for this specific calendar + staff + date
-        const startMs = new Date(slotDateStr + "T00:00:00").getTime();
-        const endMs = new Date(slotDateStr + "T23:59:59").getTime();
+        // GHL requires epoch MILLISECONDS in business timezone
+        const startDateTime = DateTime.fromISO(slotDateStr, { zone: tz }).startOf("day");
+        const endDateTime = DateTime.fromISO(slotDateStr, { zone: tz }).endOf("day");
+        const startMs = startDateTime.toMillis();
+        const endMs = endDateTime.toMillis();
+
+        console.log(`[Book]   Date in ${tz}: ${slotDateStr}, startMs=${startMs}, endMs=${endMs}`);
 
         let slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${slot.calendar_id}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
         if (slot.staff_user_id) {
@@ -2312,14 +2315,14 @@ router.post("/book", async (req: Request, res: Response) => {
           // Check if our slot time is still in the available slots
           // Use a 2-minute tolerance to handle timezone/rounding differences
           const TOLERANCE_MS = 2 * 60 * 1000; // 2 minutes
-          const targetMs = slotDate.getTime();
+          const targetMs = slotDateTime.toMillis();
 
           // Also check if the slot is in the past (for same-day bookings)
           const nowMs = Date.now();
           const isSlotInPast = targetMs < nowMs;
 
           console.log(`[Book]   Target time: ${slot.startTime} (${targetMs}ms)`);
-          console.log(`[Book]   Current time: ${new Date().toISOString()} (${nowMs}ms)`);
+          console.log(`[Book]   Current time: ${DateTime.now().setZone(tz).toISO()} (${nowMs}ms)`);
           console.log(`[Book]   Is slot in past: ${isSlotInPast}`);
 
           if (isSlotInPast) {
@@ -2333,7 +2336,7 @@ router.post("/book", async (req: Request, res: Response) => {
           }
 
           const slotStillAvailable = availableSlots.some(availSlot => {
-            const availMs = new Date(availSlot).getTime();
+            const availMs = DateTime.fromISO(availSlot, { zone: tz }).toMillis();
             const diff = Math.abs(availMs - targetMs);
             if (diff <= TOLERANCE_MS) {
               console.log(`[Book]     Matched: ${availSlot} (diff: ${diff}ms)`);
@@ -2349,7 +2352,7 @@ router.post("/book", async (req: Request, res: Response) => {
             let closestDiff = Infinity;
             let closestSlot = "";
             availableSlots.forEach(availSlot => {
-              const availMs = new Date(availSlot).getTime();
+              const availMs = DateTime.fromISO(availSlot, { zone: tz }).toMillis();
               const diff = Math.abs(availMs - targetMs);
               if (diff < closestDiff) {
                 closestDiff = diff;
@@ -2717,13 +2720,14 @@ router.post("/book", async (req: Request, res: Response) => {
 
     // STEP 6: Book the appointment
     console.log(`[Book] STEP 6: Creating appointment...`);
-    // Convert to UTC ISO format for GHL API
-    const startISO = new Date(resolvedStartTime).toISOString();
-    const startTimeMs = new Date(resolvedStartTime).getTime();
+    // Convert to UTC ISO format for GHL API using Luxon with business timezone
+    const startDateTime = DateTime.fromISO(resolvedStartTime, { zone: tz });
+    const startISO = startDateTime.toUTC().toISO();
+    const startTimeMs = startDateTime.toMillis();
     const endTimeMs = startTimeMs + durationMinutes * 60 * 1000;
-    const endISO = new Date(endTimeMs).toISOString();
+    const endISO = DateTime.fromMillis(endTimeMs, { zone: tz }).toUTC().toISO();
     const bufferEndMs = endTimeMs + slotBuffer * 60 * 1000;
-    const bufferEndISO = new Date(bufferEndMs).toISOString();
+    const bufferEndISO = DateTime.fromMillis(bufferEndMs, { zone: tz }).toUTC().toISO();
 
     console.log(`[Book] Time conversion: ${resolvedStartTime} => ${startISO}`);
 
@@ -2909,12 +2913,13 @@ router.post("/reschedule", async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, error: "Installation not found" });
     }
 
+    const tz = installation.timezone || "America/New_York";
     const client = await ghl.requests(locationId);
     const resp = await client.put(
       `/calendars/events/appointments/${eventId}`,
       {
-        startTime: new Date(startTime).toISOString(),
-        endTime: new Date(endTime).toISOString(),
+        startTime: DateTime.fromISO(startTime, { zone: tz }).toUTC().toISO(),
+        endTime: DateTime.fromISO(endTime, { zone: tz }).toUTC().toISO(),
       },
       { headers: { Version: "2021-07-28" } }
     );
@@ -3257,13 +3262,13 @@ router.post("/book-package", async (req: Request, res: Response) => {
 
     if (selected_date) {
       // User picked a specific date from check-package-availability
-      const parsed = parseRequestedDate(selected_date, localNow);
+      const parsed = parseRequestedDate(selected_date, localNow, tz);
       if (parsed) {
         specificDate = parsed;
         startDateFilter = parsed;
       }
     } else if (requested_date) {
-      const parsed = parseRequestedDate(requested_date, localNow);
+      const parsed = parseRequestedDate(requested_date, localNow, tz);
       if (parsed) startDateFilter = parsed;
     }
 
@@ -3585,7 +3590,7 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
     // Parse requested_date if provided
     let startDateFilter: string | null = null;
     if (requested_date) {
-      const parsed = parseRequestedDate(requested_date, localNow);
+      const parsed = parseRequestedDate(requested_date, localNow, tz);
       if (parsed) startDateFilter = parsed;
     }
 
@@ -3700,7 +3705,7 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
  * "Monday the 9th", "February 15th", etc.
  * Returns ISO date string (YYYY-MM-DD) or null if parsing fails.
  */
-function parseRequestedDate(input: string, localNow: Date): string | null {
+function parseRequestedDate(input: string, localNow: Date, tz: string): string | null {
   if (!input || typeof input !== "string") return null;
 
   const trimmed = input.trim();
@@ -3708,8 +3713,8 @@ function parseRequestedDate(input: string, localNow: Date): string | null {
 
   // If already ISO format, validate and return
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-    const parsed = new Date(trimmed + "T00:00:00");
-    if (!isNaN(parsed.getTime())) {
+    const parsed = DateTime.fromISO(trimmed, { zone: tz });
+    if (parsed.isValid) {
       return trimmed;
     }
   }
@@ -3722,27 +3727,25 @@ function parseRequestedDate(input: string, localNow: Date): string | null {
     return null;
   }
 
-  // Validate: must be today or future
-  const today = new Date(localNow);
-  today.setHours(0, 0, 0, 0);
-  const parsedDay = new Date(parsed);
-  parsedDay.setHours(0, 0, 0, 0);
+  // Convert chrono result to Luxon DateTime in business timezone
+  const parsedDt = DateTime.fromJSDate(parsed, { zone: tz });
+  const todayDt = DateTime.fromJSDate(localNow, { zone: tz }).startOf("day");
 
-  if (parsedDay < today) {
-    console.log(`[DateParse] Parsed date "${input}" is in the past: ${parsed.toISOString()}`);
+  // Validate: must be today or future
+  if (parsedDt.startOf("day") < todayDt) {
+    console.log(`[DateParse] Parsed date "${input}" is in the past: ${parsedDt.toISO()}`);
     return null;
   }
 
   // Validate: within 60 days
-  const maxDate = new Date(localNow);
-  maxDate.setDate(maxDate.getDate() + 60);
-  if (parsedDay > maxDate) {
-    console.log(`[DateParse] Parsed date "${input}" is beyond 60 days: ${parsed.toISOString()}`);
+  const maxDateDt = todayDt.plus({ days: 60 });
+  if (parsedDt.startOf("day") > maxDateDt) {
+    console.log(`[DateParse] Parsed date "${input}" is beyond 60 days: ${parsedDt.toISO()}`);
     return null;
   }
 
-  // Return ISO date string (YYYY-MM-DD)
-  const result = parsed.toISOString().split("T")[0];
+  // Return ISO date string (YYYY-MM-DD) in business timezone
+  const result = parsedDt.toFormat("yyyy-MM-dd");
   console.log(`[DateParse] Matched "${input}" to ${result}`);
   return result;
 }
@@ -3787,13 +3790,14 @@ async function findServiceAvailability(
     return { slot: null };
   }
 
-  // Calculate time window
+  // Calculate time window using Luxon with business timezone
   const BUFFER_MS = 15 * 60 * 1000;
-  const nowPlusBuffer = localNow.getTime() + BUFFER_MS;
+  const nowInTz = DateTime.fromJSDate(localNow, { zone: tz });
+  const nowPlusBuffer = nowInTz.toMillis() + BUFFER_MS;
 
   let minSlotTimeMs = nowPlusBuffer;
   if (startAfter) {
-    const startAfterMs = new Date(startAfter).getTime();
+    const startAfterMs = DateTime.fromISO(startAfter, { zone: tz }).toMillis();
     if (!isNaN(startAfterMs)) {
       minSlotTimeMs = Math.max(minSlotTimeMs, startAfterMs);
     }
@@ -3802,9 +3806,8 @@ async function findServiceAvailability(
   // Fetch slots for each calendar
   for (const cal of calendarsToCheck) {
     for (const daysAhead of [7, 14, 30]) {
-      const endDate = new Date(localNow);
-      endDate.setDate(endDate.getDate() + daysAhead);
-      const endMs = endDate.getTime();
+      // GHL requires epoch milliseconds in business timezone
+      const endMs = nowInTz.plus({ days: daysAhead }).endOf("day").toMillis();
       const startMs = minSlotTimeMs;
 
       const slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${cal.calendar_id}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
@@ -3836,13 +3839,12 @@ async function findServiceAvailability(
           console.log(`[BookPackage] Date ${dateKey} has ${slots.length} slots`);
 
           for (const slot of slots) {
-            const slotMs = new Date(slot).getTime();
+            const slotDateTime = DateTime.fromISO(slot, { zone: tz });
+            const slotMs = slotDateTime.toMillis();
             if (slotMs < minSlotTimeMs) continue;
 
-            // Apply time preference filter using LOCATION'S timezone
-            const slotInTz = new Date(slot).toLocaleString("en-US", { timeZone: tz, hour12: false });
-            const hourMatch = slotInTz.match(/(\d{1,2}):/);
-            const localHour = hourMatch ? parseInt(hourMatch[1], 10) : new Date(slot).getHours();
+            // Apply time preference filter using LOCATION'S timezone (Luxon handles this correctly)
+            const localHour = slotDateTime.hour;
 
             console.log(`[BookPackage] Slot ${slot} -> local hour ${localHour} in ${tz}, preference: ${timePreference}`);
 
@@ -3964,10 +3966,10 @@ async function findPackageDayAvailability(
     datesToCheck.push(requestedDate);
     console.log(`[Package] Checking ONLY requested date: ${requestedDate}`);
   } else {
+    // Build date list using Luxon with business timezone
+    const nowDt = DateTime.fromJSDate(localNow, { zone: tz });
     for (let i = 0; i < DAYS_TO_SEARCH; i++) {
-      const checkDate = new Date(localNow);
-      checkDate.setDate(localNow.getDate() + i);
-      datesToCheck.push(checkDate.toISOString().split("T")[0]);
+      datesToCheck.push(nowDt.plus({ days: i }).toFormat("yyyy-MM-dd"));
     }
   }
 
@@ -4444,13 +4446,14 @@ async function bookServiceAppointment(
     }
     console.log(`[BookService] Contact upserted: ${contactId}`);
 
-    // Calculate times
-    const startISO = new Date(startTime).toISOString();
-    const startTimeMs = new Date(startTime).getTime();
+    // Calculate times using Luxon (preserves timezone from ISO string)
+    const startDateTime = DateTime.fromISO(startTime);
+    const startISO = startDateTime.toUTC().toISO()!;
+    const startTimeMs = startDateTime.toMillis();
     const endTimeMs = startTimeMs + slotDuration * 60 * 1000;
-    const endISO = new Date(endTimeMs).toISOString();
+    const endISO = DateTime.fromMillis(endTimeMs).toUTC().toISO()!;
     const bufferEndMs = endTimeMs + slotBuffer * 60 * 1000;
-    const bufferEndISO = new Date(bufferEndMs).toISOString();
+    const bufferEndISO = DateTime.fromMillis(bufferEndMs).toUTC().toISO()!;
 
     // Build notes - ONLY add therapist preference to MASSAGE services
     // Other services (body treatment, facial) don't need therapist gender preference
