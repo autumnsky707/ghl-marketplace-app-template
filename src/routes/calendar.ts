@@ -754,6 +754,149 @@ router.get("/sync-status", async (req: Request, res: Response) => {
 });
 
 /**
+ * TEMPORARY DIAGNOSTIC ENDPOINT
+ * GET /api/calendar/debug-free-slots
+ * Tests the GHL free-slots API directly, bypassing package logic.
+ *
+ * Query params:
+ *   - locationId: required
+ *   - calendarId: required
+ *   - date: required (YYYY-MM-DD format)
+ *   - userId: optional (team member userId to filter by)
+ *
+ * Returns raw GHL responses with and without userId filter for comparison.
+ */
+router.get("/debug-free-slots", async (req: Request, res: Response) => {
+  try {
+    const { locationId, calendarId, date, userId } = req.query;
+
+    // Validate required params
+    if (!locationId || !calendarId || !date) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required query params: locationId, calendarId, date",
+        example: "/api/calendar/debug-free-slots?locationId=XXX&calendarId=YYY&date=2026-02-12&userId=ZZZ"
+      });
+    }
+
+    console.log(`[Debug-FreeSlots] ========================================`);
+    console.log(`[Debug-FreeSlots] locationId=${locationId}`);
+    console.log(`[Debug-FreeSlots] calendarId=${calendarId}`);
+    console.log(`[Debug-FreeSlots] date=${date}`);
+    console.log(`[Debug-FreeSlots] userId=${userId || '(none)'}`);
+
+    // Get installation for timezone and auth
+    const installation = await getInstallation(locationId as string);
+    if (!installation) {
+      return res.status(404).json({
+        success: false,
+        error: `No installation found for locationId: ${locationId}`
+      });
+    }
+
+    const timezone = installation.timezone || "America/New_York";
+    console.log(`[Debug-FreeSlots] timezone from installation: ${timezone}`);
+
+    // Build date range (single day)
+    const startDate = DateTime.fromISO(date as string, { zone: timezone }).startOf("day").toISO();
+    const endDate = DateTime.fromISO(date as string, { zone: timezone }).endOf("day").toISO();
+
+    console.log(`[Debug-FreeSlots] startDate (ISO): ${startDate}`);
+    console.log(`[Debug-FreeSlots] endDate (ISO): ${endDate}`);
+
+    // Get authenticated client
+    const client = await ghl.requests(locationId as string);
+
+    // Build base URL
+    const baseUrl = `${process.env.GHL_API_DOMAIN}/calendars/${calendarId}/free-slots`;
+
+    // Request WITH userId (if provided)
+    let withUserIdResult: any = null;
+    if (userId) {
+      const urlWithUser = `${baseUrl}?startDate=${encodeURIComponent(startDate!)}&endDate=${encodeURIComponent(endDate!)}&timezone=${encodeURIComponent(timezone)}&userId=${userId}`;
+      console.log(`[Debug-FreeSlots] Fetching WITH userId: ${urlWithUser}`);
+
+      try {
+        const resp = await client.get(urlWithUser, {
+          headers: { Version: "2021-07-28" }
+        });
+        withUserIdResult = {
+          status: resp.status,
+          url: urlWithUser,
+          data: resp.data,
+          slotCount: Object.values(resp.data || {}).flat().length
+        };
+        console.log(`[Debug-FreeSlots] WITH userId response: ${withUserIdResult.slotCount} slots`);
+      } catch (err: any) {
+        withUserIdResult = {
+          status: err?.response?.status || "error",
+          url: urlWithUser,
+          error: err?.response?.data || err.message
+        };
+        console.log(`[Debug-FreeSlots] WITH userId ERROR: ${JSON.stringify(withUserIdResult.error)}`);
+      }
+    }
+
+    // Request WITHOUT userId
+    const urlWithoutUser = `${baseUrl}?startDate=${encodeURIComponent(startDate!)}&endDate=${encodeURIComponent(endDate!)}&timezone=${encodeURIComponent(timezone)}`;
+    console.log(`[Debug-FreeSlots] Fetching WITHOUT userId: ${urlWithoutUser}`);
+
+    let withoutUserIdResult: any = null;
+    try {
+      const resp = await client.get(urlWithoutUser, {
+        headers: { Version: "2021-07-28" }
+      });
+      withoutUserIdResult = {
+        status: resp.status,
+        url: urlWithoutUser,
+        data: resp.data,
+        slotCount: Object.values(resp.data || {}).flat().length
+      };
+      console.log(`[Debug-FreeSlots] WITHOUT userId response: ${withoutUserIdResult.slotCount} slots`);
+    } catch (err: any) {
+      withoutUserIdResult = {
+        status: err?.response?.status || "error",
+        url: urlWithoutUser,
+        error: err?.response?.data || err.message
+      };
+      console.log(`[Debug-FreeSlots] WITHOUT userId ERROR: ${JSON.stringify(withoutUserIdResult.error)}`);
+    }
+
+    console.log(`[Debug-FreeSlots] ========================================`);
+
+    return res.json({
+      success: true,
+      params: {
+        locationId,
+        calendarId,
+        date,
+        userId: userId || null,
+        timezone
+      },
+      dates: {
+        startDate,
+        endDate
+      },
+      withUserId: withUserIdResult,
+      withoutUserId: withoutUserIdResult,
+      comparison: userId ? {
+        withUserIdSlots: withUserIdResult?.slotCount || 0,
+        withoutUserIdSlots: withoutUserIdResult?.slotCount || 0,
+        difference: (withoutUserIdResult?.slotCount || 0) - (withUserIdResult?.slotCount || 0)
+      } : null
+    });
+
+  } catch (error: any) {
+    console.error("[Debug-FreeSlots] Error:", error?.message);
+    return res.status(500).json({
+      success: false,
+      error: error?.message,
+      stack: error?.stack
+    });
+  }
+});
+
+/**
  * POST /api/calendar/business-info
  * Get or update business info and service mappings.
  *
