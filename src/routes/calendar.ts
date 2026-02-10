@@ -3833,12 +3833,34 @@ async function findPackageDayAvailability(
 
   const serviceStaffMap: Map<string, StaffEntry[]> = new Map();
 
+  // DEBUG: Verified GHL userIds for cross-reference
+  const VERIFIED_USER_IDS: Record<string, string> = {
+    "Sarah Johnson": "pnqHD0AXxQAdtRgHQOen",
+    "Miles Doe": "QFpZOUHq3chPMJ7AwfNQ",
+    "Iris Miller": "I94Y1xRZPbdT6aQgST3P",
+    "Lotus Chin": "AWJsMD7wOCePvoA5eRzq",
+    "Lily Hill": "8b2lfmbJ9N0lFY8u8D3r",
+    "Autumn Sky Hancock": "IuE30ta0ECnrSXyxb2Tx",
+  };
+
   for (const service of services) {
     const syncedCals = await getSyncedCalendarsForService(locationId, service);
     const staffEntries: StaffEntry[] = [];
 
     for (const cal of syncedCals) {
       let members = await getSyncedTeamMembers(locationId, cal.calendar_id);
+
+      // DEBUG LOG 1: Dump all synced_team_members data
+      console.log(`[Debug] synced_team_members for calendar ${cal.calendar_id} (${cal.calendar_name}):`);
+      console.log(`[Debug] ${JSON.stringify(members, null, 2)}`);
+
+      // DEBUG LOG 5: Cross-reference check
+      for (const m of members) {
+        const verifiedUserId = VERIFIED_USER_IDS[m.user_name || ""] || "NOT IN VERIFIED LIST";
+        const match = m.user_id === verifiedUserId ? "✓ MATCH" : "✗ MISMATCH";
+        console.log(`[Debug] CROSS-CHECK: ${m.user_name} code userId=${m.user_id}, verified userId=${verifiedUserId} ${match}`);
+      }
+
       const isMassage = isMassageService(service, cal.calendar_name || undefined);
 
       // Gender filter: only for massage services (or if strictGender)
@@ -3913,13 +3935,27 @@ async function findPackageDayAvailability(
   // staffSlotsMap: key -> dateStr -> array of slot minutes
   const staffSlotsMap: Map<string, Map<string, number[]>> = new Map();
 
+  // Build a map of userId -> staffName for logging
+  const userIdToName: Map<string, string> = new Map();
+  for (const entries of serviceStaffMap.values()) {
+    for (const entry of entries) {
+      if (entry.user_id && entry.staff_name) {
+        userIdToName.set(entry.user_id, entry.staff_name);
+      }
+    }
+  }
+
   const fetchPromises = Array.from(staffKeys).map(async (key) => {
     const [calendarId, userId] = key.split(":");
+    const staffName = userId !== "any" ? (userIdToName.get(userId) || "Unknown") : "ANY";
 
     let slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${calendarId}/free-slots?startDate=${startMs}&endDate=${endDateMs}&timezone=${encodeURIComponent(tz)}`;
     if (userId && userId !== "any") {
       slotsUrl += `&userId=${encodeURIComponent(userId)}`;
     }
+
+    // DEBUG LOG 2: Log exact date range being sent to GHL
+    console.log(`[Debug] free-slots query: calendarId=${calendarId}, userId=${userId}, staffName=${staffName}, startDate=${startMs} (${new Date(startMs).toISOString()}), endDate=${endDateMs} (${new Date(endDateMs).toISOString()}), timezone=${tz}`);
 
     try {
       const resp = await axios.get(slotsUrl, {
@@ -3930,6 +3966,15 @@ async function findPackageDayAvailability(
       });
 
       const rawData = resp.data || {};
+
+      // DEBUG LOG 3: Log FULL RAW response for Massage 90-min calendar (dEUr9HxWnXbCZg3eY0Kn)
+      if (calendarId === "dEUr9HxWnXbCZg3eY0Kn") {
+        console.log(`[Debug] RAW GHL response for ${staffName} on Massage 90-min: ${JSON.stringify(rawData)}`);
+      }
+
+      // DEBUG LOG 4a: Log raw dates in response
+      console.log(`[Debug] ${staffName}: raw dates in response: ${JSON.stringify(Object.keys(rawData))}`);
+
       const dateSlots: Map<string, number[]> = new Map();
 
       for (const dateKey of Object.keys(rawData)) {
@@ -3945,6 +3990,15 @@ async function findPackageDayAvailability(
         }
         minuteSlots.sort((a, b) => a - b);
         dateSlots.set(dateKey, minuteSlots);
+
+        // DEBUG LOG 4b: Log slots per date
+        console.log(`[Debug] ${staffName}: ${dateKey} has ${minuteSlots.length} slots`);
+      }
+
+      // DEBUG LOG 4c: Log slots kept for target date (if requestedDate is set)
+      if (requestedDate) {
+        const targetSlots = dateSlots.get(requestedDate) || [];
+        console.log(`[Debug] ${staffName}: slots kept for target date ${requestedDate}: ${targetSlots.length}`);
       }
 
       staffSlotsMap.set(key, dateSlots);
