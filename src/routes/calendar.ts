@@ -1052,12 +1052,16 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       staff_name,
       time_preference,
       requested_date,
-      requested_time,
       start_after,
       therapist_preference,
       strict_gender  // When true, apply gender filter strictly to ALL services (no fallback)
     } = req.body;
     const resolvedLocationId = locationId || location_id;
+
+    // FIX Root Cause 6: Check all possible field names for requested time
+    // ElevenLabs sends: requested_time (human like "12:00 PM") OR startTime (ISO like "2026-02-12T12:00:00-10:00")
+    const requested_time = req.body.requested_time || req.body.requestedTime || req.body.startTime || req.body.start_time || req.body.preferred_time;
+    console.log(`[Check] Requested time field mapping: requested_time="${req.body.requested_time}", startTime="${req.body.startTime}" => using "${requested_time}"`);
 
     if (!resolvedLocationId) {
       return res.status(400).json({ success: false, error: "Missing required field: locationId" });
@@ -1803,12 +1807,14 @@ router.post("/book", async (req: Request, res: Response) => {
       const packageName = body.package_name;
       const selectedDate = body.selected_date;
       const timePreference = body.time_preference;
-      const requestedTime = body.requested_time || body.requestedTime || body.start_time || body.startTime;
+      // FIX Root Cause 6: Check all possible field names for requested time
+      const requestedTime = body.requested_time || body.requestedTime || body.startTime || body.start_time || body.preferred_time;
       const providedSlots = body.slots;  // Legacy: Accept slots directly from check_availability
       const planId = body.plan_id;  // SPEC Section 7: Use cached plan for check-vs-book consistency
 
       console.log(`[Book] ===== PACKAGE BOOKING START =====`);
       console.log(`[Book] Request body:`, JSON.stringify(body, null, 2));
+      console.log(`[Book] Requested time field mapping: requested_time="${body.requested_time}", startTime="${body.startTime}" => using "${requestedTime}"`);
       console.log(`[Book] Plan ID: ${planId || "(none)"}`);
       console.log(`[Book] Requested start time: ${requestedTime || "(none - will use cached plan)"}`);
 
@@ -2362,13 +2368,15 @@ router.post("/book", async (req: Request, res: Response) => {
     const calendarId = body.calendarId || body.calendar_id;
     const startTime = body.startTime || body.start_time || body.selected_time;
     const selectedDate = body.selected_date;
-    const requestedTime = body.requested_time || body.requestedTime;  // BUG FIX: Accept requested_time
+    // FIX Root Cause 6: Check all possible field names for requested time
+    const requestedTime = body.requested_time || body.requestedTime || body.startTime || body.start_time || body.preferred_time;
     const serviceName = body.service_name || body.serviceType || body.service_type;
     const occasion = body.occasion;
     const title = body.title;
 
     console.log(`[Book] Single service mode: ${serviceName || "(no service specified)"}`);
     console.log(`[Book] Customer: ${customerName}, Email: ${customerEmail}, Phone: ${customerPhone}`);
+    console.log(`[Book] Requested time field mapping: requested_time="${body.requested_time}", startTime="${body.startTime}" => using "${requestedTime}"`);
     console.log(`[Book] Time inputs - startTime: "${startTime}", selectedDate: "${selectedDate}", requestedTime: "${requestedTime}"`);
 
     if (!locationId || !customerName || !customerEmail) {
@@ -3012,6 +3020,7 @@ router.post("/get-package", async (req: Request, res: Response) => {
  * therapist_preference: "male", "female", or null/undefined - appended to notes for spa staff
  */
 router.post("/book-package", async (req: Request, res: Response) => {
+  console.log('[BookPackage] Request body:', JSON.stringify(req.body, null, 2));
   try {
     const {
       locationId,
@@ -3020,7 +3029,6 @@ router.post("/book-package", async (req: Request, res: Response) => {
       time_preference,
       requested_date,
       selected_date,
-      requested_time,  // BUG FIX: Accept requested start time
       plan_id,  // SPEC Section 7: Use cached plan for check-vs-book consistency
       customer_name,
       phone,
@@ -3031,6 +3039,11 @@ router.post("/book-package", async (req: Request, res: Response) => {
     } = req.body;
 
     const resolvedLocationId = locationId || location_id;
+
+    // FIX Root Cause 6: Check all possible field names for requested time
+    // ElevenLabs sends: requested_time (human like "12:00 PM") OR startTime (ISO like "2026-02-12T12:00:00-10:00")
+    const requested_time = req.body.requested_time || req.body.requestedTime || req.body.startTime || req.body.start_time || req.body.preferred_time;
+    console.log(`[BookPackage] Requested time field mapping: requested_time="${req.body.requested_time}", startTime="${req.body.startTime}" => using "${requested_time}"`);
 
     // Validate required fields
     if (!resolvedLocationId) {
@@ -3346,6 +3359,7 @@ router.post("/book-package", async (req: Request, res: Response) => {
  * }
  */
 router.post("/check-package-availability", async (req: Request, res: Response) => {
+  console.log('[CheckPackage] Request body:', JSON.stringify(req.body, null, 2));
   try {
     const {
       locationId,
@@ -3353,12 +3367,16 @@ router.post("/check-package-availability", async (req: Request, res: Response) =
       package_name,
       time_preference,
       requested_date,
-      requested_time,  // BUG FIX: Accept requested start time
       therapist_preference,
       strict_gender,  // When true, no gender fallback for any service
     } = req.body;
 
     const resolvedLocationId = locationId || location_id;
+
+    // FIX Root Cause 6: Check all possible field names for requested time
+    // ElevenLabs sends: requested_time (human like "12:00 PM") OR startTime (ISO like "2026-02-12T12:00:00-10:00")
+    const requested_time = req.body.requested_time || req.body.requestedTime || req.body.startTime || req.body.start_time || req.body.preferred_time;
+    console.log(`[CheckPackage] Requested time field mapping: requested_time="${req.body.requested_time}", startTime="${req.body.startTime}" => using "${requested_time}"`);
 
     // Validate required fields
     if (!resolvedLocationId) {
