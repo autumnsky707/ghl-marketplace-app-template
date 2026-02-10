@@ -797,12 +797,14 @@ router.get("/debug-free-slots", async (req: Request, res: Response) => {
     const timezone = installation.timezone || "America/New_York";
     console.log(`[Debug-FreeSlots] timezone from installation: ${timezone}`);
 
-    // Build date range (single day)
-    const startDate = DateTime.fromISO(date as string, { zone: timezone }).startOf("day").toISO();
-    const endDate = DateTime.fromISO(date as string, { zone: timezone }).endOf("day").toISO();
+    // Build date range (single day) - GHL requires epoch MILLISECONDS
+    const startDateTime = DateTime.fromISO(date as string, { zone: timezone }).startOf("day");
+    const endDateTime = DateTime.fromISO(date as string, { zone: timezone }).endOf("day");
+    const startDateMs = startDateTime.toMillis();
+    const endDateMs = endDateTime.toMillis();
 
-    console.log(`[Debug-FreeSlots] startDate (ISO): ${startDate}`);
-    console.log(`[Debug-FreeSlots] endDate (ISO): ${endDate}`);
+    console.log(`[Debug-FreeSlots] startDate: ${startDateMs} (${startDateTime.toISO()})`);
+    console.log(`[Debug-FreeSlots] endDate: ${endDateMs} (${endDateTime.toISO()})`);
 
     // Get authenticated client
     const client = await ghl.requests(locationId as string);
@@ -813,7 +815,7 @@ router.get("/debug-free-slots", async (req: Request, res: Response) => {
     // Request WITH userId (if provided)
     let withUserIdResult: any = null;
     if (userId) {
-      const urlWithUser = `${baseUrl}?startDate=${encodeURIComponent(startDate!)}&endDate=${encodeURIComponent(endDate!)}&timezone=${encodeURIComponent(timezone)}&userId=${userId}`;
+      const urlWithUser = `${baseUrl}?startDate=${startDateMs}&endDate=${endDateMs}&timezone=${encodeURIComponent(timezone)}&userId=${userId}`;
       console.log(`[Debug-FreeSlots] Fetching WITH userId: ${urlWithUser}`);
 
       try {
@@ -838,7 +840,7 @@ router.get("/debug-free-slots", async (req: Request, res: Response) => {
     }
 
     // Request WITHOUT userId
-    const urlWithoutUser = `${baseUrl}?startDate=${encodeURIComponent(startDate!)}&endDate=${encodeURIComponent(endDate!)}&timezone=${encodeURIComponent(timezone)}`;
+    const urlWithoutUser = `${baseUrl}?startDate=${startDateMs}&endDate=${endDateMs}&timezone=${encodeURIComponent(timezone)}`;
     console.log(`[Debug-FreeSlots] Fetching WITHOUT userId: ${urlWithoutUser}`);
 
     let withoutUserIdResult: any = null;
@@ -874,8 +876,10 @@ router.get("/debug-free-slots", async (req: Request, res: Response) => {
         timezone
       },
       dates: {
-        startDate,
-        endDate
+        startDateMs,
+        endDateMs,
+        startDateISO: startDateTime.toISO(),
+        endDateISO: endDateTime.toISO()
       },
       withUserId: withUserIdResult,
       withoutUserId: withoutUserIdResult,
@@ -4070,8 +4074,13 @@ async function findPackageDayAvailability(
   // PHASE 2: Fetch free-slots for each unique calendar+staff combo
   // ══════════════════════════════════════════════════════════════════
 
-  const endDateMs = new Date(datesToCheck[datesToCheck.length - 1] + "T23:59:59").getTime();
-  const startMs = new Date(datesToCheck[0] + "T00:00:00").getTime();
+  // GHL free-slots API requires epoch MILLISECONDS, in business timezone
+  const startDateTime = DateTime.fromISO(datesToCheck[0], { zone: tz }).startOf("day");
+  const endDateTime = DateTime.fromISO(datesToCheck[datesToCheck.length - 1], { zone: tz }).endOf("day");
+  const startMs = startDateTime.toMillis();
+  const endDateMs = endDateTime.toMillis();
+
+  console.log(`[Debug] Date range for GHL: startMs=${startMs} (${startDateTime.toISO()}), endDateMs=${endDateMs} (${endDateTime.toISO()})`);
 
   // Build unique keys for all staff entries
   const staffKeys = new Set<string>();
@@ -4104,8 +4113,11 @@ async function findPackageDayAvailability(
       slotsUrl += `&userId=${encodeURIComponent(userId)}`;
     }
 
-    // DEBUG LOG 2: Log exact date range being sent to GHL
-    console.log(`[Debug] free-slots query: calendarId=${calendarId}, userId=${userId}, staffName=${staffName}, startDate=${startMs} (${new Date(startMs).toISOString()}), endDate=${endDateMs} (${new Date(endDateMs).toISOString()}), timezone=${tz}`);
+    // DEBUG LOG 2: Log exact date range being sent to GHL (epoch ms)
+    console.log(`[Debug] free-slots query: calendarId=${calendarId}, userId=${userId}, staffName=${staffName}`);
+    console.log(`[Debug]   startDate=${startMs} (${startDateTime.toISO()})`);
+    console.log(`[Debug]   endDate=${endDateMs} (${endDateTime.toISO()})`);
+    console.log(`[Debug]   timezone=${tz}`);
 
     try {
       const resp = await axios.get(slotsUrl, {
