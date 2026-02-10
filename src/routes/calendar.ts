@@ -3768,6 +3768,13 @@ async function findPackageDayAvailability(
     staff_user_id: string | null;
   }>;
 }>> {
+  // DEBUG: Log at very start to confirm function is called
+  console.log(`[Debug] ========== findPackageDayAvailability CALLED ==========`);
+  console.log(`[Debug] locationId=${locationId}, services=${JSON.stringify(services)}`);
+  console.log(`[Debug] requestedDate=${requestedDate}, timePreference=${timePreference}, requestedTime=${requestedTime}`);
+  console.log(`[Debug] genderPreference=${genderPreference}, strictGender=${strictGender}`);
+  console.log(`[Debug] timezone from installation=${tz}`);
+
   const DAYS_TO_SEARCH = 14;
   const BUFFER_MINUTES = 15;
   const MAX_GAP_MINUTES = 30; // Maximum gap between services
@@ -4008,12 +4015,16 @@ async function findPackageDayAvailability(
     }
   });
 
+  console.log(`[Debug] About to fetch free-slots for ${staffKeys.size} staff/calendar combinations...`);
   await Promise.all(fetchPromises);
+  console.log(`[Debug] All free-slots fetches complete. Results in staffSlotsMap.`);
 
   // Log slot counts per staff
   for (const [key, dateSlots] of staffSlotsMap) {
     const totalSlots = Array.from(dateSlots.values()).reduce((sum, arr) => sum + arr.length, 0);
     console.log(`[Package] Staff ${key}: ${totalSlots} total slots across ${dateSlots.size} days`);
+    // Also log as [Debug] so we can search for it
+    console.log(`[Debug] Staff ${key}: ${totalSlots} total slots across ${dateSlots.size} days`);
   }
 
   // ══════════════════════════════════════════════════════════════════
