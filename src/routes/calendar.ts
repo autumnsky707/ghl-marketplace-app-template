@@ -1233,10 +1233,10 @@ router.post("/check-availability", async (req: Request, res: Response) => {
 
     // ========== FIX 1.7: LOG CODE PATH DECISION ==========
     console.log(`[Check] ===== CODE PATH DECISION =====`);
-    console.log(`[Check] type field: "${type || "(not provided)}"`);
-    console.log(`[Check] package_name field: "${package_name || "(not provided)}"`);
-    console.log(`[Check] service_name field: "${service_name || "(not provided)}"`);
-    console.log(`[Check] service_type field: "${service_type || "(not provided)}"`);
+    console.log(`[Check] type field: "${type || '(not provided)'}"`);
+    console.log(`[Check] package_name field: "${package_name || '(not provided)'}"`);
+    console.log(`[Check] service_name field: "${service_name || '(not provided)'}"`);
+    console.log(`[Check] service_type field: "${service_type || '(not provided)'}"`);
 
     // ========== FIX 1.1: PACKAGE_NAME FALLBACK ROUTING ==========
     // If package_name is provided but type isn't "package", route to package path anyway.
@@ -1395,7 +1395,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     }
 
     // ========== SERVICE AVAILABILITY (default) ==========
-    console.log(`[Check] >>> ENTERING SINGLE-SERVICE PATH (effectiveType="${effectiveType || "(undefined)}")`);
+    console.log(`[Check] >>> ENTERING SINGLE-SERVICE PATH (effectiveType="${effectiveType || '(undefined)'}"`);
     console.log(`[Check] WARNING: If you expected package routing, check that package_name was provided`);
     // Support both service_name (new) and service_type (legacy)
     const serviceToCheck = service_name || service_type;
