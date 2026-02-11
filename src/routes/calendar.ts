@@ -1231,8 +1231,24 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     const localNow = timeInfo.now.toJSDate(); // For calculations that need Date object
     console.log(`[Check] Timezone: ${tz}, Today: ${todayStr}, CurrentTime: ${currentTimeStr}`);
 
+    // ========== FIX 1.7: LOG CODE PATH DECISION ==========
+    console.log(`[Check] ===== CODE PATH DECISION =====`);
+    console.log(`[Check] type field: "${type || "(not provided)}"`);
+    console.log(`[Check] package_name field: "${package_name || "(not provided)}"`);
+    console.log(`[Check] service_name field: "${service_name || "(not provided)}"`);
+    console.log(`[Check] service_type field: "${service_type || "(not provided)}"`);
+
+    // ========== FIX 1.1: PACKAGE_NAME FALLBACK ROUTING ==========
+    // If package_name is provided but type isn't "package", route to package path anyway.
+    // This catches cases where the AI agent forgets to include type: "package".
+    const effectiveType = (package_name && package_name.trim()) ? "package" : type;
+    if (effectiveType === "package" && type !== "package") {
+      console.log(`[Package] Routing via package_name fallback: "${package_name}" (type field was: "${type || "undefined"}")`);
+    }
+
     // ========== PACKAGE AVAILABILITY ==========
-    if (type === "package") {
+    if (effectiveType === "package") {
+      console.log(`[Check] >>> ENTERING PACKAGE PATH (effectiveType="${effectiveType}")`);
       if (!package_name) {
         return res.status(400).json({ success: false, error: "Missing required field: package_name" });
       }
@@ -1379,6 +1395,8 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     }
 
     // ========== SERVICE AVAILABILITY (default) ==========
+    console.log(`[Check] >>> ENTERING SINGLE-SERVICE PATH (effectiveType="${effectiveType || "(undefined)}")`);
+    console.log(`[Check] WARNING: If you expected package routing, check that package_name was provided`);
     // Support both service_name (new) and service_type (legacy)
     const serviceToCheck = service_name || service_type;
 
@@ -1582,7 +1600,10 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       let slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${calendarId}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
       if (staffId) {
         slotsUrl += `&userId=${encodeURIComponent(staffId)}`;
-        console.log(`[Calendar] Fetching slots for specific user: ${staffName} (${staffId})`);
+        console.log(`[Calendar] GHL free-slots: calendarId=${calendarId}, userId=${staffId} (${staffName})`);
+      } else {
+        // FIX 1.7: Warn when no userId - this returns MERGED availability across all staff
+        console.log(`[Calendar] GHL free-slots: calendarId=${calendarId}, userId=NONE - RETURNS MERGED AVAILABILITY`);
       }
       let resp;
       try {
@@ -2384,7 +2405,101 @@ router.post("/book", async (req: Request, res: Response) => {
 
       console.log(`[Book] STEP 5 SUCCESS: All ${packagePlan.slots.length} slots re-validated. Proceeding with booking.`);
 
-      // STEP 6: Book all services
+      // ========== FIX 1.5 + 1.6: ATOMIC RESERVATION WITH ROLLBACK ==========
+      // Strategy:
+      // 1. Create block-slot holds for ALL slots first (atomic reservation)
+      // 2. Book real appointments one by one (with 500ms delay between)
+      // 3. After each successful booking, delete its block-slot hold
+      // 4. If ANY booking fails: rollback all confirmed appointments + remaining block-slots
+
+      console.log(`[Book] ===== STEP 5.5: CREATING BLOCK-SLOT HOLDS =====`);
+
+      interface BlockSlotHold {
+        slotIndex: number;
+        blockId: string;
+        calendarId: string;
+        service: string;
+      }
+
+      const blockSlotHolds: BlockSlotHold[] = [];
+      let holdCreationFailed = false;
+      let holdFailureService = "";
+
+      for (let i = 0; i < packagePlan.slots.length; i++) {
+        const slotInfo = packagePlan.slots[i];
+        console.log(`[Book] Creating hold ${i + 1}/${packagePlan.slots.length} for ${slotInfo.service}...`);
+
+        try {
+          // Convert times to UTC for GHL API
+          const startDt = DateTime.fromISO(slotInfo.startTime, { zone: tz });
+          const endDt = DateTime.fromISO(slotInfo.endTime, { zone: tz });
+
+          const blockPayload: Record<string, any> = {
+            calendarId: slotInfo.calendar_id,
+            locationId,
+            startTime: startDt.toUTC().toISO(),
+            endTime: endDt.toUTC().toISO(),
+            title: `HOLD: ${slotInfo.service} - ${customerName}`,
+          };
+
+          // Assign to specific staff if known
+          if (slotInfo.staff_user_id) {
+            blockPayload.assignedUserId = slotInfo.staff_user_id;
+          }
+
+          console.log(`[Book] Block-slot payload:`, JSON.stringify(blockPayload, null, 2));
+
+          const blockResp = await client.post("/calendars/events/block-slots", blockPayload, {
+            headers: { Version: "2021-07-28" },
+          });
+
+          const blockId = blockResp.data?.id || blockResp.data?.eventId || blockResp.data?.event?.id;
+
+          if (blockId) {
+            blockSlotHolds.push({
+              slotIndex: i,
+              blockId,
+              calendarId: slotInfo.calendar_id,
+              service: slotInfo.service,
+            });
+            console.log(`[Book] Hold created: ${blockId} for ${slotInfo.service}`);
+          } else {
+            console.log(`[Book] WARNING: Block-slot created but no ID returned:`, JSON.stringify(blockResp.data));
+            // Continue anyway - we'll rely on re-validation
+          }
+        } catch (blockErr: any) {
+          console.log(`[Book] Failed to create hold for ${slotInfo.service}: ${blockErr?.response?.data?.message || blockErr.message}`);
+          holdCreationFailed = true;
+          holdFailureService = slotInfo.service;
+          break;
+        }
+      }
+
+      // If any hold failed, rollback all created holds and abort
+      if (holdCreationFailed) {
+        console.log(`[Book] Hold creation failed - rolling back ${blockSlotHolds.length} holds...`);
+
+        for (const hold of blockSlotHolds) {
+          try {
+            await client.delete(`/calendars/events/${hold.blockId}`, {
+              headers: { Version: "2021-07-28" },
+            });
+            console.log(`[Book] Rolled back hold: ${hold.blockId}`);
+          } catch (delErr: any) {
+            console.log(`[Book] Warning: Failed to rollback hold ${hold.blockId}: ${delErr.message}`);
+          }
+        }
+
+        return res.json({
+          success: false,
+          error: `The ${holdFailureService} time slot is no longer available. Please check availability again.`,
+          retry_suggested: true,
+        });
+      }
+
+      console.log(`[Book] All ${blockSlotHolds.length} holds created successfully`);
+
+      // STEP 6: Book all services (with rollback on failure)
       console.log(`[Book] ===== STEP 6: BOOKING SERVICES =====`);
       const appointments: Array<{
         service: string;
@@ -2398,7 +2513,9 @@ router.post("/book", async (req: Request, res: Response) => {
         error?: string;
       }> = [];
 
-      let allSuccessful = true;
+      let bookingFailed = false;
+      let failedService = "";
+      let failedError = "";
 
       console.log(`[Book] Booking ${packagePlan.slots.length} services...`);
       packagePlan.slots.forEach((s, idx) => {
@@ -2426,19 +2543,35 @@ router.post("/book", async (req: Request, res: Response) => {
             customerPhone,
             notes,
             therapistPreference,
-            slotInfo.staff_user_id || undefined  // BUG FIX: Assign to specific staff
+            slotInfo.staff_user_id || undefined
           );
 
           console.log(`[Book]   bookServiceAppointment result:`, JSON.stringify(bookingResult));
 
           if (!bookingResult.success) {
             console.log(`[Book]   FAILED: ${bookingResult.error}`);
-            appointments.push({ service: slotInfo.service, status: "failed", error: bookingResult.error });
-            allSuccessful = false;
-            continue;
+            bookingFailed = true;
+            failedService = slotInfo.service;
+            failedError = bookingResult.error || "Unknown error";
+            break; // Stop booking loop - will rollback
           }
 
           console.log(`[Book]   SUCCESS: appointmentId=${bookingResult.appointmentId}, endTime=${bookingResult.endTime}`);
+
+          // Delete the corresponding block-slot hold (it's now replaced by real appointment)
+          const hold = blockSlotHolds.find(h => h.slotIndex === i);
+          if (hold) {
+            try {
+              await client.delete(`/calendars/events/${hold.blockId}`, {
+                headers: { Version: "2021-07-28" },
+              });
+              console.log(`[Book]   Removed hold: ${hold.blockId}`);
+            } catch (delErr: any) {
+              console.log(`[Book]   Warning: Failed to delete hold ${hold.blockId}: ${delErr.message}`);
+              // Non-fatal - the appointment was created successfully
+            }
+          }
+
           const startDate = new Date(slotInfo.startTime);
           const endDate = new Date(bookingResult.endTime!);
           appointments.push({
@@ -2451,48 +2584,70 @@ router.post("/book", async (req: Request, res: Response) => {
             appointment_id: bookingResult.appointmentId,
             status: "confirmed",
           });
+
+          // FIX 1.5: 500ms delay between bookings to let GHL update availability
+          if (i < packagePlan.slots.length - 1) {
+            console.log(`[Book]   Waiting 500ms before next booking...`);
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
         } catch (err: any) {
           console.error(`[Book]   FATAL ERROR booking ${slotInfo.service}:`);
           console.error(`[Book]   Error message:`, err.message);
           console.error(`[Book]   Stack trace:`, err.stack);
-          appointments.push({ service: slotInfo.service, status: "failed", error: err.message });
-          allSuccessful = false;
+          bookingFailed = true;
+          failedService = slotInfo.service;
+          failedError = err.message;
+          break; // Stop booking loop - will rollback
         }
       }
 
+      // ========== ROLLBACK ON FAILURE ==========
+      if (bookingFailed) {
+        console.log(`[Book] ===== ROLLBACK TRIGGERED =====`);
+        console.log(`[Book] Booking failed at: ${failedService}`);
+        console.log(`[Book] Error: ${failedError}`);
+        console.log(`[Book] Rolling back ${appointments.length} confirmed appointments...`);
+
+        // 1. Delete all confirmed appointments
+        for (const appt of appointments) {
+          if (appt.appointment_id) {
+            try {
+              await client.delete(`/calendars/events/appointments/${appt.appointment_id}`, {
+                headers: { Version: "2021-07-28" },
+              });
+              console.log(`[Book] Rolled back appointment: ${appt.appointment_id} (${appt.service})`);
+            } catch (delErr: any) {
+              console.error(`[Book] WARNING: Failed to rollback appointment ${appt.appointment_id}: ${delErr.message}`);
+            }
+          }
+        }
+
+        // 2. Delete remaining block-slot holds
+        const remainingHolds = blockSlotHolds.filter(h => h.slotIndex >= appointments.length);
+        console.log(`[Book] Deleting ${remainingHolds.length} remaining block-slot holds...`);
+
+        for (const hold of remainingHolds) {
+          try {
+            await client.delete(`/calendars/events/${hold.blockId}`, {
+              headers: { Version: "2021-07-28" },
+            });
+            console.log(`[Book] Deleted hold: ${hold.blockId} (${hold.service})`);
+          } catch (delErr: any) {
+            console.log(`[Book] Warning: Failed to delete hold ${hold.blockId}: ${delErr.message}`);
+          }
+        }
+
+        console.log(`[Book] Rollback complete`);
+
+        return res.json({
+          success: false,
+          error: `Booking failed for ${failedService}: ${failedError}. All reservations have been cancelled. Please try again.`,
+          retry_suggested: true,
+        });
+      }
+
+      // Full success - all services booked
       const confirmedAppointments = appointments.filter((a) => a.status === "confirmed");
-      const failedAppointments = appointments.filter((a) => a.status === "failed");
-
-      console.log(`[Book] Booking complete: ${confirmedAppointments.length} confirmed, ${failedAppointments.length} failed`);
-      if (failedAppointments.length > 0) {
-        console.log(`[Book] Failed services:`, failedAppointments.map(a => `${a.service}: ${a.error}`).join(", "));
-      }
-
-      if (confirmedAppointments.length === 0) {
-        console.log(`[Book] ALL BOOKINGS FAILED - returning error response`);
-        return res.json({
-          success: false,
-          package_name: pkg.package_name,
-          appointments,
-          message: `I found availability but the bookings failed. Would you like to try again?`,
-        });
-      }
-
-      if (!allSuccessful) {
-        const bookedServices = confirmedAppointments.map((a) => a.service).join(", ");
-        const failedService = appointments.find((a) => a.status === "failed")?.service;
-        console.log(`[Book] PARTIAL SUCCESS - ${bookedServices} booked, ${failedService} failed`);
-        return res.json({
-          success: false,
-          partial: true,
-          package_name: pkg.package_name,
-          total_price: pkg.price,
-          appointments,
-          message: `I was able to book ${bookedServices}, but ${failedService} failed to book. Would you like me to try again?`,
-        });
-      }
-
-      // Full success
       const confirmationMessage = buildPackageConfirmation(pkg.package_name, confirmedAppointments, pkg.price, tz);
       console.log(`[Book] ===== PACKAGE BOOKING SUCCESS =====`);
       console.log(`[Book] Package: ${pkg.package_name}`);
@@ -2523,6 +2678,7 @@ router.post("/book", async (req: Request, res: Response) => {
     const serviceName = body.service_name || body.serviceType || body.service_type;
     const occasion = body.occasion;
     const title = body.title;
+    const staffUserId = body.staff_user_id || body.staffUserId || body.assigned_user_id || body.assignedUserId;
 
     console.log(`[Book] Single service mode: ${serviceName || "(no service specified)"}`);
     console.log(`[Book] Customer: ${customerName}, Email: ${customerEmail}, Phone: ${customerPhone}`);
@@ -2752,7 +2908,7 @@ router.post("/book", async (req: Request, res: Response) => {
     if (notes) noteParts.push(notes);
     const appointmentNotes = noteParts.join(". ");
 
-    const appointmentPayload = {
+    const appointmentPayload: Record<string, any> = {
       calendarId: resolvedCalendarId,
       locationId,
       contactId,
@@ -2762,6 +2918,12 @@ router.post("/book", async (req: Request, res: Response) => {
       appointmentStatus: "confirmed",
       notes: appointmentNotes || undefined,
     };
+
+    // FIX 1.3: Always assign to specific staff member when provided
+    if (staffUserId) {
+      appointmentPayload.assignedUserId = staffUserId;
+      console.log(`[Book] Assigning appointment to staff userId: ${staffUserId}`);
+    }
 
     console.log("[Book] ===== GHL APPOINTMENT REQUEST =====");
     console.log("[Book] Full payload:", JSON.stringify(appointmentPayload, null, 2));
@@ -3924,7 +4086,9 @@ async function findPackageDayAvailability(
   console.log(`[Debug] genderPreference=${genderPreference}, strictGender=${strictGender}`);
   console.log(`[Debug] timezone from installation=${tz}`);
 
-  const DAYS_TO_SEARCH = 14;
+  // FIX 1.4: Expand search range for "soonest" availability
+  // 14 days was too short - spa packages often book out 3-4 weeks
+  const DAYS_TO_SEARCH = 30;
   const BUFFER_MINUTES = 15;
   const MAX_GAP_MINUTES = 30; // Maximum gap between services
 
@@ -4040,15 +4204,10 @@ async function findPackageDayAvailability(
         });
       }
 
-      // Fallback if no members (only if not filtering by gender)
-      if (members.length === 0 && !shouldFilterByGender) {
-        staffEntries.push({
-          calendar_id: cal.calendar_id,
-          calendar_name: cal.calendar_name,
-          staff_name: null,
-          user_id: null,
-          duration_minutes: duration,
-        });
+      // NO FALLBACK for packages: If calendar has no team members, log a warning
+      // and skip it. We MUST have userId for accurate availability.
+      if (members.length === 0) {
+        console.log(`[Package] WARNING: Calendar ${cal.calendar_id} (${cal.calendar_name}) has no team members - skipping for package availability`);
       }
     }
 
@@ -4115,8 +4274,12 @@ async function findPackageDayAvailability(
       slotsUrl += `&userId=${encodeURIComponent(userId)}`;
     }
 
-    // DEBUG LOG 2: Log exact date range being sent to GHL (epoch ms)
-    console.log(`[Debug] free-slots query: calendarId=${calendarId}, userId=${userId}, staffName=${staffName}`);
+    // FIX 1.7: Log userId status prominently - missing userId causes phantom availability
+    if (userId && userId !== "any") {
+      console.log(`[Package] GHL free-slots: calendarId=${calendarId}, userId=${userId} (${staffName})`);
+    } else {
+      console.log(`[Package] GHL free-slots: calendarId=${calendarId}, userId=NONE - RETURNS MERGED AVAILABILITY (DANGER!)`);
+    }
     console.log(`[Debug]   startDate=${startMs} (${startDateTime.toISO()})`);
     console.log(`[Debug]   endDate=${endDateMs} (${endDateTime.toISO()})`);
     console.log(`[Debug]   timezone=${tz}`);
