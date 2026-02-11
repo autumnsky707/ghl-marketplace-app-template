@@ -3,7 +3,7 @@ import dotenv from "dotenv";
 import axios from "axios";
 import { GHL } from "./ghl";
 import { json } from "body-parser";
-import { updateCalendarInfo } from "./db";
+import { updateCalendarInfo, updateInstallationStatus, isInstallationActive } from "./db";
 import calendarRoutes from "./routes/calendar";
 import { syncLocation, startPolling } from "./sync";
 
@@ -226,7 +226,7 @@ app.get("/reconnect", async (req: Request, res: Response) => {
 // Mount calendar API routes
 app.use("/api/calendar", calendarRoutes);
 
-// SSO decryption
+// SSO decryption (legacy endpoint)
 app.post("/decrypt-sso", async (req: Request, res: Response) => {
   const { key } = req.body || {};
   if (!key) {
@@ -241,10 +241,125 @@ app.post("/decrypt-sso", async (req: Request, res: Response) => {
   }
 });
 
-// Webhook handler
+/**
+ * SSO Verification endpoint for setup page authentication
+ * Decrypts the GHL SSO key and returns the verified locationId
+ * Also checks if the installation is active (not uninstalled)
+ * This ensures only authenticated users in GHL iframe can access settings
+ */
+app.post("/api/verify-sso", async (req: Request, res: Response) => {
+  const { ssoKey } = req.body || {};
+
+  if (!ssoKey) {
+    console.log("[SSO] Missing ssoKey in request");
+    return res.status(400).json({
+      success: false,
+      error: "Missing SSO key",
+    });
+  }
+
+  try {
+    const ssoData = ghl.decryptSSOData(ssoKey);
+    console.log("[SSO] Decrypted SSO data:", JSON.stringify(ssoData));
+
+    // GHL SSO payload contains locationId, companyId, userId, etc.
+    const locationId = ssoData.locationId || ssoData.activeLocation;
+    const companyId = ssoData.companyId;
+    const userId = ssoData.userId;
+
+    if (!locationId) {
+      console.log("[SSO] No locationId in SSO data");
+      return res.status(400).json({
+        success: false,
+        error: "No location ID in SSO data",
+      });
+    }
+
+    // Check if installation is active
+    const isActive = await isInstallationActive(locationId);
+    if (!isActive) {
+      console.log(`[SSO] Installation inactive for location: ${locationId}`);
+      return res.status(403).json({
+        success: false,
+        error: "App installation is inactive. Please reinstall from the GHL Marketplace.",
+        isActive: false,
+      });
+    }
+
+    console.log(`[SSO] Verified active session for location: ${locationId}`);
+
+    return res.json({
+      success: true,
+      locationId,
+      companyId,
+      userId,
+      isActive: true,
+    });
+  } catch (error: any) {
+    console.error("[SSO] Verification failed:", error.message);
+    return res.status(401).json({
+      success: false,
+      error: "Invalid SSO key",
+    });
+  }
+});
+
+// Legacy webhook handler (kept for compatibility)
 app.post("/example-webhook-handler", async (req: Request, res: Response) => {
   console.log(req.body);
   res.sendStatus(200);
+});
+
+/**
+ * GHL Marketplace Webhook Handler
+ * Handles app.installed and app.uninstalled events from GHL
+ *
+ * Webhook events:
+ * - app.installed: Fired when a location installs the app
+ * - app.uninstalled: Fired when a location uninstalls the app
+ */
+app.post("/webhooks/ghl", async (req: Request, res: Response) => {
+  const { type, locationId, companyId } = req.body || {};
+
+  console.log(`[Webhook] Received event: ${type}`);
+  console.log(`[Webhook] Payload:`, JSON.stringify(req.body));
+
+  // Validate we have the required fields
+  if (!type) {
+    console.log("[Webhook] Missing event type");
+    return res.sendStatus(200); // Always return 200 to acknowledge receipt
+  }
+
+  const resourceId = locationId || companyId;
+  if (!resourceId) {
+    console.log("[Webhook] Missing locationId/companyId");
+    return res.sendStatus(200);
+  }
+
+  try {
+    switch (type) {
+      case "app.installed":
+        // Note: OAuth flow already sets is_active=true via upsertInstallation
+        // This webhook is a backup/confirmation
+        console.log(`[Webhook] App installed for location: ${resourceId}`);
+        await updateInstallationStatus(resourceId, true);
+        break;
+
+      case "app.uninstalled":
+        // Mark installation as inactive (soft delete - keeps data for potential reinstall)
+        console.log(`[Webhook] App uninstalled for location: ${resourceId}`);
+        await updateInstallationStatus(resourceId, false);
+        break;
+
+      default:
+        console.log(`[Webhook] Unhandled event type: ${type}`);
+    }
+  } catch (error: any) {
+    console.error(`[Webhook] Error processing ${type}:`, error.message);
+    // Still return 200 to prevent GHL from retrying
+  }
+
+  return res.sendStatus(200);
 });
 
 // Serve frontend

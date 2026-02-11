@@ -29,6 +29,7 @@ import {
   getPackageByName,
   upsertPackage,
   deletePackage,
+  isInstallationActive,
 } from "../db";
 import { syncLocation } from "../sync";
 import {
@@ -1219,6 +1220,15 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, error: "Installation not found" });
     }
 
+    // Check if installation is active (not uninstalled)
+    if (!installation.is_active) {
+      console.log(`[Check] Installation inactive for ${resolvedLocationId}`);
+      return res.status(403).json({
+        success: false,
+        error: "App installation is inactive. The business needs to reinstall from the GHL Marketplace.",
+      });
+    }
+
     // Use luxon for reliable timezone handling
     const tz = installation.timezone;
     if (!tz) {
@@ -2055,6 +2065,15 @@ router.post("/book", async (req: Request, res: Response) => {
         return res.status(500).json({ success: false, error: "Installation lookup failed: " + instErr.message });
       }
 
+      // Check if installation is active (not uninstalled)
+      if (!installation.is_active) {
+        console.log(`[Book] Installation inactive for ${locationId}`);
+        return res.status(403).json({
+          success: false,
+          error: "App installation is inactive. The business needs to reinstall from the GHL Marketplace.",
+        });
+      }
+
       const tz = installation.timezone;
       if (!tz) {
         console.error(`[Book] FATAL ERROR: No timezone configured for location ${locationId}`);
@@ -2710,6 +2729,15 @@ router.post("/book", async (req: Request, res: Response) => {
       console.error(`[Book] STEP 1 FATAL ERROR:`, instErr.message);
       console.error(`[Book] Stack:`, instErr.stack);
       return res.status(500).json({ success: false, error: "Installation lookup failed: " + instErr.message });
+    }
+
+    // Check if installation is active (not uninstalled)
+    if (!installation.is_active) {
+      console.log(`[Book] Installation inactive for ${locationId}`);
+      return res.status(403).json({
+        success: false,
+        error: "App installation is inactive. The business needs to reinstall from the GHL Marketplace.",
+      });
     }
 
     const tz = installation.timezone;
@@ -3406,6 +3434,15 @@ router.post("/book-package", async (req: Request, res: Response) => {
     const installation = await getInstallation(resolvedLocationId);
     if (!installation) {
       return res.status(404).json({ success: false, error: "Installation not found" });
+    }
+
+    // Check if installation is active (not uninstalled)
+    if (!installation.is_active) {
+      console.log(`[BookPackage] Installation inactive for ${resolvedLocationId}`);
+      return res.status(403).json({
+        success: false,
+        error: "App installation is inactive. The business needs to reinstall from the GHL Marketplace.",
+      });
     }
 
     const tz = installation.timezone;

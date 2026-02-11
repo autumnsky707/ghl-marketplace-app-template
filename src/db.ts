@@ -15,6 +15,7 @@ const TABLE = "ghl_installations";
 
 /**
  * Upsert an installation record after OAuth token exchange.
+ * Sets is_active = true (handles both new installs and reinstalls).
  */
 export async function upsertInstallation(data: GHLTokenResponse): Promise<void> {
   const resourceId = data.locationId || data.companyId;
@@ -35,6 +36,7 @@ export async function upsertInstallation(data: GHLTokenResponse): Promise<void> 
         scope: data.scope || null,
         user_type: data.userType || null,
         company_id: data.companyId || null,
+        is_active: true, // Active on install/reinstall
         updated_at: new Date().toISOString(),
       },
       { onConflict: "location_id" }
@@ -45,7 +47,44 @@ export async function upsertInstallation(data: GHLTokenResponse): Promise<void> 
     throw error;
   }
 
-  console.log(`[DB] Upserted installation for ${resourceId}`);
+  console.log(`[DB] Upserted installation for ${resourceId} (is_active=true)`);
+}
+
+/**
+ * Update installation active status.
+ * Called by install/uninstall webhooks.
+ */
+export async function updateInstallationStatus(
+  locationId: string,
+  isActive: boolean
+): Promise<void> {
+  const { error } = await supabase
+    .from(TABLE)
+    .update({
+      is_active: isActive,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("location_id", locationId);
+
+  if (error) {
+    console.error("[DB] updateInstallationStatus error:", error);
+    throw error;
+  }
+
+  console.log(`[DB] Updated installation status for ${locationId}: is_active=${isActive}`);
+}
+
+/**
+ * Check if an installation is active (for booking engine and setup page).
+ * Returns false if installation not found or is_active is false.
+ */
+export async function isInstallationActive(locationId: string): Promise<boolean> {
+  const installation = await getInstallation(locationId);
+  if (!installation) {
+    console.log(`[DB] isInstallationActive: installation not found for ${locationId}`);
+    return false;
+  }
+  return installation.is_active === true;
 }
 
 /**

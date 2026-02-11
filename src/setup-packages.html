@@ -327,14 +327,84 @@
 
   <script>
     const urlParams = new URLSearchParams(window.location.search);
-    const locationId = urlParams.get('locationId');
-
-    if (!locationId) {
-      document.body.innerHTML = '<div style="text-align:center;padding:80px 24px;"><h1 style="font-size:18px;margin-bottom:8px;">Missing Location ID</h1><p style="color:#666;font-size:14px;">Please access this page with a valid locationId parameter.</p></div>';
-    }
+    const ssoKey = urlParams.get('ssoKey');
+    const urlLocationId = urlParams.get('locationId');
+    const isPostOAuth = urlParams.get('connected') === 'true';
 
     const API_BASE = window.location.origin;
+    let locationId = null;
     let availableServices = [];
+
+    /**
+     * SSO Authentication Flow:
+     * 1. If ssoKey present (GHL iframe) → verify via API → get locationId
+     * 2. If just completed OAuth (connected=true) → trust locationId param
+     * 3. Otherwise → deny access
+     */
+    async function initializeAuth() {
+      // Case 1: SSO key from GHL iframe
+      if (ssoKey) {
+        try {
+          const resp = await fetch(`${API_BASE}/api/verify-sso`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ssoKey })
+          });
+          const data = await resp.json();
+
+          if (data.success && data.locationId) {
+            locationId = data.locationId;
+            console.log('[Setup] SSO verified, locationId:', locationId);
+            initializePage();
+            return;
+          } else if (data.isActive === false) {
+            // App was uninstalled
+            showAuthError('Your app installation is inactive. Please reinstall BookNexa AI from the GHL Marketplace to access settings.');
+            return;
+          } else {
+            showAuthError(data.error || 'SSO verification failed. Please try again from your GHL dashboard.');
+            return;
+          }
+        } catch (err) {
+          console.error('[Setup] SSO verification error:', err);
+          showAuthError('Failed to verify authentication. Please try again.');
+          return;
+        }
+      }
+
+      // Case 2: Post-OAuth redirect (user just installed the app)
+      if (isPostOAuth && urlLocationId) {
+        locationId = urlLocationId;
+        console.log('[Setup] Post-OAuth access, locationId:', locationId);
+        initializePage();
+        return;
+      }
+
+      // Case 3: No authentication - show error
+      showAuthError('Authentication required. Please access this page through your GHL dashboard or complete the OAuth installation.');
+    }
+
+    function showAuthError(message) {
+      document.body.innerHTML = `
+        <div style="text-align:center;padding:80px 24px;max-width:500px;margin:0 auto;">
+          <h1 style="font-size:18px;margin-bottom:12px;color:#991b1b;">Access Denied</h1>
+          <p style="color:#666;font-size:14px;line-height:1.6;">${message}</p>
+          <p style="color:#999;font-size:13px;margin-top:24px;">
+            If you're a business owner, access your app settings through the GHL Marketplace → My Apps section.
+          </p>
+        </div>
+      `;
+    }
+
+    function initializePage() {
+      // Page is authenticated, load data
+      loadServices();
+      loadPackages();
+      loadStaff();
+    }
+
+    // Start authentication flow
+    initializeAuth();
 
     function showAlert(message, type) {
       const alert = document.getElementById('alert');
@@ -551,9 +621,6 @@
       }
     }
 
-    loadServices();
-    loadPackages();
-    loadStaff();
   </script>
 </body>
 </html>

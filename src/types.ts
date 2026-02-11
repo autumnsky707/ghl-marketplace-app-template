@@ -12,6 +12,8 @@ export interface Installation {
   business_name: string | null;
   services: string[] | null;
   greeting: string | null;
+  // Installation status (for billing/uninstall handling)
+  is_active: boolean;
 }
 
 export interface BusinessInfo {
