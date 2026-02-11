@@ -4091,7 +4091,9 @@ async function findPackageDayAvailability(
   // FIX 1.4: Expand search range for "soonest" availability
   // 14 days was too short - spa packages often book out 3-4 weeks
   const DAYS_TO_SEARCH = 30;
-  const BUFFER_MINUTES = 15;
+  // PHASE 2: Buffer comes from calendar settings (slot_buffer), not hardcoded
+  // Default buffer used when calendar has no buffer configured
+  const DEFAULT_BUFFER_MINUTES = 15;
   const MAX_GAP_MINUTES = 30; // Maximum gap between services
 
   // Helper: format minutes to readable time
@@ -4151,20 +4153,12 @@ async function findPackageDayAvailability(
     staff_name: string | null;
     user_id: string | null;
     duration_minutes: number;
+    buffer_minutes: number;  // PHASE 2: Buffer from calendar settings
   }
 
   const serviceStaffMap: Map<string, StaffEntry[]> = new Map();
 
-  // DEBUG: Verified GHL userIds for cross-reference
-  const VERIFIED_USER_IDS: Record<string, string> = {
-    "Sarah Johnson": "pnqHD0AXxQAdtRgHQOen",
-    "Miles Doe": "QFpZOUHq3chPMJ7AwfNQ",
-    "Iris Miller": "I94Y1xRZPbdT6aQgST3P",
-    "Lotus Chin": "AWJsMD7wOCePvoA5eRzq",
-    "Lily Hill": "8b2lfmbJ9N0lFY8u8D3r",
-    "Autumn Sky Hancock": "IuE30ta0ECnrSXyxb2Tx",
-  };
-
+  // PHASE 2: Build service info dynamically from database - no hardcoded staff/services
   for (const service of services) {
     const syncedCals = await getSyncedCalendarsForService(locationId, service);
     const staffEntries: StaffEntry[] = [];
@@ -4172,15 +4166,10 @@ async function findPackageDayAvailability(
     for (const cal of syncedCals) {
       let members = await getSyncedTeamMembers(locationId, cal.calendar_id);
 
-      // DEBUG LOG 1: Dump all synced_team_members data
-      console.log(`[Debug] synced_team_members for calendar ${cal.calendar_id} (${cal.calendar_name}):`);
-      console.log(`[Debug] ${JSON.stringify(members, null, 2)}`);
-
-      // DEBUG LOG 5: Cross-reference check
+      // Log team members found for this calendar
+      console.log(`[Package] Calendar ${cal.calendar_id} (${cal.calendar_name}): ${members.length} team members`);
       for (const m of members) {
-        const verifiedUserId = VERIFIED_USER_IDS[m.user_name || ""] || "NOT IN VERIFIED LIST";
-        const match = m.user_id === verifiedUserId ? "✓ MATCH" : "✗ MISMATCH";
-        console.log(`[Debug] CROSS-CHECK: ${m.user_name} code userId=${m.user_id}, verified userId=${verifiedUserId} ${match}`);
+        console.log(`[Package]   - ${m.user_name} (userId: ${m.user_id}, gender: ${m.gender || 'not set'})`);
       }
 
       const isMassage = isMassageService(service, cal.calendar_name || undefined);
@@ -4194,7 +4183,9 @@ async function findPackageDayAvailability(
         console.log(`[Package] Service "${service}" ${isMassage ? "(massage)" : "(strict)"} filtered by ${normalizedGender}: ${beforeCount} -> ${members.length} staff`);
       }
 
+      // PHASE 2: Get duration and buffer from calendar settings (dynamic, not hardcoded)
       const duration = cal.slot_duration || 60;
+      const buffer = cal.slot_buffer || DEFAULT_BUFFER_MINUTES;
 
       for (const member of members) {
         staffEntries.push({
@@ -4203,6 +4194,7 @@ async function findPackageDayAvailability(
           staff_name: member.user_name,
           user_id: member.user_id,
           duration_minutes: duration,
+          buffer_minutes: buffer,
         });
       }
 
@@ -4221,6 +4213,7 @@ async function findPackageDayAvailability(
         staff_name: null,
         user_id: null,
         duration_minutes: 60,
+        buffer_minutes: DEFAULT_BUFFER_MINUTES,
       });
     }
 
@@ -4365,10 +4358,10 @@ async function findPackageDayAvailability(
     }>;
   }> = [];
 
-  // Get current time in minutes for today
+  // Get current time in minutes for today (with buffer so we don't book immediately)
   const nowLuxon = DateTime.now().setZone(tz);
   const todayStr = nowLuxon.toFormat("yyyy-MM-dd");
-  const nowMinutes = nowLuxon.hour * 60 + nowLuxon.minute + BUFFER_MINUTES;
+  const nowMinutes = nowLuxon.hour * 60 + nowLuxon.minute + DEFAULT_BUFFER_MINUTES;
 
   for (const dateKey of datesToCheck) {
     if (results.length >= maxResults) break;
@@ -4459,11 +4452,14 @@ async function findPackageDayAvailability(
 
       let chainValid = true;
       let previousEndMins = firstEndMins;
+      // PHASE 2: Track previous service's buffer dynamically from calendar settings
+      let previousBufferMins = startOpt.staff.buffer_minutes;
 
       // Try to chain subsequent services
       for (let i = 1; i < services.length; i++) {
         const service = services[i];
-        const earliestStart = previousEndMins + BUFFER_MINUTES;
+        // Use the PREVIOUS service's buffer (the service that just ended needs buffer time)
+        const earliestStart = previousEndMins + previousBufferMins;
         const latestStart = earliestStart + MAX_GAP_MINUTES;
 
         console.log(`[Package]   Service ${i + 1} "${service}": needs slot between ${formatMins(earliestStart)} and ${formatMins(latestStart)}`);
@@ -4513,6 +4509,7 @@ async function findPackageDayAvailability(
 
             console.log(`[Package]     ✓ Found: ${staff.staff_name || "any"} at ${formatMins(matchingSlot)}`);
             previousEndMins = endMins;
+            previousBufferMins = staff.buffer_minutes;  // PHASE 2: Track this service's buffer for next iteration
             foundSlot = true;
             break;
           } else {
@@ -4522,7 +4519,8 @@ async function findPackageDayAvailability(
               console.log(`[Package]     Staff "${staff.staff_name}" has no slots at or after ${formatMins(earliestStart)}`);
             } else {
               const firstAvailable = slotsAfter[0];
-              console.log(`[Package]     Staff "${staff.staff_name}" has slot at ${formatMins(firstAvailable)} but gap is ${firstAvailable - earliestStart + BUFFER_MINUTES}min (max ${MAX_GAP_MINUTES})`);
+              const gapMins = firstAvailable - previousEndMins;
+              console.log(`[Package]     Staff "${staff.staff_name}" has slot at ${formatMins(firstAvailable)} but gap is ${gapMins}min (max ${MAX_GAP_MINUTES + previousBufferMins})`);
             }
           }
         }
