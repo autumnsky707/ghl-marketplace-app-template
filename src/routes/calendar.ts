@@ -4095,6 +4095,15 @@ function isMassageService(serviceName: string, calendarName?: string): boolean {
   return lowerService.includes("massage") || lowerCalendar.includes("massage");
 }
 
+// PHASE 3: Excluded slot structure for couples/groups booking
+// When booking for multiple people, we pass in slots already claimed by previous people
+interface ExcludedSlot {
+  userId: string;      // Staff member's user ID
+  date: string;        // Date in YYYY-MM-DD format
+  startMins: number;   // Start time in minutes from midnight
+  endMins: number;     // End time in minutes from midnight
+}
+
 async function findPackageDayAvailability(
   locationId: string,
   services: string[],
@@ -4106,7 +4115,8 @@ async function findPackageDayAvailability(
   maxResults: number = 1,
   genderPreference?: string,
   strictGender: boolean = false,
-  requestedTime?: string
+  requestedTime?: string,
+  excludedSlots: ExcludedSlot[] = []  // PHASE 3: Slots already booked by other people in group
 ): Promise<Array<{
   date: string;
   slots: Array<{
@@ -4124,6 +4134,13 @@ async function findPackageDayAvailability(
   console.log(`[Debug] requestedDate=${requestedDate}, timePreference=${timePreference}, requestedTime=${requestedTime}`);
   console.log(`[Debug] genderPreference=${genderPreference}, strictGender=${strictGender}`);
   console.log(`[Debug] timezone from installation=${tz}`);
+  // PHASE 3: Log excluded slots for couples/groups
+  if (excludedSlots.length > 0) {
+    console.log(`[Debug] PHASE 3 GROUP MODE: ${excludedSlots.length} excluded slots from other people`);
+    for (const ex of excludedSlots) {
+      console.log(`[Debug]   - userId=${ex.userId}, date=${ex.date}, ${ex.startMins}-${ex.endMins}min`);
+    }
+  }
 
   // FIX 1.4: Expand search range for "soonest" availability
   // 14 days was too short - spa packages often book out 3-4 weeks
@@ -4435,6 +4452,20 @@ async function findPackageDayAvailability(
           continue;
         }
 
+        // PHASE 3: Skip slots that are excluded (booked by other people in group)
+        if (staff.user_id) {
+          const slotEnd = slotMins + staff.duration_minutes;
+          const isExcluded = excludedSlots.some(ex =>
+            ex.userId === staff.user_id &&
+            ex.date === dateKey &&
+            slotMins < ex.endMins &&
+            slotEnd > ex.startMins
+          );
+          if (isExcluded) {
+            continue; // Skip this slot - another person in the group already has it
+          }
+        }
+
         startOptions.push({ startMins: slotMins, staff, staffKey });
       }
     }
@@ -4508,7 +4539,7 @@ async function findPackageDayAvailability(
           const staffKey = `${staff.calendar_id}:${staff.user_id || "any"}`;
           const daySlots = staffSlotsMap.get(staffKey)?.get(dateKey) || [];
 
-          // Check if this staff is already busy
+          // Check if this staff is already busy (within this chain)
           if (staff.user_id) {
             const staffTimes = usedStaffTimes.get(staff.user_id) || [];
             const wouldOverlap = staffTimes.some(t => {
@@ -4522,8 +4553,29 @@ async function findPackageDayAvailability(
             }
           }
 
-          // Find a slot within the acceptable range
-          const matchingSlot = daySlots.find(m => m >= earliestStart && m <= latestStart);
+          // PHASE 3: Check excluded slots (other people in the group)
+          // This helper checks if a specific time slot would overlap with excluded slots for this staff
+          const isSlotExcluded = (slotStart: number, slotEnd: number): boolean => {
+            if (!staff.user_id) return false;
+            return excludedSlots.some(ex =>
+              ex.userId === staff.user_id &&
+              ex.date === dateKey &&
+              slotStart < ex.endMins &&
+              slotEnd > ex.startMins
+            );
+          };
+
+          // Find a slot within the acceptable range that isn't excluded
+          const matchingSlot = daySlots.find(m => {
+            if (m < earliestStart || m > latestStart) return false;
+            const slotEnd = m + staff.duration_minutes;
+            // PHASE 3: Also check excluded slots from other people
+            if (isSlotExcluded(m, slotEnd)) {
+              console.log(`[Package]     Slot ${formatMins(m)} excluded (booked by another person in group)`);
+              return false;
+            }
+            return true;
+          });
 
           if (matchingSlot !== undefined) {
             const endMins = matchingSlot + staff.duration_minutes;
@@ -4583,6 +4635,171 @@ async function findPackageDayAvailability(
 
   console.log(`[Package] Found ${results.length} valid days out of ${datesToCheck.length} checked`);
   return results;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PHASE 3: Group/Couples Package Availability
+// ══════════════════════════════════════════════════════════════════════════════
+
+interface PersonPreference {
+  name: string;                    // Person's name (for logging)
+  therapist_preference?: string;   // "male" | "female" | undefined
+  strict_gender?: boolean;         // Apply gender filter to all services
+}
+
+interface GroupSlotResult {
+  person_index: number;
+  person_name: string;
+  date: string;
+  slots: Array<{
+    service: string;
+    startTime: string;
+    endTime: string;
+    calendar_id: string;
+    staff_name: string | null;
+    staff_user_id: string | null;
+  }>;
+}
+
+interface PersonBookingResult {
+  person_index: number;
+  person_name: string;
+  appointments: Array<{
+    appointmentId: string;
+    service: string;
+    startTime: string;
+    endTime: string;
+    staff_name: string | null;
+  }>;
+  blockSlotIds: string[];
+}
+
+/**
+ * PHASE 3: Find package availability for multiple people (couples/groups).
+ *
+ * Strategy:
+ * 1. Find availability for Person 1
+ * 2. Extract their booked slots as "excluded"
+ * 3. Find availability for Person 2 with exclusions (same therapist can't be double-booked)
+ * 4. Repeat for Person N
+ *
+ * When multiple therapists are available, people are booked in parallel (same time, different therapists).
+ * When only one therapist is available, people are staggered (Person B starts after Person A).
+ */
+async function findGroupPackageAvailability(
+  locationId: string,
+  services: string[],
+  timePreference: string,
+  requestedDate: string | null,
+  tz: string,
+  installation: any,
+  localNow: Date,
+  people: PersonPreference[],
+  requestedTime?: string
+): Promise<{
+  success: boolean;
+  results: GroupSlotResult[];
+  error?: string;
+}> {
+  console.log(`[GroupPackage] ═══════════════════════════════════════════════════════`);
+  console.log(`[GroupPackage] PHASE 3: Finding availability for ${people.length} people`);
+  console.log(`[GroupPackage] Package services: ${services.join(", ")}`);
+  console.log(`[GroupPackage] Time preference: ${timePreference || "(none)"}`);
+  console.log(`[GroupPackage] Requested date: ${requestedDate || "(soonest)"}`);
+  for (let i = 0; i < people.length; i++) {
+    const p = people[i];
+    console.log(`[GroupPackage] Person ${i + 1}: ${p.name} (gender pref: ${p.therapist_preference || "none"})`);
+  }
+  console.log(`[GroupPackage] ═══════════════════════════════════════════════════════`);
+
+  const groupResults: GroupSlotResult[] = [];
+  const accumulatedExcludedSlots: ExcludedSlot[] = [];
+
+  // Process each person in order
+  for (let i = 0; i < people.length; i++) {
+    const person = people[i];
+    console.log(`[GroupPackage] --- Finding slots for Person ${i + 1}: ${person.name} ---`);
+    console.log(`[GroupPackage] Excluded slots from previous people: ${accumulatedExcludedSlots.length}`);
+
+    // Find availability for this person with accumulated exclusions
+    const personResults = await findPackageDayAvailability(
+      locationId,
+      services,
+      timePreference,
+      requestedDate,
+      tz,
+      installation,
+      localNow,
+      1, // We want just one valid result per person
+      person.therapist_preference,
+      person.strict_gender || false,
+      requestedTime,
+      accumulatedExcludedSlots
+    );
+
+    if (personResults.length === 0) {
+      // Can't fit this person - fail the whole group
+      console.log(`[GroupPackage] FAILED: No availability for ${person.name}`);
+
+      // Build helpful error message
+      let errorMsg = `Could not find availability for ${person.name}`;
+      if (i > 0) {
+        const bookedPeople = people.slice(0, i).map(p => p.name).join(", ");
+        errorMsg += `. Already found slots for ${bookedPeople}, but no remaining therapist availability for ${person.name}`;
+        if (person.therapist_preference) {
+          errorMsg += ` with ${person.therapist_preference} therapist preference`;
+        }
+        errorMsg += `. You may need to choose a different date or time.`;
+      }
+
+      return {
+        success: false,
+        results: groupResults, // Return partial results for debugging
+        error: errorMsg,
+      };
+    }
+
+    // Use the first valid result for this person
+    const personSlots = personResults[0];
+    console.log(`[GroupPackage] ✓ Found slots for ${person.name} on ${personSlots.date}`);
+
+    // Add to group results
+    groupResults.push({
+      person_index: i,
+      person_name: person.name,
+      date: personSlots.date,
+      slots: personSlots.slots,
+    });
+
+    // Extract this person's slots as exclusions for subsequent people
+    for (const slot of personSlots.slots) {
+      if (slot.staff_user_id) {
+        // Parse start/end times to minutes
+        const startDt = DateTime.fromISO(slot.startTime, { zone: tz });
+        const endDt = DateTime.fromISO(slot.endTime, { zone: tz });
+        const startMins = startDt.hour * 60 + startDt.minute;
+        const endMins = endDt.hour * 60 + endDt.minute;
+
+        accumulatedExcludedSlots.push({
+          userId: slot.staff_user_id,
+          date: personSlots.date,
+          startMins,
+          endMins,
+        });
+
+        console.log(`[GroupPackage] Added exclusion: ${slot.staff_name} on ${personSlots.date} ${startMins}-${endMins}min`);
+      }
+    }
+  }
+
+  console.log(`[GroupPackage] ═══════════════════════════════════════════════════════`);
+  console.log(`[GroupPackage] SUCCESS: Found slots for all ${people.length} people`);
+  console.log(`[GroupPackage] ═══════════════════════════════════════════════════════`);
+
+  return {
+    success: true,
+    results: groupResults,
+  };
 }
 
 /**
@@ -4889,6 +5106,479 @@ function spellOutNumber(n: number): string {
   }
   // For larger numbers, just return the number
   return n.toString();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PHASE 3: Group/Couples Booking Endpoints
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /api/calendar/check-group-availability
+ *
+ * Check availability for multiple people booking the same package.
+ * Used for couples massages, groups, etc.
+ *
+ * Request body:
+ * {
+ *   locationId: string,
+ *   package_name: string,
+ *   people: [
+ *     { name: "Person 1", therapist_preference?: "female" },
+ *     { name: "Person 2", therapist_preference?: "male" }
+ *   ],
+ *   time_preference?: "morning" | "afternoon",
+ *   requested_date?: string,
+ *   requested_time?: string
+ * }
+ */
+router.post("/check-group-availability", async (req: Request, res: Response) => {
+  console.log("[GroupCheck] Request body:", JSON.stringify(req.body, null, 2));
+
+  try {
+    const {
+      locationId,
+      location_id,
+      package_name,
+      people,
+      time_preference,
+      requested_date,
+      requested_time,
+    } = req.body;
+
+    const resolvedLocationId = locationId || location_id;
+
+    // Validation
+    if (!resolvedLocationId) {
+      return res.status(400).json({ success: false, error: "Missing required field: locationId" });
+    }
+    if (!package_name) {
+      return res.status(400).json({ success: false, error: "Missing required field: package_name" });
+    }
+    if (!people || !Array.isArray(people) || people.length < 2) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing or invalid field: people (must be an array with at least 2 people)",
+      });
+    }
+
+    // Get installation
+    const installation = await getInstallation(resolvedLocationId);
+    if (!installation) {
+      return res.status(404).json({ success: false, error: "Installation not found" });
+    }
+
+    // Check if installation is active
+    if (!installation.is_active) {
+      return res.status(403).json({
+        success: false,
+        error: "App installation is inactive. The business needs to reinstall from the GHL Marketplace.",
+      });
+    }
+
+    const tz = installation.timezone;
+    if (!tz) {
+      return res.status(500).json({ success: false, error: "Location timezone not configured" });
+    }
+
+    // Look up the package
+    const pkg = await getPackageByName(resolvedLocationId, package_name);
+    if (!pkg) {
+      const allPackages = await getPackages(resolvedLocationId);
+      return res.status(404).json({
+        success: false,
+        error: `Package "${package_name}" not found`,
+        available_packages: allPackages.map(p => p.package_name),
+      });
+    }
+
+    console.log(`[GroupCheck] Package: ${pkg.package_name} with ${pkg.services.length} services`);
+    console.log(`[GroupCheck] Checking for ${people.length} people`);
+
+    // Get local time
+    const localNowLuxon = DateTime.now().setZone(tz);
+    const localNow = localNowLuxon.toJSDate();
+    const todayStr = localNowLuxon.toFormat("yyyy-MM-dd");
+
+    // Parse requested_date if provided
+    let parsedDate: string | null = null;
+    if (requested_date) {
+      parsedDate = parseRequestedDate(requested_date, localNow, tz);
+      console.log(`[GroupCheck] Parsed requested date: ${requested_date} => ${parsedDate}`);
+    }
+
+    // Find group availability
+    const groupResult = await findGroupPackageAvailability(
+      resolvedLocationId,
+      pkg.services,
+      time_preference || "",
+      parsedDate,
+      tz,
+      installation,
+      localNow,
+      people.map((p: any) => ({
+        name: p.name || `Person ${people.indexOf(p) + 1}`,
+        therapist_preference: p.therapist_preference || p.gender_preference,
+        strict_gender: p.strict_gender || false,
+      })),
+      requested_time
+    );
+
+    if (!groupResult.success) {
+      return res.json({
+        success: false,
+        error: groupResult.error,
+        partial_results: groupResult.results,
+        message: `Unable to book ${package_name} for ${people.length} people. ${groupResult.error}`,
+      });
+    }
+
+    // Build response
+    const response = {
+      success: true,
+      package_name: pkg.package_name,
+      num_people: people.length,
+      date: groupResult.results[0]?.date,
+      today: todayStr,
+      currentTime: localNowLuxon.toFormat("h:mm a"),
+      timezone: tz,
+      group_slots: groupResult.results,
+      message: buildGroupConfirmationMessage(pkg.package_name, groupResult.results, tz),
+    };
+
+    console.log("[GroupCheck] Success:", JSON.stringify(response, null, 2));
+    return res.json(response);
+  } catch (error: any) {
+    console.error("[GroupCheck] Error:", error?.response?.data || error.message);
+    return res.status(500).json({
+      success: false,
+      error: error?.response?.data?.message || error.message,
+    });
+  }
+});
+
+/**
+ * POST /api/calendar/book-group
+ *
+ * Book a package for multiple people (couples/groups).
+ * Creates appointments for all people with full rollback on failure.
+ *
+ * Request body:
+ * {
+ *   locationId: string,
+ *   package_name: string,
+ *   people: [
+ *     { name: "John Doe", email: "john@example.com", phone: "123-456-7890", therapist_preference?: "female" },
+ *     { name: "Jane Doe", email: "jane@example.com", phone: "098-765-4321", therapist_preference?: "male" }
+ *   ],
+ *   time_preference?: string,
+ *   selected_date?: string,
+ *   requested_time?: string
+ * }
+ */
+router.post("/book-group", async (req: Request, res: Response) => {
+  console.log("[GroupBook] ═══════════════════════════════════════════════════════");
+  console.log("[GroupBook] Request body:", JSON.stringify(req.body, null, 2));
+
+  try {
+    const {
+      locationId,
+      location_id,
+      package_name,
+      people,
+      time_preference,
+      selected_date,
+      requested_time,
+      notes,
+    } = req.body;
+
+    const resolvedLocationId = locationId || location_id;
+
+    // Validation
+    if (!resolvedLocationId) {
+      return res.status(400).json({ success: false, error: "Missing required field: locationId" });
+    }
+    if (!package_name) {
+      return res.status(400).json({ success: false, error: "Missing required field: package_name" });
+    }
+    if (!people || !Array.isArray(people) || people.length < 2) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing or invalid field: people (must be an array with at least 2 people)",
+      });
+    }
+
+    // Validate each person has required fields
+    for (let i = 0; i < people.length; i++) {
+      const p = people[i];
+      if (!p.name || !p.email || !p.phone) {
+        return res.status(400).json({
+          success: false,
+          error: `Person ${i + 1} is missing required fields (name, email, phone)`,
+        });
+      }
+    }
+
+    // Get installation
+    const installation = await getInstallation(resolvedLocationId);
+    if (!installation) {
+      return res.status(404).json({ success: false, error: "Installation not found" });
+    }
+
+    // Check if installation is active
+    if (!installation.is_active) {
+      return res.status(403).json({
+        success: false,
+        error: "App installation is inactive. The business needs to reinstall from the GHL Marketplace.",
+      });
+    }
+
+    const tz = installation.timezone;
+    if (!tz) {
+      return res.status(500).json({ success: false, error: "Location timezone not configured" });
+    }
+
+    // Look up the package
+    const pkg = await getPackageByName(resolvedLocationId, package_name);
+    if (!pkg) {
+      return res.status(404).json({ success: false, error: `Package "${package_name}" not found` });
+    }
+
+    console.log(`[GroupBook] Package: ${pkg.package_name} with ${pkg.services.length} services`);
+    console.log(`[GroupBook] Booking for ${people.length} people`);
+
+    // Get local time
+    const localNowLuxon = DateTime.now().setZone(tz);
+    const localNow = localNowLuxon.toJSDate();
+
+    // Parse selected_date if provided
+    let parsedDate: string | null = null;
+    if (selected_date) {
+      parsedDate = parseRequestedDate(selected_date, localNow, tz);
+    }
+
+    // Get GHL client
+    const client = await ghl.requests(resolvedLocationId);
+
+    // Step 1: Find availability for the whole group
+    console.log("[GroupBook] Step 1: Finding availability for all people...");
+    const groupAvailability = await findGroupPackageAvailability(
+      resolvedLocationId,
+      pkg.services,
+      time_preference || "",
+      parsedDate,
+      tz,
+      installation,
+      localNow,
+      people.map((p: any) => ({
+        name: p.name,
+        therapist_preference: p.therapist_preference || p.gender_preference,
+        strict_gender: p.strict_gender || false,
+      })),
+      requested_time
+    );
+
+    if (!groupAvailability.success) {
+      return res.json({
+        success: false,
+        error: groupAvailability.error,
+        message: `Unable to find availability for ${people.length} people. ${groupAvailability.error}`,
+      });
+    }
+
+    // Step 2: Book each person's appointments with rollback on failure
+    console.log("[GroupBook] Step 2: Booking appointments for all people...");
+
+    const bookingResults: PersonBookingResult[] = [];
+
+    // Book each person
+    for (let i = 0; i < people.length; i++) {
+      const person = people[i];
+      const personSlots = groupAvailability.results[i];
+
+      console.log(`[GroupBook] Booking Person ${i + 1}: ${person.name}`);
+
+      const personAppointments: PersonBookingResult["appointments"] = [];
+      const personBlockSlotIds: string[] = [];
+
+      // Book each service in the person's chain
+      for (const slot of personSlots.slots) {
+        console.log(`[GroupBook]   Service: ${slot.service} at ${slot.startTime}`);
+
+        // Create the appointment
+        const bookResult = await bookServiceAppointment(
+          client,
+          resolvedLocationId,
+          slot.calendar_id,
+          slot.startTime,
+          slot.service,
+          person.name,
+          person.email,
+          person.phone,
+          notes ? `${notes} (Group booking: ${people.length} people)` : `Group booking: ${people.length} people`,
+          person.therapist_preference,
+          slot.staff_user_id || undefined
+        );
+
+        if (!bookResult.success) {
+          console.log(`[GroupBook] FAILED: Could not book ${slot.service} for ${person.name}`);
+
+          // ROLLBACK: Cancel all appointments for this person
+          for (const appt of personAppointments) {
+            try {
+              await client.delete(`/calendars/events/appointments/${appt.appointmentId}`, {
+                headers: { Version: "2021-07-28" },
+              });
+              console.log(`[GroupBook] ROLLBACK: Cancelled ${appt.service} for ${person.name}`);
+            } catch (err: any) {
+              console.error(`[GroupBook] ROLLBACK FAILED: ${err.message}`);
+            }
+          }
+
+          // ROLLBACK: Cancel all appointments for previous people
+          for (const prevResult of bookingResults) {
+            for (const appt of prevResult.appointments) {
+              try {
+                await client.delete(`/calendars/events/appointments/${appt.appointmentId}`, {
+                  headers: { Version: "2021-07-28" },
+                });
+                console.log(`[GroupBook] ROLLBACK: Cancelled ${appt.service} for ${prevResult.person_name}`);
+              } catch (err: any) {
+                console.error(`[GroupBook] ROLLBACK FAILED: ${err.message}`);
+              }
+            }
+          }
+
+          return res.json({
+            success: false,
+            error: `Failed to book ${slot.service} for ${person.name}: ${bookResult.error}`,
+            message: `Could not complete the group booking. All appointments have been cancelled.`,
+          });
+        }
+
+        personAppointments.push({
+          appointmentId: bookResult.appointmentId!,
+          service: slot.service,
+          startTime: slot.startTime,
+          endTime: bookResult.endTime || slot.endTime,
+          staff_name: slot.staff_name,
+        });
+
+        // Small delay between bookings to avoid rate limits
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+
+      bookingResults.push({
+        person_index: i,
+        person_name: person.name,
+        appointments: personAppointments,
+        blockSlotIds: personBlockSlotIds,
+      });
+
+      console.log(`[GroupBook] ✓ Completed booking for ${person.name}: ${personAppointments.length} appointments`);
+    }
+
+    // Build success response
+    const bookingDate = groupAvailability.results[0]?.date;
+    const response = {
+      success: true,
+      package_name: pkg.package_name,
+      num_people: people.length,
+      date: bookingDate,
+      bookings: bookingResults.map(r => ({
+        person_name: r.person_name,
+        appointments: r.appointments.map(a => ({
+          service: a.service,
+          startTime: a.startTime,
+          endTime: a.endTime,
+          staff_name: a.staff_name,
+          appointmentId: a.appointmentId,
+        })),
+      })),
+      message: buildGroupBookingConfirmationMessage(pkg.package_name, bookingResults, tz),
+    };
+
+    console.log("[GroupBook] ═══════════════════════════════════════════════════════");
+    console.log("[GroupBook] SUCCESS: All appointments booked");
+    console.log("[GroupBook] ═══════════════════════════════════════════════════════");
+
+    return res.json(response);
+  } catch (error: any) {
+    console.error("[GroupBook] Error:", error?.response?.data || error.message);
+    return res.status(500).json({
+      success: false,
+      error: error?.response?.data?.message || error.message,
+    });
+  }
+});
+
+/**
+ * Build a human-readable confirmation message for group availability check.
+ */
+function buildGroupConfirmationMessage(
+  packageName: string,
+  results: GroupSlotResult[],
+  tz: string
+): string {
+  if (results.length === 0) return "No availability found.";
+
+  const date = results[0].date;
+  const dateDt = DateTime.fromISO(date, { zone: tz });
+  const dateStr = dateDt.toFormat("EEEE, MMMM d");
+
+  let msg = `I found availability for your group on ${dateStr}:\n\n`;
+
+  for (const person of results) {
+    const firstSlot = person.slots[0];
+    const lastSlot = person.slots[person.slots.length - 1];
+    const startTime = DateTime.fromISO(firstSlot.startTime, { zone: tz }).toFormat("h:mm a");
+    const endTime = DateTime.fromISO(lastSlot.endTime, { zone: tz }).toFormat("h:mm a");
+
+    msg += `**${person.person_name}**: ${startTime} - ${endTime}`;
+    if (firstSlot.staff_name) {
+      msg += ` with ${firstSlot.staff_name}`;
+    }
+    msg += `\n`;
+  }
+
+  msg += `\nWould you like me to book this for everyone?`;
+
+  return msg;
+}
+
+/**
+ * Build a human-readable confirmation message for completed group booking.
+ */
+function buildGroupBookingConfirmationMessage(
+  packageName: string,
+  results: PersonBookingResult[],
+  tz: string
+): string {
+  if (results.length === 0) return "No bookings were made.";
+
+  const firstAppt = results[0]?.appointments[0];
+  if (!firstAppt) return "No bookings were made.";
+
+  const dateDt = DateTime.fromISO(firstAppt.startTime, { zone: tz });
+  const dateStr = dateDt.toFormat("EEEE, MMMM d");
+
+  let msg = `Your ${packageName} has been booked for ${results.length} people on ${dateStr}:\n\n`;
+
+  for (const person of results) {
+    const firstSlot = person.appointments[0];
+    const lastSlot = person.appointments[person.appointments.length - 1];
+    const startTime = DateTime.fromISO(firstSlot.startTime, { zone: tz }).toFormat("h:mm a");
+    const endTime = DateTime.fromISO(lastSlot.endTime, { zone: tz }).toFormat("h:mm a");
+
+    msg += `**${person.person_name}**: ${startTime} - ${endTime}`;
+    if (firstSlot.staff_name) {
+      msg += ` with ${firstSlot.staff_name}`;
+    }
+    msg += `\n`;
+  }
+
+  msg += `\nConfirmation emails have been sent. See you soon!`;
+
+  return msg;
 }
 
 export default router;
