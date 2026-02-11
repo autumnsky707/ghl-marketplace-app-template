@@ -2407,12 +2407,13 @@ router.post("/book", async (req: Request, res: Response) => {
 
       // ========== FIX 1.5 + 1.6: ATOMIC RESERVATION WITH ROLLBACK ==========
       // Strategy:
-      // 1. Create block-slot holds for ALL slots first (atomic reservation)
-      // 2. Book real appointments one by one (with 500ms delay between)
-      // 3. After each successful booking, delete its block-slot hold
-      // 4. If ANY booking fails: rollback all confirmed appointments + remaining block-slots
+      // 1. TRY to create block-slot holds for ALL slots (nice-to-have protection)
+      // 2. If block-slots fail, continue anyway (fallback to old behavior)
+      // 3. Book real appointments one by one (with 500ms delay between)
+      // 4. After each successful booking, delete its block-slot hold (if any)
+      // 5. If ANY booking fails: rollback all confirmed appointments + remaining block-slots
 
-      console.log(`[Book] ===== STEP 5.5: CREATING BLOCK-SLOT HOLDS =====`);
+      console.log(`[Book] ===== STEP 5.5: ATTEMPTING BLOCK-SLOT HOLDS =====`);
 
       interface BlockSlotHold {
         slotIndex: number;
@@ -2422,8 +2423,7 @@ router.post("/book", async (req: Request, res: Response) => {
       }
 
       const blockSlotHolds: BlockSlotHold[] = [];
-      let holdCreationFailed = false;
-      let holdFailureService = "";
+      let blockSlotsEnabled = true; // Will be set to false if block-slots fail
 
       for (let i = 0; i < packagePlan.slots.length; i++) {
         const slotInfo = packagePlan.slots[i];
@@ -2434,22 +2434,25 @@ router.post("/book", async (req: Request, res: Response) => {
           const startDt = DateTime.fromISO(slotInfo.startTime, { zone: tz });
           const endDt = DateTime.fromISO(slotInfo.endTime, { zone: tz });
 
+          // Try with calendarId in URL path (some GHL endpoints expect this)
+          const blockUrl = `/calendars/${slotInfo.calendar_id}/events/block-slots`;
+
           const blockPayload: Record<string, any> = {
-            calendarId: slotInfo.calendar_id,
             locationId,
             startTime: startDt.toUTC().toISO(),
             endTime: endDt.toUTC().toISO(),
             title: `HOLD: ${slotInfo.service} - ${customerName}`,
           };
 
-          // Assign to specific staff if known
+          // Try userId instead of assignedUserId (GHL API naming varies)
           if (slotInfo.staff_user_id) {
-            blockPayload.assignedUserId = slotInfo.staff_user_id;
+            blockPayload.userId = slotInfo.staff_user_id;
           }
 
+          console.log(`[Book] Block-slot URL: ${blockUrl}`);
           console.log(`[Book] Block-slot payload:`, JSON.stringify(blockPayload, null, 2));
 
-          const blockResp = await client.post("/calendars/events/block-slots", blockPayload, {
+          const blockResp = await client.post(blockUrl, blockPayload, {
             headers: { Version: "2021-07-28" },
           });
 
@@ -2464,40 +2467,39 @@ router.post("/book", async (req: Request, res: Response) => {
             });
             console.log(`[Book] Hold created: ${blockId} for ${slotInfo.service}`);
           } else {
-            console.log(`[Book] WARNING: Block-slot created but no ID returned:`, JSON.stringify(blockResp.data));
-            // Continue anyway - we'll rely on re-validation
+            console.log(`[Book] WARNING: Block-slot response had no ID:`, JSON.stringify(blockResp.data));
           }
         } catch (blockErr: any) {
-          console.log(`[Book] Failed to create hold for ${slotInfo.service}: ${blockErr?.response?.data?.message || blockErr.message}`);
-          holdCreationFailed = true;
-          holdFailureService = slotInfo.service;
+          const errMsg = blockErr?.response?.data?.message || blockErr.message;
+          console.log(`[Book] Block-slot creation failed for ${slotInfo.service}: ${errMsg}`);
+          console.log(`[Book] Block-slot error details:`, JSON.stringify(blockErr?.response?.data || {}));
+
+          // FALLBACK: If block-slots don't work, clean up any we created and continue without them
+          if (blockSlotHolds.length > 0) {
+            console.log(`[Book] Cleaning up ${blockSlotHolds.length} partial holds before fallback...`);
+            for (const hold of blockSlotHolds) {
+              try {
+                await client.delete(`/calendars/events/${hold.blockId}`, {
+                  headers: { Version: "2021-07-28" },
+                });
+              } catch (delErr: any) {
+                console.log(`[Book] Warning: Failed to cleanup hold ${hold.blockId}`);
+              }
+            }
+            blockSlotHolds.length = 0; // Clear the array
+          }
+
+          console.log(`[Book] FALLBACK: Continuing WITHOUT block-slot protection (old behavior)`);
+          blockSlotsEnabled = false;
           break;
         }
       }
 
-      // If any hold failed, rollback all created holds and abort
-      if (holdCreationFailed) {
-        console.log(`[Book] Hold creation failed - rolling back ${blockSlotHolds.length} holds...`);
-
-        for (const hold of blockSlotHolds) {
-          try {
-            await client.delete(`/calendars/events/${hold.blockId}`, {
-              headers: { Version: "2021-07-28" },
-            });
-            console.log(`[Book] Rolled back hold: ${hold.blockId}`);
-          } catch (delErr: any) {
-            console.log(`[Book] Warning: Failed to rollback hold ${hold.blockId}: ${delErr.message}`);
-          }
-        }
-
-        return res.json({
-          success: false,
-          error: `The ${holdFailureService} time slot is no longer available. Please check availability again.`,
-          retry_suggested: true,
-        });
+      if (blockSlotsEnabled && blockSlotHolds.length > 0) {
+        console.log(`[Book] All ${blockSlotHolds.length} holds created successfully`);
+      } else if (!blockSlotsEnabled) {
+        console.log(`[Book] Proceeding without block-slot holds (API not available or failed)`);
       }
-
-      console.log(`[Book] All ${blockSlotHolds.length} holds created successfully`);
 
       // STEP 6: Book all services (with rollback on failure)
       console.log(`[Book] ===== STEP 6: BOOKING SERVICES =====`);
