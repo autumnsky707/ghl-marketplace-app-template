@@ -5118,14 +5118,22 @@ function spellOutNumber(n: number): string {
  * Check availability for multiple people booking the same package.
  * Used for couples massages, groups, etc.
  *
+ * Accepts FLAT parameters (no arrays) for ElevenLabs compatibility.
+ * Supports up to 4 people.
+ *
  * Request body:
  * {
  *   locationId: string,
  *   package_name: string,
- *   people: [
- *     { name: "Person 1", therapist_preference?: "female" },
- *     { name: "Person 2", therapist_preference?: "male" }
- *   ],
+ *   group_size: number (2-4),
+ *   person_1_name: string,
+ *   person_1_therapist_preference?: "male" | "female",
+ *   person_2_name: string,
+ *   person_2_therapist_preference?: "male" | "female",
+ *   person_3_name?: string,
+ *   person_3_therapist_preference?: "male" | "female",
+ *   person_4_name?: string,
+ *   person_4_therapist_preference?: "male" | "female",
  *   time_preference?: "morning" | "afternoon",
  *   requested_date?: string,
  *   requested_time?: string
@@ -5139,7 +5147,18 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       locationId,
       location_id,
       package_name,
-      people,
+      group_size,
+      // Flat person fields
+      person_1_name,
+      person_1_therapist_preference,
+      person_2_name,
+      person_2_therapist_preference,
+      person_3_name,
+      person_3_therapist_preference,
+      person_4_name,
+      person_4_therapist_preference,
+      // Legacy array support
+      people: legacyPeople,
       time_preference,
       requested_date,
       requested_time,
@@ -5149,22 +5168,57 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
 
     // Validation
     if (!resolvedLocationId) {
-      return res.status(400).json({ success: false, error: "Missing required field: locationId" });
+      return res.status(400).json({ success: false, error: "Missing required field: locationId", message: "I need the location ID to check availability." });
     }
     if (!package_name) {
-      return res.status(400).json({ success: false, error: "Missing required field: package_name" });
+      return res.status(400).json({ success: false, error: "Missing required field: package_name", message: "I need to know which package you'd like to book." });
     }
-    if (!people || !Array.isArray(people) || people.length < 2) {
-      return res.status(400).json({
-        success: false,
-        error: "Missing or invalid field: people (must be an array with at least 2 people)",
-      });
+
+    // Reconstruct people array from flat fields OR use legacy array
+    let people: Array<{ name: string; therapist_preference?: string }> = [];
+
+    if (legacyPeople && Array.isArray(legacyPeople) && legacyPeople.length >= 2) {
+      // Legacy array format (for backward compatibility)
+      people = legacyPeople;
+    } else {
+      // Flat parameter format (for ElevenLabs)
+      const size = parseInt(group_size) || 2;
+      if (size < 2 || size > 4) {
+        return res.status(400).json({
+          success: false,
+          error: "group_size must be between 2 and 4",
+          message: "I can book for 2 to 4 people at a time.",
+        });
+      }
+
+      // Build people array from flat fields
+      if (person_1_name) {
+        people.push({ name: person_1_name, therapist_preference: person_1_therapist_preference });
+      }
+      if (person_2_name) {
+        people.push({ name: person_2_name, therapist_preference: person_2_therapist_preference });
+      }
+      if (size >= 3 && person_3_name) {
+        people.push({ name: person_3_name, therapist_preference: person_3_therapist_preference });
+      }
+      if (size >= 4 && person_4_name) {
+        people.push({ name: person_4_name, therapist_preference: person_4_therapist_preference });
+      }
+
+      // Validate we have enough people
+      if (people.length < 2) {
+        return res.status(400).json({
+          success: false,
+          error: "At least person_1_name and person_2_name are required",
+          message: "I need names for at least two people to check group availability.",
+        });
+      }
     }
 
     // Get installation
     const installation = await getInstallation(resolvedLocationId);
     if (!installation) {
-      return res.status(404).json({ success: false, error: "Installation not found" });
+      return res.status(404).json({ success: false, error: "Installation not found", message: "I couldn't find this location in our system." });
     }
 
     // Check if installation is active
@@ -5172,12 +5226,13 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       return res.status(403).json({
         success: false,
         error: "App installation is inactive. The business needs to reinstall from the GHL Marketplace.",
+        message: "I'm sorry, the booking system is currently inactive for this location.",
       });
     }
 
     const tz = installation.timezone;
     if (!tz) {
-      return res.status(500).json({ success: false, error: "Location timezone not configured" });
+      return res.status(500).json({ success: false, error: "Location timezone not configured", message: "I'm sorry, the location timezone hasn't been configured yet." });
     }
 
     // Look up the package
@@ -5188,6 +5243,7 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
         success: false,
         error: `Package "${package_name}" not found`,
         available_packages: allPackages.map(p => p.package_name),
+        message: `I couldn't find a package called "${package_name}". Would you like me to tell you about our available packages?`,
       });
     }
 
@@ -5252,6 +5308,7 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
     return res.status(500).json({
       success: false,
       error: error?.response?.data?.message || error.message,
+      message: "I'm sorry, something went wrong while checking availability. Please try again.",
     });
   }
 });
@@ -5262,15 +5319,31 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
  * Book a package for multiple people (couples/groups).
  * Creates appointments for all people with full rollback on failure.
  *
+ * Accepts FLAT parameters (no arrays) for ElevenLabs compatibility.
+ * Supports up to 4 people.
+ *
  * Request body:
  * {
  *   locationId: string,
  *   package_name: string,
- *   people: [
- *     { name: "John Doe", email: "john@example.com", phone: "123-456-7890", therapist_preference?: "female" },
- *     { name: "Jane Doe", email: "jane@example.com", phone: "098-765-4321", therapist_preference?: "male" }
- *   ],
- *   time_preference?: string,
+ *   group_size: number (2-4),
+ *   person_1_name: string,
+ *   person_1_email: string,
+ *   person_1_phone: string,
+ *   person_1_therapist_preference?: "male" | "female",
+ *   person_2_name: string,
+ *   person_2_email: string,
+ *   person_2_phone: string,
+ *   person_2_therapist_preference?: "male" | "female",
+ *   person_3_name?: string,
+ *   person_3_email?: string,
+ *   person_3_phone?: string,
+ *   person_3_therapist_preference?: "male" | "female",
+ *   person_4_name?: string,
+ *   person_4_email?: string,
+ *   person_4_phone?: string,
+ *   person_4_therapist_preference?: "male" | "female",
+ *   time_preference?: "morning" | "afternoon",
  *   selected_date?: string,
  *   requested_time?: string
  * }
@@ -5284,7 +5357,29 @@ router.post("/book-group", async (req: Request, res: Response) => {
       locationId,
       location_id,
       package_name,
-      people,
+      group_size,
+      // Flat person fields - Person 1
+      person_1_name,
+      person_1_email,
+      person_1_phone,
+      person_1_therapist_preference,
+      // Flat person fields - Person 2
+      person_2_name,
+      person_2_email,
+      person_2_phone,
+      person_2_therapist_preference,
+      // Flat person fields - Person 3 (optional)
+      person_3_name,
+      person_3_email,
+      person_3_phone,
+      person_3_therapist_preference,
+      // Flat person fields - Person 4 (optional)
+      person_4_name,
+      person_4_email,
+      person_4_phone,
+      person_4_therapist_preference,
+      // Legacy array support
+      people: legacyPeople,
       time_preference,
       selected_date,
       requested_time,
@@ -5295,16 +5390,71 @@ router.post("/book-group", async (req: Request, res: Response) => {
 
     // Validation
     if (!resolvedLocationId) {
-      return res.status(400).json({ success: false, error: "Missing required field: locationId" });
+      return res.status(400).json({ success: false, error: "Missing required field: locationId", message: "I need the location ID to complete the booking." });
     }
     if (!package_name) {
-      return res.status(400).json({ success: false, error: "Missing required field: package_name" });
+      return res.status(400).json({ success: false, error: "Missing required field: package_name", message: "I need to know which package you'd like to book." });
     }
-    if (!people || !Array.isArray(people) || people.length < 2) {
-      return res.status(400).json({
-        success: false,
-        error: "Missing or invalid field: people (must be an array with at least 2 people)",
-      });
+
+    // Reconstruct people array from flat fields OR use legacy array
+    let people: Array<{ name: string; email: string; phone: string; therapist_preference?: string }> = [];
+
+    if (legacyPeople && Array.isArray(legacyPeople) && legacyPeople.length >= 2) {
+      // Legacy array format (for backward compatibility)
+      people = legacyPeople;
+    } else {
+      // Flat parameter format (for ElevenLabs)
+      const size = parseInt(group_size) || 2;
+      if (size < 2 || size > 4) {
+        return res.status(400).json({
+          success: false,
+          error: "group_size must be between 2 and 4",
+          message: "I can book for 2 to 4 people at a time.",
+        });
+      }
+
+      // Build people array from flat fields
+      if (person_1_name && person_1_email && person_1_phone) {
+        people.push({
+          name: person_1_name,
+          email: person_1_email,
+          phone: person_1_phone,
+          therapist_preference: person_1_therapist_preference,
+        });
+      }
+      if (person_2_name && person_2_email && person_2_phone) {
+        people.push({
+          name: person_2_name,
+          email: person_2_email,
+          phone: person_2_phone,
+          therapist_preference: person_2_therapist_preference,
+        });
+      }
+      if (size >= 3 && person_3_name && person_3_email && person_3_phone) {
+        people.push({
+          name: person_3_name,
+          email: person_3_email,
+          phone: person_3_phone,
+          therapist_preference: person_3_therapist_preference,
+        });
+      }
+      if (size >= 4 && person_4_name && person_4_email && person_4_phone) {
+        people.push({
+          name: person_4_name,
+          email: person_4_email,
+          phone: person_4_phone,
+          therapist_preference: person_4_therapist_preference,
+        });
+      }
+
+      // Validate we have enough people with complete info
+      if (people.length < 2) {
+        return res.status(400).json({
+          success: false,
+          error: "At least 2 people with complete contact info (name, email, phone) are required",
+          message: "I need the name, email, and phone number for at least two people to complete the booking.",
+        });
+      }
     }
 
     // Validate each person has required fields
@@ -5314,6 +5464,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
         return res.status(400).json({
           success: false,
           error: `Person ${i + 1} is missing required fields (name, email, phone)`,
+          message: `I need the complete contact information for person ${i + 1}.`,
         });
       }
     }
@@ -5321,7 +5472,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
     // Get installation
     const installation = await getInstallation(resolvedLocationId);
     if (!installation) {
-      return res.status(404).json({ success: false, error: "Installation not found" });
+      return res.status(404).json({ success: false, error: "Installation not found", message: "I couldn't find this location in our system." });
     }
 
     // Check if installation is active
@@ -5329,18 +5480,19 @@ router.post("/book-group", async (req: Request, res: Response) => {
       return res.status(403).json({
         success: false,
         error: "App installation is inactive. The business needs to reinstall from the GHL Marketplace.",
+        message: "I'm sorry, the booking system is currently inactive for this location.",
       });
     }
 
     const tz = installation.timezone;
     if (!tz) {
-      return res.status(500).json({ success: false, error: "Location timezone not configured" });
+      return res.status(500).json({ success: false, error: "Location timezone not configured", message: "I'm sorry, the location timezone hasn't been configured yet." });
     }
 
     // Look up the package
     const pkg = await getPackageByName(resolvedLocationId, package_name);
     if (!pkg) {
-      return res.status(404).json({ success: false, error: `Package "${package_name}" not found` });
+      return res.status(404).json({ success: false, error: `Package "${package_name}" not found`, message: `I couldn't find a package called "${package_name}".` });
     }
 
     console.log(`[GroupBook] Package: ${pkg.package_name} with ${pkg.services.length} services`);
@@ -5507,6 +5659,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
     return res.status(500).json({
       success: false,
       error: error?.response?.data?.message || error.message,
+      message: "I'm sorry, something went wrong while booking. Please try again.",
     });
   }
 });

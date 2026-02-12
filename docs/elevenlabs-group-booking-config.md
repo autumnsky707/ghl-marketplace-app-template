@@ -1,8 +1,20 @@
 # Sophia ElevenLabs Agent: Group Booking Configuration
 
+Complete guide for configuring Sophia's ElevenLabs agent with group/couples booking tools.
+
+---
+
 ## PART A: Tool Definitions
 
 Add these two tools to Sophia's ElevenLabs agent configuration alongside the existing single-person tools.
+
+### Important Configuration Notes
+
+1. **Response Timeout**: Set `response_timeout_secs` to **20 seconds** on both group tools. Group availability checks query multiple therapists and may take longer than single bookings.
+
+2. **Tool Call Sounds**: Enable **Tool Call Sounds** (hold music/typing sounds) on both tools. This prevents dead air while the server processes the request.
+
+3. **Security**: Configure a **Bearer Token** in ElevenLabs Secrets Manager. The token should be validated on the Render server for both endpoints. Add an `Authorization` header with value `Bearer {{secrets.BOOKING_API_TOKEN}}`.
 
 ---
 
@@ -16,36 +28,88 @@ Add these two tools to Sophia's ElevenLabs agent configuration alongside the exi
 
 **Method:** POST
 
+**Response Timeout:** 20 seconds
+
+**Tool Call Sounds:** Enabled
+
+**Headers:**
+| Header | Value |
+|--------|-------|
+| Content-Type | application/json |
+| Authorization | Bearer {{secrets.BOOKING_API_TOKEN}} |
+
 **Parameters:**
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | locationId | string | Yes | The location ID (use the configured location) |
 | package_name | string | Yes | Name of the package to book (e.g., "Serenity Package", "Couples Massage") |
-| people | array | Yes | Array of people to book. Each person has: name (string), therapist_preference (string, optional: "male" or "female") |
+| group_size | number | Yes | Number of people (2, 3, or 4) |
+| person_1_name | string | Yes | First person's name |
+| person_1_therapist_preference | string | No | "male" or "female" - first person's therapist gender preference |
+| person_2_name | string | Yes | Second person's name |
+| person_2_therapist_preference | string | No | "male" or "female" - second person's therapist gender preference |
+| person_3_name | string | No | Third person's name (if group_size >= 3) |
+| person_3_therapist_preference | string | No | "male" or "female" - third person's therapist gender preference |
+| person_4_name | string | No | Fourth person's name (if group_size = 4) |
+| person_4_therapist_preference | string | No | "male" or "female" - fourth person's therapist gender preference |
 | time_preference | string | No | "morning" or "afternoon" |
 | requested_date | string | No | Specific date like "tomorrow", "next Tuesday", "February 15" |
-| requested_time | string | No | Specific time like "10:00 AM", "2:30 PM" |
 
-**Example Request:**
+**Example Request (2 people):**
 ```json
 {
   "locationId": "NNFCwckEhjBk90UtMRSp",
   "package_name": "Serenity Package",
-  "people": [
-    { "name": "Person 1", "therapist_preference": "female" },
-    { "name": "Person 2", "therapist_preference": "male" }
-  ],
+  "group_size": 2,
+  "person_1_name": "John",
+  "person_1_therapist_preference": "female",
+  "person_2_name": "Jane",
+  "person_2_therapist_preference": "male",
   "time_preference": "morning",
   "requested_date": "this Saturday"
 }
 ```
 
+**Example Request (3 people):**
+```json
+{
+  "locationId": "NNFCwckEhjBk90UtMRSp",
+  "package_name": "Relaxation Package",
+  "group_size": 3,
+  "person_1_name": "Alice",
+  "person_2_name": "Bob",
+  "person_3_name": "Carol",
+  "time_preference": "afternoon"
+}
+```
+
 **Response Fields:**
-- `success` (boolean): Whether availability was found
+- `success` (boolean): Whether availability was found for everyone
 - `date` (string): The date where everyone can be booked
 - `group_slots` (array): Slots for each person showing their services, times, and assigned therapists
-- `message` (string): Human-readable summary to read to the customer
+- `message` (string): **Human-readable summary to read directly to the customer**
+
+**Example Success Response:**
+```json
+{
+  "success": true,
+  "package_name": "Serenity Package",
+  "num_people": 2,
+  "date": "2026-02-15",
+  "group_slots": [...],
+  "message": "I have availability for both of you on Saturday, February 15th. John would start at 10 AM with Sarah, and Jane would start at 10 AM with Mike."
+}
+```
+
+**Example Failure Response:**
+```json
+{
+  "success": false,
+  "error": "Could not find availability for Jane with male therapist preference",
+  "message": "I couldn't find a time where both of you can be booked together this week. Would you like me to check a different week, or would either of you be flexible on therapist preference?"
+}
+```
 
 ---
 
@@ -59,36 +123,57 @@ Add these two tools to Sophia's ElevenLabs agent configuration alongside the exi
 
 **Method:** POST
 
+**Response Timeout:** 20 seconds
+
+**Tool Call Sounds:** Enabled
+
+**Headers:**
+| Header | Value |
+|--------|-------|
+| Content-Type | application/json |
+| Authorization | Bearer {{secrets.BOOKING_API_TOKEN}} |
+
 **Parameters:**
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | locationId | string | Yes | The location ID (use the configured location) |
 | package_name | string | Yes | Name of the package to book |
-| people | array | Yes | Array of people with full contact info. Each person has: name (string), email (string), phone (string), therapist_preference (string, optional) |
+| group_size | number | Yes | Number of people (2, 3, or 4) |
+| person_1_name | string | Yes | First person's full name |
+| person_1_email | string | Yes | First person's email address |
+| person_1_phone | string | Yes | First person's phone number |
+| person_1_therapist_preference | string | No | "male" or "female" |
+| person_2_name | string | Yes | Second person's full name |
+| person_2_email | string | Yes | Second person's email address |
+| person_2_phone | string | Yes | Second person's phone number |
+| person_2_therapist_preference | string | No | "male" or "female" |
+| person_3_name | string | No | Third person's full name (if group_size >= 3) |
+| person_3_email | string | No | Third person's email address (if group_size >= 3) |
+| person_3_phone | string | No | Third person's phone number (if group_size >= 3) |
+| person_3_therapist_preference | string | No | "male" or "female" |
+| person_4_name | string | No | Fourth person's full name (if group_size = 4) |
+| person_4_email | string | No | Fourth person's email address (if group_size = 4) |
+| person_4_phone | string | No | Fourth person's phone number (if group_size = 4) |
+| person_4_therapist_preference | string | No | "male" or "female" |
 | time_preference | string | No | "morning" or "afternoon" |
 | selected_date | string | No | The date to book (from check_group_availability results) |
-| requested_time | string | No | Specific start time |
+| requested_time | string | No | Specific start time like "10:00 AM" |
 
-**Example Request:**
+**Example Request (2 people):**
 ```json
 {
   "locationId": "NNFCwckEhjBk90UtMRSp",
   "package_name": "Serenity Package",
-  "people": [
-    {
-      "name": "John Smith",
-      "email": "john@example.com",
-      "phone": "555-123-4567",
-      "therapist_preference": "female"
-    },
-    {
-      "name": "Jane Smith",
-      "email": "jane@example.com",
-      "phone": "555-987-6543",
-      "therapist_preference": "male"
-    }
-  ],
+  "group_size": 2,
+  "person_1_name": "John Smith",
+  "person_1_email": "john@example.com",
+  "person_1_phone": "555-123-4567",
+  "person_1_therapist_preference": "female",
+  "person_2_name": "Jane Smith",
+  "person_2_email": "jane@example.com",
+  "person_2_phone": "555-987-6543",
+  "person_2_therapist_preference": "male",
   "time_preference": "morning",
   "selected_date": "2026-02-15"
 }
@@ -97,7 +182,28 @@ Add these two tools to Sophia's ElevenLabs agent configuration alongside the exi
 **Response Fields:**
 - `success` (boolean): Whether all bookings were created
 - `bookings` (array): Confirmation for each person with appointment IDs, times, and therapists
-- `message` (string): Human-readable confirmation to read to the customer
+- `message` (string): **Human-readable confirmation to read directly to the customer**
+
+**Example Success Response:**
+```json
+{
+  "success": true,
+  "package_name": "Serenity Package",
+  "num_people": 2,
+  "date": "2026-02-15",
+  "bookings": [...],
+  "message": "Your Serenity Package has been booked for 2 people on Saturday, February 15th. John starts at 10 AM with Sarah, and Jane starts at 10 AM with Mike. Confirmation emails have been sent to both of you. See you soon!"
+}
+```
+
+**Example Failure Response:**
+```json
+{
+  "success": false,
+  "error": "Failed to book Swedish Massage for Jane: slot no longer available",
+  "message": "I'm sorry, while I was processing the booking, that time slot became unavailable. All bookings have been cancelled. Would you like me to check for another available time?"
+}
+```
 
 ---
 
@@ -143,6 +249,9 @@ When booking for 2+ people:
 - ONE check call, ONE book call — that's it
 - NEVER call single-person tools multiple times for a group booking
 
+### READING RESPONSES
+The tool responses include a `message` field with a human-readable sentence. Read this directly to the customer — it's already formatted for conversation.
+
 ### COLLECTING INFORMATION FOR GROUPS
 For each person in the group, you need:
 1. Their name
@@ -179,7 +288,7 @@ When a customer wants to book for multiple people, follow this flow:
 
 ### Step 5: Check group availability (ONE tool call)
 Call check_group_availability with all the information gathered.
-Read the results: "Great news! I have availability on [date] where you can both start at [time]. You'd be with [therapist] and [other person] would be with [other therapist]."
+Read the `message` field from the response directly to the customer.
 
 ### Step 6: Confirm the date
 "Would you like me to book that for you?"
@@ -192,10 +301,7 @@ Collect efficiently — don't make them repeat information.
 Call book_group with all the people's information.
 
 ### Step 9: Confirm all bookings
-Read the confirmation: "You're all set! I've booked [package] for [date]:
-- [Person 1] at [time] with [therapist]
-- [Person 2] at [time] with [therapist]
-Confirmation emails have been sent to both of you."
+Read the `message` field from the response directly to the customer.
 
 ### IMPORTANT
 - A group booking should take about the same time as a single booking
@@ -203,6 +309,7 @@ Confirmation emails have been sent to both of you."
 - No booking people on wrong days
 - No multiple tool calls — one check, one book
 - Keep it smooth and efficient
+- Read the `message` field from responses — it's ready for conversation
 ```
 
 ---
@@ -215,3 +322,28 @@ Confirmation emails have been sent to both of you."
 | 2+ people booking together | check_group_availability → book_group |
 
 The single-person tools remain unchanged. Group tools are additive — use them when booking for multiple people in the same call.
+
+---
+
+## Security Configuration
+
+### ElevenLabs Secrets Manager
+
+1. Go to ElevenLabs Agent Settings → Secrets Manager
+2. Add a new secret named `BOOKING_API_TOKEN`
+3. Set the value to a secure random string (e.g., generate with `openssl rand -hex 32`)
+
+### Render Server Validation
+
+Add this middleware to validate the token on both group endpoints:
+
+```typescript
+// In your server code, validate the Authorization header
+const expectedToken = process.env.BOOKING_API_TOKEN;
+const authHeader = req.headers.authorization;
+if (!authHeader || authHeader !== `Bearer ${expectedToken}`) {
+  return res.status(401).json({ success: false, error: "Unauthorized" });
+}
+```
+
+Add `BOOKING_API_TOKEN` to your Render environment variables with the same value you set in ElevenLabs.
