@@ -4841,34 +4841,53 @@ async function bookServiceAppointment(
     console.log(`[BookService] Calendar settings: duration=${slotDuration}min, buffer=${slotBuffer}min`);
 
     // Create/upsert contact OR use pre-created contact (FIX 3: prevents name collision in group bookings)
-    let contactId: string;
+    let contactId: string | undefined;
     if (preCreatedContactId) {
       console.log(`[BookService] Using pre-created contact: ${preCreatedContactId}`);
       contactId = preCreatedContactId;
     } else {
-      console.log(`[BookService] Upserting contact...`);
-      const nameParts = customerName.trim().split(/\s+/);
-      const firstName = nameParts[0];
-      const lastName = nameParts.slice(1).join(" ") || "";
-
-      const contactPayload: Record<string, string> = {
-        locationId,
-        email: customerEmail,
-        firstName,
-      };
-      if (lastName) contactPayload.lastName = lastName;
-      if (customerPhone) contactPayload.phone = normalizePhoneForBooking(customerPhone);
-
-      console.log(`[BookService] Contact payload:`, JSON.stringify(contactPayload));
-      const contactResp = await client.post("/contacts/upsert", contactPayload, {
-        headers: { Version: "2021-07-28" },
-      });
-      contactId = contactResp.data?.contact?.id;
-      if (!contactId) {
-        console.error(`[BookService] Contact upsert returned no ID:`, JSON.stringify(contactResp.data));
-        return { success: false, error: "Failed to create contact - no ID returned" };
+      // FIX 4 Part B: Search for existing contact by email BEFORE upserting
+      // This prevents overwriting the contact name when Sophia falls back to single booking tools
+      try {
+        const searchResp = await client.get("/contacts/search", {
+          params: { locationId, query: customerEmail },
+          headers: { Version: "2021-07-28" },
+        });
+        const existingContact = searchResp.data?.contacts?.[0];
+        if (existingContact && existingContact.email?.toLowerCase() === customerEmail.toLowerCase()) {
+          contactId = existingContact.id;
+          console.log(`[BookService] Found existing contact by email: ${contactId} (${existingContact.firstName} ${existingContact.lastName || ''}) — skipping upsert to preserve name`);
+        }
+      } catch (searchErr: any) {
+        console.log(`[BookService] Contact search failed, will upsert: ${searchErr.message}`);
       }
-      console.log(`[BookService] Contact upserted: ${contactId}`);
+
+      // Only upsert if no existing contact was found
+      if (!contactId) {
+        console.log(`[BookService] No existing contact found, upserting...`);
+        const nameParts = customerName.trim().split(/\s+/);
+        const firstName = nameParts[0];
+        const lastName = nameParts.slice(1).join(" ") || "";
+
+        const contactPayload: Record<string, string> = {
+          locationId,
+          email: customerEmail,
+          firstName,
+        };
+        if (lastName) contactPayload.lastName = lastName;
+        if (customerPhone) contactPayload.phone = normalizePhoneForBooking(customerPhone);
+
+        console.log(`[BookService] Contact payload:`, JSON.stringify(contactPayload));
+        const contactResp = await client.post("/contacts/upsert", contactPayload, {
+          headers: { Version: "2021-07-28" },
+        });
+        contactId = contactResp.data?.contact?.id;
+        if (!contactId) {
+          console.error(`[BookService] Contact upsert returned no ID:`, JSON.stringify(contactResp.data));
+          return { success: false, error: "Failed to create contact - no ID returned" };
+        }
+        console.log(`[BookService] Contact upserted: ${contactId}`);
+      }
     }
 
     // Calculate times using Luxon (preserves timezone from ISO string)
