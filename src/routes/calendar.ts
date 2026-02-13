@@ -4661,20 +4661,31 @@ interface GroupSlotResult {
   }>;
 }
 
-// PersonBookingResult interface REMOVED — book-group endpoint removed
+interface PersonBookingResult {
+  person_index: number;
+  person_name: string;
+  is_caller: boolean;  // FIX 4: Track whether this person is the caller or a guest
+  appointments: Array<{
+    appointmentId: string;
+    service: string;
+    startTime: string;
+    endTime: string;
+    staff_name: string | null;
+  }>;
+  blockSlotIds: string[];
+}
 
 /**
- * PHASE 3: Find PARALLEL package availability for multiple people (couples/groups).
+ * PHASE 3: Find package availability for multiple people (couples/groups).
  *
- * INTERSECTION ALGORITHM:
- * 1. Get the first service in the package to find the calendar
- * 2. Get ALL team members for that calendar (with gender info)
- * 3. Fetch free slots for EACH therapist separately (using userId parameter)
- * 4. Build a map of time -> available therapists at that time
- * 5. Find times where N DIFFERENT therapists (matching gender preferences) are ALL free
- * 6. Return ONLY parallel start times (everyone starts at the SAME time)
+ * Strategy:
+ * 1. Find availability for Person 1
+ * 2. Extract their booked slots as "excluded"
+ * 3. Find availability for Person 2 with exclusions (same therapist can't be double-booked)
+ * 4. Repeat for Person N
  *
- * This is the industry-standard approach used by Zenoti, Boulevard, Mindbody, and Vagaro.
+ * When multiple therapists are available, people are booked in parallel (same time, different therapists).
+ * When only one therapist is available, people are staggered (Person B starts after Person A).
  */
 async function findGroupPackageAvailability(
   locationId: string,
@@ -4691,315 +4702,104 @@ async function findGroupPackageAvailability(
   results: GroupSlotResult[];
   error?: string;
 }> {
-  console.log(`[GroupParallel] ═══════════════════════════════════════════════════════`);
-  console.log(`[GroupParallel] INTERSECTION ALGORITHM: Finding PARALLEL slots for ${people.length} people`);
-  console.log(`[GroupParallel] Package services: ${services.join(", ")}`);
-  console.log(`[GroupParallel] Time preference: ${timePreference || "(none)"}`);
-  console.log(`[GroupParallel] Requested date: ${requestedDate || "(soonest)"}`);
-  console.log(`[GroupParallel] Requested time: ${requestedTime || "(none)"}`);
+  console.log(`[GroupPackage] ═══════════════════════════════════════════════════════`);
+  console.log(`[GroupPackage] PHASE 3: Finding availability for ${people.length} people`);
+  console.log(`[GroupPackage] Package services: ${services.join(", ")}`);
+  console.log(`[GroupPackage] Time preference: ${timePreference || "(none)"}`);
+  console.log(`[GroupPackage] Requested date: ${requestedDate || "(soonest)"}`);
   for (let i = 0; i < people.length; i++) {
     const p = people[i];
-    console.log(`[GroupParallel] Person ${i + 1}: ${p.name} (gender pref: ${p.therapist_preference || "any"})`);
+    console.log(`[GroupPackage] Person ${i + 1}: ${p.name} (gender pref: ${p.therapist_preference || "none"})`);
   }
-  console.log(`[GroupParallel] ═══════════════════════════════════════════════════════`);
+  console.log(`[GroupPackage] ═══════════════════════════════════════════════════════`);
 
-  // Step 1: Get the first service's calendar
-  const firstService = services[0];
-  const calendars = await getSyncedCalendarsForService(locationId, firstService);
-  if (calendars.length === 0) {
-    console.log(`[GroupParallel] ERROR: No calendar found for service "${firstService}"`);
-    return {
-      success: false,
-      results: [],
-      error: `No calendar found for service "${firstService}". Please contact the spa to set up this service.`,
-    };
-  }
-  const calendarId = calendars[0].calendar_id;
-  const slotDuration = calendars[0].slot_duration || 60;
-  console.log(`[GroupParallel] Using calendar: ${calendarId} (slot duration: ${slotDuration}min)`);
+  const groupResults: GroupSlotResult[] = [];
+  const accumulatedExcludedSlots: ExcludedSlot[] = [];
 
-  // Step 2: Get ALL team members for this calendar
-  const allTeamMembers = await getSyncedTeamMembers(locationId, calendarId);
-  console.log(`[GroupParallel] Found ${allTeamMembers.length} team members for calendar`);
-  for (const tm of allTeamMembers) {
-    console.log(`[GroupParallel]   - ${tm.user_name} (userId: ${tm.user_id}, gender: ${tm.gender || "unknown"})`);
-  }
+  // Process each person in order
+  for (let i = 0; i < people.length; i++) {
+    const person = people[i];
+    console.log(`[GroupPackage] --- Finding slots for Person ${i + 1}: ${person.name} ---`);
+    console.log(`[GroupPackage] Excluded slots from previous people: ${accumulatedExcludedSlots.length}`);
 
-  if (allTeamMembers.length < people.length) {
-    console.log(`[GroupParallel] ERROR: Not enough therapists (${allTeamMembers.length}) for ${people.length} people`);
-    return {
-      success: false,
-      results: [],
-      error: `Not enough therapists available. You have ${allTeamMembers.length} therapist(s) but need ${people.length} for a group booking.`,
-    };
-  }
+    // Find availability for this person with accumulated exclusions
+    const personResults = await findPackageDayAvailability(
+      locationId,
+      services,
+      timePreference,
+      requestedDate,
+      tz,
+      installation,
+      localNow,
+      1, // We want just one valid result per person
+      person.therapist_preference,
+      person.strict_gender || false,
+      requestedTime,
+      accumulatedExcludedSlots
+    );
 
-  // Step 3: For each person, determine eligible therapists based on gender preference
-  // IMPORTANT: Gender preference ONLY applies to massage services, not body treatments, facials, etc.
-  const isMassageCalendar = isMassageService(firstService, calendars[0].calendar_name || undefined);
-  console.log(`[GroupParallel] Service "${firstService}" is massage: ${isMassageCalendar} (gender filter ${isMassageCalendar ? "ENABLED" : "DISABLED"})`);
+    if (personResults.length === 0) {
+      // Can't fit this person - fail the whole group
+      console.log(`[GroupPackage] FAILED: No availability for ${person.name}`);
 
-  const eligibleTherapistsPerPerson: Array<{ person: PersonPreference; therapists: typeof allTeamMembers }> = [];
-  for (const person of people) {
-    let eligible = allTeamMembers;
-
-    // Only apply gender filter for massage services
-    if (isMassageCalendar && person.therapist_preference && ["male", "female"].includes(person.therapist_preference.toLowerCase())) {
-      const pref = person.therapist_preference.toLowerCase();
-      eligible = allTeamMembers.filter(tm => tm.gender === pref);
-      console.log(`[GroupParallel] ${person.name} (wants ${pref} for massage): ${eligible.length} eligible therapists`);
-      if (eligible.length === 0) {
-        console.log(`[GroupParallel] ERROR: No ${pref} therapists available for ${person.name}`);
-        return {
-          success: false,
-          results: [],
-          error: `No ${pref} therapist available for ${person.name}. Would they be flexible on therapist preference?`,
-        };
-      }
-    } else {
-      // Non-massage service OR no gender preference: all team members eligible
-      console.log(`[GroupParallel] ${person.name} (${isMassageCalendar ? "any gender" : "non-massage service"}): ${eligible.length} eligible therapists`);
-    }
-    eligibleTherapistsPerPerson.push({ person, therapists: eligible });
-  }
-
-  // Step 4: Determine date range to search
-  const DAYS_TO_SEARCH = 14;
-  const localNowDt = DateTime.fromJSDate(localNow, { zone: tz });
-  let searchStart: DateTime;
-  let searchEnd: DateTime;
-
-  if (requestedDate) {
-    searchStart = DateTime.fromISO(requestedDate, { zone: tz }).startOf("day");
-    searchEnd = DateTime.fromISO(requestedDate, { zone: tz }).endOf("day");
-    console.log(`[GroupParallel] Searching specific date: ${searchStart.toISODate()}`);
-  } else {
-    searchStart = localNowDt.startOf("day");
-    searchEnd = localNowDt.plus({ days: DAYS_TO_SEARCH }).endOf("day");
-    console.log(`[GroupParallel] Searching next ${DAYS_TO_SEARCH} days`);
-  }
-
-  // Step 5: Fetch free slots for ALL unique therapists in parallel
-  const uniqueTherapistIds = new Set<string>();
-  for (const { therapists } of eligibleTherapistsPerPerson) {
-    for (const t of therapists) {
-      uniqueTherapistIds.add(t.user_id);
-    }
-  }
-  console.log(`[GroupParallel] Fetching free slots for ${uniqueTherapistIds.size} unique therapists...`);
-
-  // Map: therapistUserId -> { name, gender, slots: Map<date, Set<timeSlot>> }
-  const therapistSlotsMap: Map<string, { name: string; gender: string | null; slots: Map<string, Set<string>> }> = new Map();
-
-  const startMs = searchStart.toMillis();
-  const endMs = searchEnd.toMillis();
-
-  const fetchPromises = Array.from(uniqueTherapistIds).map(async (userId) => {
-    const therapist = allTeamMembers.find(tm => tm.user_id === userId);
-    const therapistName = therapist?.user_name || "Unknown";
-    const therapistGender = therapist?.gender || null;
-
-    try {
-      const slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${calendarId}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}&userId=${encodeURIComponent(userId)}`;
-      console.log(`[GroupParallel] Fetching slots for ${therapistName} (${therapistGender || "unknown"}) userId=${userId}`);
-
-      const resp = await axios.get(slotsUrl, {
-        headers: {
-          Authorization: `Bearer ${installation.access_token}`,
-          Version: "2021-07-28",
-        },
-      });
-
-      const rawData = resp.data || {};
-      const slotsByDate: Map<string, Set<string>> = new Map();
-      let totalSlots = 0;
-
-      for (const dateKey of Object.keys(rawData)) {
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) continue;
-        const entry = rawData[dateKey];
-        const isoSlots: string[] = Array.isArray(entry) ? entry : entry?.slots || [];
-
-        const slotsSet = new Set<string>();
-        for (const isoStr of isoSlots) {
-          // Parse ISO time to HH:mm format for comparison
-          const slotDt = DateTime.fromISO(isoStr, { zone: tz });
-          if (slotDt.isValid && slotDt > localNowDt) {
-            slotsSet.add(slotDt.toFormat("HH:mm"));
-          }
+      // Build helpful error message
+      let errorMsg = `Could not find availability for ${person.name}`;
+      if (i > 0) {
+        const bookedPeople = people.slice(0, i).map(p => p.name).join(", ");
+        errorMsg += `. Already found slots for ${bookedPeople}, but no remaining therapist availability for ${person.name}`;
+        if (person.therapist_preference) {
+          errorMsg += ` with ${person.therapist_preference} therapist preference`;
         }
-        if (slotsSet.size > 0) {
-          slotsByDate.set(dateKey, slotsSet);
-          totalSlots += slotsSet.size;
-        }
+        errorMsg += `. You may need to choose a different date or time.`;
       }
-
-      console.log(`[GroupParallel] ${therapistName}: ${totalSlots} free slots across ${slotsByDate.size} days`);
-      therapistSlotsMap.set(userId, { name: therapistName, gender: therapistGender, slots: slotsByDate });
-    } catch (err: any) {
-      console.error(`[GroupParallel] ERROR fetching slots for ${therapistName}: ${err.message}`);
-      therapistSlotsMap.set(userId, { name: therapistName, gender: therapistGender, slots: new Map() });
-    }
-  });
-
-  await Promise.all(fetchPromises);
-
-  // Step 6: Build a map of (date, time) -> available therapists
-  const timeTherapistMap: Map<string, Array<{ userId: string; name: string; gender: string | null }>> = new Map();
-
-  for (const [userId, data] of therapistSlotsMap) {
-    for (const [dateStr, times] of data.slots) {
-      for (const timeStr of times) {
-        const key = `${dateStr}_${timeStr}`;
-        if (!timeTherapistMap.has(key)) {
-          timeTherapistMap.set(key, []);
-        }
-        timeTherapistMap.get(key)!.push({
-          userId,
-          name: data.name,
-          gender: data.gender,
-        });
-      }
-    }
-  }
-
-  console.log(`[GroupParallel] Total unique time slots to check: ${timeTherapistMap.size}`);
-
-  // Step 7: Filter by time preference
-  let filteredKeys = Array.from(timeTherapistMap.keys()).sort();
-
-  if (timePreference === "morning") {
-    filteredKeys = filteredKeys.filter(k => {
-      const time = k.split("_")[1];
-      const hour = parseInt(time.split(":")[0], 10);
-      return hour < 12;
-    });
-    console.log(`[GroupParallel] After morning filter: ${filteredKeys.length} slots`);
-  } else if (timePreference === "afternoon") {
-    filteredKeys = filteredKeys.filter(k => {
-      const time = k.split("_")[1];
-      const hour = parseInt(time.split(":")[0], 10);
-      return hour >= 12;
-    });
-    console.log(`[GroupParallel] After afternoon filter: ${filteredKeys.length} slots`);
-  }
-
-  // Filter by requested time if specified
-  if (requestedTime) {
-    const reqTimeMins = parseTimeToMinutes(requestedTime, tz);
-    if (reqTimeMins !== null) {
-      const reqHour = Math.floor(reqTimeMins / 60);
-      const reqMin = reqTimeMins % 60;
-      const reqTimeStr = `${reqHour.toString().padStart(2, "0")}:${reqMin.toString().padStart(2, "0")}`;
-      filteredKeys = filteredKeys.filter(k => k.split("_")[1] === reqTimeStr);
-      console.log(`[GroupParallel] After requested time filter (${reqTimeStr}): ${filteredKeys.length} slots`);
-    }
-  }
-
-  // Step 8: For each candidate time, try to assign each person to a unique therapist
-  for (const key of filteredKeys) {
-    const [dateStr, timeStr] = key.split("_");
-    const availableTherapists = timeTherapistMap.get(key) || [];
-
-    console.log(`[GroupParallel] Checking ${dateStr} ${timeStr}: ${availableTherapists.length} therapists available`);
-
-    // Sort people by number of eligible therapists (most-constrained-first)
-    const sortedPeopleWithIndex = eligibleTherapistsPerPerson
-      .map((e, idx) => ({ ...e, originalIndex: idx }))
-      .sort((a, b) => a.therapists.length - b.therapists.length);
-
-    const usedTherapists = new Set<string>();
-    const assignments: Array<{ personIndex: number; person: PersonPreference; therapistId: string; therapistName: string }> = [];
-    let feasible = true;
-
-    for (const { person, therapists, originalIndex } of sortedPeopleWithIndex) {
-      // Find a therapist who is:
-      // 1. Free at this time (in availableTherapists)
-      // 2. Matches gender preference (in person's eligible therapists)
-      // 3. Not already assigned to another person
-      const matchingTherapist = availableTherapists.find(t =>
-        !usedTherapists.has(t.userId) &&
-        therapists.some(eligible => eligible.user_id === t.userId)
-      );
-
-      if (matchingTherapist) {
-        usedTherapists.add(matchingTherapist.userId);
-        assignments.push({
-          personIndex: originalIndex,
-          person,
-          therapistId: matchingTherapist.userId,
-          therapistName: matchingTherapist.name,
-        });
-        console.log(`[GroupParallel]   ✓ ${person.name} -> ${matchingTherapist.name}`);
-      } else {
-        console.log(`[GroupParallel]   ✗ No available therapist for ${person.name}`);
-        feasible = false;
-        break;
-      }
-    }
-
-    if (feasible) {
-      // Found a valid parallel slot for everyone!
-      const hour = parseInt(timeStr.split(":")[0], 10);
-      const minute = parseInt(timeStr.split(":")[1], 10);
-      const startDt = DateTime.fromObject(
-        { year: parseInt(dateStr.slice(0, 4)), month: parseInt(dateStr.slice(5, 7)), day: parseInt(dateStr.slice(8, 10)), hour, minute },
-        { zone: tz }
-      );
-      const endDt = startDt.plus({ minutes: slotDuration });
-
-      console.log(`[GroupParallel] ═══════════════════════════════════════════════════════`);
-      console.log(`[GroupParallel] SUCCESS! Found parallel availability at ${dateStr} ${timeStr}`);
-      console.log(`[GroupParallel] ═══════════════════════════════════════════════════════`);
-
-      // Build GroupSlotResult for each person (sorted by original index)
-      const results: GroupSlotResult[] = assignments
-        .sort((a, b) => a.personIndex - b.personIndex)
-        .map((assignment) => ({
-          person_index: assignment.personIndex,
-          person_name: assignment.person.name,
-          date: dateStr,
-          slots: [{
-            service: firstService,
-            startTime: startDt.toISO()!,
-            endTime: endDt.toISO()!,
-            calendar_id: calendarId,
-            staff_name: assignment.therapistName,
-            staff_user_id: assignment.therapistId,
-          }],
-        }));
 
       return {
-        success: true,
-        results,
+        success: false,
+        results: groupResults, // Return partial results for debugging
+        error: errorMsg,
       };
+    }
+
+    // Use the first valid result for this person
+    const personSlots = personResults[0];
+    console.log(`[GroupPackage] ✓ Found slots for ${person.name} on ${personSlots.date}`);
+
+    // Add to group results
+    groupResults.push({
+      person_index: i,
+      person_name: person.name,
+      date: personSlots.date,
+      slots: personSlots.slots,
+    });
+
+    // Extract this person's slots as exclusions for subsequent people
+    for (const slot of personSlots.slots) {
+      if (slot.staff_user_id) {
+        // Parse start/end times to minutes
+        const startDt = DateTime.fromISO(slot.startTime, { zone: tz });
+        const endDt = DateTime.fromISO(slot.endTime, { zone: tz });
+        const startMins = startDt.hour * 60 + startDt.minute;
+        const endMins = endDt.hour * 60 + endDt.minute;
+
+        accumulatedExcludedSlots.push({
+          userId: slot.staff_user_id,
+          date: personSlots.date,
+          startMins,
+          endMins,
+        });
+
+        console.log(`[GroupPackage] Added exclusion: ${slot.staff_name} on ${personSlots.date} ${startMins}-${endMins}min`);
+      }
     }
   }
 
-  // No valid parallel slot found
-  console.log(`[GroupParallel] ═══════════════════════════════════════════════════════`);
-  console.log(`[GroupParallel] FAILED: No parallel availability found`);
-  console.log(`[GroupParallel] ═══════════════════════════════════════════════════════`);
-
-  // Build helpful error message
-  let errorMsg = `I couldn't find a time where all ${people.length} people can be booked together`;
-  if (requestedDate) {
-    errorMsg += ` on ${requestedDate}`;
-  }
-  errorMsg += ". ";
-
-  // Check if it's a gender preference issue
-  const constrainedPeople = eligibleTherapistsPerPerson.filter(({ therapists }) => therapists.length === 1);
-  if (constrainedPeople.length > 0) {
-    const names = constrainedPeople.map(({ person }) => person.name).join(" and ");
-    errorMsg += `${names} ${constrainedPeople.length > 1 ? "have" : "has"} limited therapist options due to gender preferences. `;
-  }
-
-  errorMsg += "Would you like me to check a different date, or would anyone be flexible on therapist preference?";
+  console.log(`[GroupPackage] ═══════════════════════════════════════════════════════`);
+  console.log(`[GroupPackage] SUCCESS: Found slots for all ${people.length} people`);
+  console.log(`[GroupPackage] ═══════════════════════════════════════════════════════`);
 
   return {
-    success: false,
-    results: [],
-    error: errorMsg,
+    success: true,
+    results: groupResults,
   };
 }
 
@@ -5041,53 +4841,34 @@ async function bookServiceAppointment(
     console.log(`[BookService] Calendar settings: duration=${slotDuration}min, buffer=${slotBuffer}min`);
 
     // Create/upsert contact OR use pre-created contact (FIX 3: prevents name collision in group bookings)
-    let contactId: string | undefined;
+    let contactId: string;
     if (preCreatedContactId) {
       console.log(`[BookService] Using pre-created contact: ${preCreatedContactId}`);
       contactId = preCreatedContactId;
     } else {
-      // FIX 4 Part B: Search for existing contact by email BEFORE upserting
-      // This prevents overwriting the contact name when Sophia falls back to single booking tools
-      try {
-        const searchResp = await client.get("/contacts/search", {
-          params: { locationId, query: customerEmail },
-          headers: { Version: "2021-07-28" },
-        });
-        const existingContact = searchResp.data?.contacts?.[0];
-        if (existingContact && existingContact.email?.toLowerCase() === customerEmail.toLowerCase()) {
-          contactId = existingContact.id;
-          console.log(`[BookService] Found existing contact by email: ${contactId} (${existingContact.firstName} ${existingContact.lastName || ''}) — skipping upsert to preserve name`);
-        }
-      } catch (searchErr: any) {
-        console.log(`[BookService] Contact search failed, will upsert: ${searchErr.message}`);
-      }
+      console.log(`[BookService] Upserting contact...`);
+      const nameParts = customerName.trim().split(/\s+/);
+      const firstName = nameParts[0];
+      const lastName = nameParts.slice(1).join(" ") || "";
 
-      // Only upsert if no existing contact was found
+      const contactPayload: Record<string, string> = {
+        locationId,
+        email: customerEmail,
+        firstName,
+      };
+      if (lastName) contactPayload.lastName = lastName;
+      if (customerPhone) contactPayload.phone = normalizePhoneForBooking(customerPhone);
+
+      console.log(`[BookService] Contact payload:`, JSON.stringify(contactPayload));
+      const contactResp = await client.post("/contacts/upsert", contactPayload, {
+        headers: { Version: "2021-07-28" },
+      });
+      contactId = contactResp.data?.contact?.id;
       if (!contactId) {
-        console.log(`[BookService] No existing contact found, upserting...`);
-        const nameParts = customerName.trim().split(/\s+/);
-        const firstName = nameParts[0];
-        const lastName = nameParts.slice(1).join(" ") || "";
-
-        const contactPayload: Record<string, string> = {
-          locationId,
-          email: customerEmail,
-          firstName,
-        };
-        if (lastName) contactPayload.lastName = lastName;
-        if (customerPhone) contactPayload.phone = normalizePhoneForBooking(customerPhone);
-
-        console.log(`[BookService] Contact payload:`, JSON.stringify(contactPayload));
-        const contactResp = await client.post("/contacts/upsert", contactPayload, {
-          headers: { Version: "2021-07-28" },
-        });
-        contactId = contactResp.data?.contact?.id;
-        if (!contactId) {
-          console.error(`[BookService] Contact upsert returned no ID:`, JSON.stringify(contactResp.data));
-          return { success: false, error: "Failed to create contact - no ID returned" };
-        }
-        console.log(`[BookService] Contact upserted: ${contactId}`);
+        console.error(`[BookService] Contact upsert returned no ID:`, JSON.stringify(contactResp.data));
+        return { success: false, error: "Failed to create contact - no ID returned" };
       }
+      console.log(`[BookService] Contact upserted: ${contactId}`);
     }
 
     // Calculate times using Luxon (preserves timezone from ISO string)
@@ -5633,6 +5414,483 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
   }
 });
 
+/**
+ * POST /api/calendar/book-group
+ *
+ * Book a package for multiple people (couples/groups).
+ * Creates appointments for all people with full rollback on failure.
+ *
+ * Accepts FLAT parameters (no arrays) for ElevenLabs compatibility.
+ * Supports up to 4 people.
+ *
+ * Request body:
+ * {
+ *   locationId: string,
+ *   package_name: string,
+ *   group_size: number (2-4),
+ *   person_1_name: string,
+ *   person_1_email: string,
+ *   person_1_phone: string,
+ *   person_1_therapist_preference?: "male" | "female",
+ *   person_2_name: string,
+ *   person_2_email: string,
+ *   person_2_phone: string,
+ *   person_2_therapist_preference?: "male" | "female",
+ *   person_3_name?: string,
+ *   person_3_email?: string,
+ *   person_3_phone?: string,
+ *   person_3_therapist_preference?: "male" | "female",
+ *   person_4_name?: string,
+ *   person_4_email?: string,
+ *   person_4_phone?: string,
+ *   person_4_therapist_preference?: "male" | "female",
+ *   time_preference?: "morning" | "afternoon",
+ *   selected_date?: string,
+ *   requested_time?: string
+ * }
+ */
+router.post("/book-group", async (req: Request, res: Response) => {
+  // FIX 2: Detailed logging for debugging ElevenLabs tool call failures
+  console.log("[GroupBook] ═══════════════════════════════════════════════════════");
+  console.log("[GroupBook] INCOMING REQUEST");
+  console.log("[GroupBook] Timestamp:", new Date().toISOString());
+  console.log("[GroupBook] Raw body:", JSON.stringify(req.body, null, 2));
+  console.log("[GroupBook] ═══════════════════════════════════════════════════════");
+
+  try {
+    const {
+      locationId,
+      location_id,
+      package_name,
+      group_size,
+      // Flat person fields - Person 1
+      person_1_name,
+      person_1_email,
+      person_1_phone,
+      person_1_therapist_preference,
+      // Flat person fields - Person 2
+      person_2_name,
+      person_2_email,
+      person_2_phone,
+      person_2_therapist_preference,
+      // Flat person fields - Person 3 (optional)
+      person_3_name,
+      person_3_email,
+      person_3_phone,
+      person_3_therapist_preference,
+      // Flat person fields - Person 4 (optional)
+      person_4_name,
+      person_4_email,
+      person_4_phone,
+      person_4_therapist_preference,
+      // Legacy array support
+      people: legacyPeople,
+      time_preference,
+      selected_date,
+      requested_time,
+      notes,
+    } = req.body;
+
+    const resolvedLocationId = locationId || location_id;
+    console.log(`[GroupBook] Resolved locationId: ${resolvedLocationId}`);
+
+    // Validation
+    if (!resolvedLocationId) {
+      console.log("[GroupBook] VALIDATION FAILED: Missing locationId");
+      return res.status(400).json({ success: false, error: "Missing required field: locationId", message: "I need the location ID to complete the booking." });
+    }
+    if (!package_name) {
+      console.log("[GroupBook] VALIDATION FAILED: Missing package_name");
+      return res.status(400).json({ success: false, error: "Missing required field: package_name", message: "I need to know which package you'd like to book." });
+    }
+
+    // Reconstruct people array from flat fields OR use legacy array
+    let people: Array<{ name: string; email: string; phone: string; therapist_preference?: string }> = [];
+
+    if (legacyPeople && Array.isArray(legacyPeople) && legacyPeople.length >= 2) {
+      // Legacy array format (for backward compatibility)
+      people = legacyPeople;
+    } else {
+      // Flat parameter format (for ElevenLabs)
+      const size = parseInt(group_size) || 2;
+      if (size < 2 || size > 4) {
+        console.log(`[GroupBook] VALIDATION FAILED: group_size=${group_size} out of range (2-4)`);
+        return res.status(400).json({
+          success: false,
+          error: "group_size must be between 2 and 4",
+          message: "I can book for 2 to 4 people at a time.",
+        });
+      }
+
+      // Build people array from flat fields
+      if (person_1_name && person_1_email && person_1_phone) {
+        people.push({
+          name: person_1_name,
+          email: person_1_email,
+          phone: person_1_phone,
+          therapist_preference: person_1_therapist_preference,
+        });
+      }
+      if (person_2_name && person_2_email && person_2_phone) {
+        people.push({
+          name: person_2_name,
+          email: person_2_email,
+          phone: person_2_phone,
+          therapist_preference: person_2_therapist_preference,
+        });
+      }
+      if (size >= 3 && person_3_name && person_3_email && person_3_phone) {
+        people.push({
+          name: person_3_name,
+          email: person_3_email,
+          phone: person_3_phone,
+          therapist_preference: person_3_therapist_preference,
+        });
+      }
+      if (size >= 4 && person_4_name && person_4_email && person_4_phone) {
+        people.push({
+          name: person_4_name,
+          email: person_4_email,
+          phone: person_4_phone,
+          therapist_preference: person_4_therapist_preference,
+        });
+      }
+
+      // Validate we have enough people with complete info
+      if (people.length < 2) {
+        console.log(`[GroupBook] VALIDATION FAILED: people.length=${people.length} < 2`);
+        return res.status(400).json({
+          success: false,
+          error: "At least 2 people with complete contact info (name, email, phone) are required",
+          message: "I need the name, email, and phone number for at least two people to complete the booking.",
+        });
+      }
+    }
+
+    // Log the reconstructed people array
+    console.log(`[GroupBook] Reconstructed people (${people.length}):`);
+    for (let i = 0; i < people.length; i++) {
+      const p = people[i];
+      console.log(`[GroupBook]   Person ${i+1}: name="${p.name}", email="${p.email}", phone="${p.phone}", pref="${p.therapist_preference || 'none'}"`);
+    }
+
+    // Validate each person has required fields
+    for (let i = 0; i < people.length; i++) {
+      const p = people[i];
+      if (!p.name || !p.email || !p.phone) {
+        console.log(`[GroupBook] VALIDATION FAILED: Person ${i + 1} missing required fields`);
+        return res.status(400).json({
+          success: false,
+          error: `Person ${i + 1} is missing required fields (name, email, phone)`,
+          message: `I need the complete contact information for person ${i + 1}.`,
+        });
+      }
+    }
+
+    // Get installation
+    const installation = await getInstallation(resolvedLocationId);
+    console.log(`[GroupBook] Installation found: ${!!installation}, active: ${installation?.is_active}, timezone: ${installation?.timezone}`);
+    if (!installation) {
+      console.log("[GroupBook] VALIDATION FAILED: Installation not found");
+      return res.status(404).json({ success: false, error: "Installation not found", message: "I couldn't find this location in our system." });
+    }
+
+    // Check if installation is active
+    if (!installation.is_active) {
+      console.log("[GroupBook] VALIDATION FAILED: Installation inactive");
+      return res.status(403).json({
+        success: false,
+        error: "App installation is inactive. The business needs to reinstall from the GHL Marketplace.",
+        message: "I'm sorry, the booking system is currently inactive for this location.",
+      });
+    }
+
+    const tz = installation.timezone;
+    if (!tz) {
+      console.log("[GroupBook] VALIDATION FAILED: Timezone not configured");
+      return res.status(500).json({ success: false, error: "Location timezone not configured", message: "I'm sorry, the location timezone hasn't been configured yet." });
+    }
+
+    // Look up the package
+    const pkg = await getPackageByName(resolvedLocationId, package_name);
+    console.log(`[GroupBook] Package lookup: ${pkg ? pkg.package_name : 'NOT FOUND'}, services: ${pkg?.services?.join(', ') || 'N/A'}`);
+    if (!pkg) {
+      console.log(`[GroupBook] VALIDATION FAILED: Package "${package_name}" not found`);
+      return res.status(404).json({ success: false, error: `Package "${package_name}" not found`, message: `I couldn't find a package called "${package_name}".` });
+    }
+
+    console.log(`[GroupBook] Package: ${pkg.package_name} with ${pkg.services.length} services`);
+    console.log(`[GroupBook] Booking for ${people.length} people`);
+
+    // Get local time
+    const localNowLuxon = DateTime.now().setZone(tz);
+    const localNow = localNowLuxon.toJSDate();
+
+    // Parse selected_date if provided
+    let parsedDate: string | null = null;
+    if (selected_date) {
+      parsedDate = parseRequestedDate(selected_date, localNow, tz);
+    }
+
+    // Get GHL client
+    const client = await ghl.requests(resolvedLocationId);
+
+    // Step 1: Find availability for the whole group
+    console.log("[GroupBook] ═══════════════════════════════════════════════════════");
+    console.log("[GroupBook] Step 1: Calling findGroupPackageAvailability with:");
+    console.log(`[GroupBook]   locationId: ${resolvedLocationId}`);
+    console.log(`[GroupBook]   services: ${pkg.services.join(', ')}`);
+    console.log(`[GroupBook]   timePreference: ${time_preference || '(none)'}`);
+    console.log(`[GroupBook]   selectedDate: ${parsedDate || '(soonest)'}`);
+    console.log(`[GroupBook]   timezone: ${tz}`);
+    console.log(`[GroupBook]   people: ${JSON.stringify(people.map((p: any) => ({ name: p.name, pref: p.therapist_preference })))}`);
+    console.log(`[GroupBook]   requestedTime: ${requested_time || '(none)'}`);
+    console.log("[GroupBook] ═══════════════════════════════════════════════════════");
+
+    const groupAvailability = await findGroupPackageAvailability(
+      resolvedLocationId,
+      pkg.services,
+      time_preference || "",
+      parsedDate,
+      tz,
+      installation,
+      localNow,
+      people.map((p: any) => ({
+        name: p.name,
+        therapist_preference: p.therapist_preference || p.gender_preference,
+        strict_gender: p.strict_gender || false,
+      })),
+      requested_time
+    );
+
+    // Log the result
+    console.log(`[GroupBook] findGroupPackageAvailability returned: success=${groupAvailability.success}`);
+    if (!groupAvailability.success) {
+      console.log(`[GroupBook] FAILED: ${groupAvailability.error}`);
+      console.log(`[GroupBook] Partial results: ${JSON.stringify(groupAvailability.results, null, 2)}`);
+      return res.json({
+        success: false,
+        error: groupAvailability.error,
+        message: `Unable to find availability for ${people.length} people. ${groupAvailability.error}`,
+      });
+    }
+
+    // FIX 3: Pre-create caller contact ONCE and reuse for all bookings
+    // This prevents the contact name collision bug where guest names overwrite the caller's GHL contact
+    const caller = people[0]; // First person is always the caller
+    console.log("[GroupBook] Pre-creating caller contact...");
+    const callerNameParts = caller.name.trim().split(/\s+/);
+    const callerFirstName = callerNameParts[0];
+    const callerLastName = callerNameParts.slice(1).join(" ") || "";
+    const callerContactPayload: Record<string, string> = {
+      locationId: resolvedLocationId,
+      email: caller.email,
+      firstName: callerFirstName,
+    };
+    if (callerLastName) callerContactPayload.lastName = callerLastName;
+    if (caller.phone) callerContactPayload.phone = normalizePhoneForBooking(caller.phone);
+
+    const callerContactResp = await client.post("/contacts/upsert", callerContactPayload, {
+      headers: { Version: "2021-07-28" },
+    });
+    const callerContactId = callerContactResp.data?.contact?.id;
+    if (!callerContactId) {
+      console.error("[GroupBook] Failed to create caller contact:", JSON.stringify(callerContactResp.data));
+      return res.status(500).json({ success: false, error: "Failed to create contact", message: "I'm sorry, I couldn't set up your contact information." });
+    }
+    console.log(`[GroupBook] Caller contact created: ${callerContactId} (${caller.name})`);
+
+    // Step 2: Book each person's appointments with rollback on failure
+    console.log("[GroupBook] Step 2: Booking appointments for all people...");
+
+    const bookingResults: PersonBookingResult[] = [];
+
+    // Book each person
+    for (let i = 0; i < people.length; i++) {
+      const person = people[i];
+      const personSlots = groupAvailability.results[i];
+      const isCaller = i === 0;
+      const isGuest = !isCaller;
+
+      console.log(`[GroupBook] Booking Person ${i + 1}: ${person.name} (${isCaller ? 'caller' : 'guest'})`);
+
+      const personAppointments: PersonBookingResult["appointments"] = [];
+      const personBlockSlotIds: string[] = [];
+
+      // Book each service in the person's chain
+      for (const slot of personSlots.slots) {
+        // FIX 3: For guests, append guest name to service title so spa knows who the appointment is for
+        // Caller's appointments: "Body Treatment-60 Mins"
+        // Guest's appointments: "Body Treatment-60 Mins (Amber)"
+        const serviceTitle = isGuest ? `${slot.service} (${person.name})` : slot.service;
+        console.log(`[GroupBook]   Service: ${serviceTitle} at ${slot.startTime}`);
+
+        // FIX 3: Use caller's contact info for ALL bookings to prevent name collision
+        // All appointments are associated with the caller's GHL contact
+        // Guest names appear in appointment title and notes
+        const bookResult = await bookServiceAppointment(
+          client,
+          resolvedLocationId,
+          slot.calendar_id,
+          slot.startTime,
+          serviceTitle,
+          isCaller ? caller.name : caller.name,  // Always use caller's name for contact
+          caller.email,   // Always use caller's email
+          caller.phone,   // Always use caller's phone
+          notes ? `${notes} | Guest: ${person.name} (Group booking: ${people.length} people)` : isGuest ? `Guest: ${person.name} | Group booking: ${people.length} people` : `Group booking: ${people.length} people`,
+          person.therapist_preference,
+          slot.staff_user_id || undefined,
+          callerContactId  // FIX 3: Pre-created contact prevents name overwriting
+        );
+
+        // Log the booking result
+        console.log(`[GroupBook]   bookServiceAppointment result: success=${bookResult.success}, apptId=${bookResult.appointmentId || 'N/A'}, error=${bookResult.error || 'none'}`);
+
+        if (!bookResult.success) {
+          console.log(`[GroupBook] FAILED: Could not book ${slot.service} for ${person.name}`);
+
+          // ROLLBACK: Cancel all appointments for this person
+          for (const appt of personAppointments) {
+            try {
+              await client.delete(`/calendars/events/appointments/${appt.appointmentId}`, {
+                headers: { Version: "2021-07-28" },
+              });
+              console.log(`[GroupBook] ROLLBACK: Cancelled ${appt.service} for ${person.name}`);
+            } catch (err: any) {
+              console.error(`[GroupBook] ROLLBACK FAILED: ${err.message}`);
+            }
+          }
+
+          // ROLLBACK: Cancel all appointments for previous people
+          for (const prevResult of bookingResults) {
+            for (const appt of prevResult.appointments) {
+              try {
+                await client.delete(`/calendars/events/appointments/${appt.appointmentId}`, {
+                  headers: { Version: "2021-07-28" },
+                });
+                console.log(`[GroupBook] ROLLBACK: Cancelled ${appt.service} for ${prevResult.person_name}`);
+              } catch (err: any) {
+                console.error(`[GroupBook] ROLLBACK FAILED: ${err.message}`);
+              }
+            }
+          }
+
+          return res.json({
+            success: false,
+            error: `Failed to book ${slot.service} for ${person.name}: ${bookResult.error}`,
+            message: `Could not complete the group booking. All appointments have been cancelled.`,
+          });
+        }
+
+        personAppointments.push({
+          appointmentId: bookResult.appointmentId!,
+          service: slot.service,
+          startTime: slot.startTime,
+          endTime: bookResult.endTime || slot.endTime,
+          staff_name: slot.staff_name,
+        });
+
+        // Small delay between bookings to avoid rate limits
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+
+      bookingResults.push({
+        person_index: i,
+        person_name: person.name,
+        is_caller: isCaller,  // FIX 4: Track caller vs guest for internal notes
+        appointments: personAppointments,
+        blockSlotIds: personBlockSlotIds,
+      });
+
+      console.log(`[GroupBook] ✓ Completed booking for ${person.name}: ${personAppointments.length} appointments`);
+    }
+
+    // FIX 4: Write internal notes to every appointment with full group context
+    // This gives staff visibility into the full group picture when they click on any appointment
+    console.log("[GroupBook] Step 3: Writing internal notes to all appointments...");
+
+    const allNames = people.map((p: any) => p.name).join(" + ");
+
+    for (const personResult of bookingResults) {
+      for (const appt of personResult.appointments) {
+        // Build the note content with full group manifest
+        let noteBody = `GROUP BOOKING\n`;
+        noteBody += `Package: ${pkg.package_name}\n`;
+        noteBody += `Party: ${allNames} (${people.length} people)\n\n`;
+        noteBody += `This appointment is for: ${personResult.person_name}${personResult.is_caller ? ' (caller)' : ' (guest)'}\n`;
+        noteBody += `Service: ${appt.service}\n`;
+
+        // Find this person's therapist preference
+        const personData = people.find((p: any) => p.name === personResult.person_name);
+        if (personData?.therapist_preference) {
+          noteBody += `Therapist preference: ${personData.therapist_preference}\n`;
+        }
+
+        noteBody += `\nAll appointments in this group:\n`;
+
+        for (const pr of bookingResults) {
+          noteBody += `\n${pr.person_name}${pr.is_caller ? ' (caller)' : ' (guest)'}:\n`;
+          for (const a of pr.appointments) {
+            // Convert startTime to local time for display
+            const localTime = DateTime.fromISO(a.startTime, { zone: tz }).toFormat("h:mm a");
+            noteBody += `  - ${a.service} @ ${localTime} (ID: ${a.appointmentId})\n`;
+          }
+        }
+
+        try {
+          await client.post(
+            `/calendars/events/appointments/${appt.appointmentId}/notes`,
+            { body: noteBody },
+            { headers: { Version: "2021-07-28" } }
+          );
+          console.log(`[GroupBook] Internal note written for ${appt.service} (${personResult.person_name})`);
+        } catch (noteErr: any) {
+          // Don't fail the whole booking if notes fail — appointments are already created
+          console.error(`[GroupBook] Failed to write note for ${appt.appointmentId}: ${noteErr?.message || noteErr}`);
+        }
+      }
+    }
+    console.log("[GroupBook] All internal notes written.");
+
+    // Build success response
+    const bookingDate = groupAvailability.results[0]?.date;
+    const response = {
+      success: true,
+      package_name: pkg.package_name,
+      num_people: people.length,
+      date: bookingDate,
+      bookings: bookingResults.map(r => ({
+        person_name: r.person_name,
+        appointments: r.appointments.map(a => ({
+          service: a.service,
+          startTime: a.startTime,
+          endTime: a.endTime,
+          staff_name: a.staff_name,
+          appointmentId: a.appointmentId,
+        })),
+      })),
+      message: buildGroupBookingConfirmationMessage(pkg.package_name, bookingResults, tz),
+    };
+
+    console.log("[GroupBook] ═══════════════════════════════════════════════════════");
+    console.log("[GroupBook] SUCCESS: All appointments booked");
+    console.log("[GroupBook] ═══════════════════════════════════════════════════════");
+
+    return res.json(response);
+  } catch (error: any) {
+    console.error("[GroupBook] ═══════════════════════════════════════════════════════");
+    console.error("[GroupBook] UNHANDLED ERROR:");
+    console.error("[GroupBook] Error message:", error?.message);
+    console.error("[GroupBook] Error response data:", JSON.stringify(error?.response?.data, null, 2));
+    console.error("[GroupBook] Error stack:", error?.stack);
+    console.error("[GroupBook] ═══════════════════════════════════════════════════════");
+    return res.status(500).json({
+      success: false,
+      error: error?.response?.data?.message || error.message,
+      message: "I'm sorry, something went wrong while booking. Please try again.",
+    });
+  }
+});
 
 /**
  * Build a human-readable confirmation message for group availability check.
@@ -5668,6 +5926,40 @@ function buildGroupConfirmationMessage(
   return msg;
 }
 
-// book-group endpoint REMOVED — use individual /api/calendar/book calls instead
+/**
+ * Build a human-readable confirmation message for completed group booking.
+ */
+function buildGroupBookingConfirmationMessage(
+  packageName: string,
+  results: PersonBookingResult[],
+  tz: string
+): string {
+  if (results.length === 0) return "No bookings were made.";
+
+  const firstAppt = results[0]?.appointments[0];
+  if (!firstAppt) return "No bookings were made.";
+
+  const dateDt = DateTime.fromISO(firstAppt.startTime, { zone: tz });
+  const dateStr = dateDt.toFormat("EEEE, MMMM d");
+
+  let msg = `Your ${packageName} has been booked for ${results.length} people on ${dateStr}:\n\n`;
+
+  for (const person of results) {
+    const firstSlot = person.appointments[0];
+    const lastSlot = person.appointments[person.appointments.length - 1];
+    const startTime = DateTime.fromISO(firstSlot.startTime, { zone: tz }).toFormat("h:mm a");
+    const endTime = DateTime.fromISO(lastSlot.endTime, { zone: tz }).toFormat("h:mm a");
+
+    msg += `**${person.person_name}**: ${startTime} - ${endTime}`;
+    if (firstSlot.staff_name) {
+      msg += ` with ${firstSlot.staff_name}`;
+    }
+    msg += `\n`;
+  }
+
+  msg += `\nConfirmation emails have been sent. See you soon!`;
+
+  return msg;
+}
 
 export default router;
