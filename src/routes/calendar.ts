@@ -4664,6 +4664,7 @@ interface GroupSlotResult {
 interface PersonBookingResult {
   person_index: number;
   person_name: string;
+  is_caller: boolean;  // FIX 4: Track whether this person is the caller or a guest
   appointments: Array<{
     appointmentId: string;
     service: string;
@@ -4816,7 +4817,8 @@ async function bookServiceAppointment(
   customerPhone: string,
   notes?: string,
   therapistPreference?: string,
-  staffUserId?: string  // BUG FIX: Assign to specific staff member
+  staffUserId?: string,  // BUG FIX: Assign to specific staff member
+  preCreatedContactId?: string  // FIX 3: Skip contact creation if provided (prevents name collision)
 ): Promise<{
   success: boolean;
   appointmentId?: string;
@@ -4838,30 +4840,36 @@ async function bookServiceAppointment(
     const slotBuffer = syncedCalendar?.slot_buffer || 15;
     console.log(`[BookService] Calendar settings: duration=${slotDuration}min, buffer=${slotBuffer}min`);
 
-    // Create/upsert contact
-    console.log(`[BookService] Upserting contact...`);
-    const nameParts = customerName.trim().split(/\s+/);
-    const firstName = nameParts[0];
-    const lastName = nameParts.slice(1).join(" ") || "";
+    // Create/upsert contact OR use pre-created contact (FIX 3: prevents name collision in group bookings)
+    let contactId: string;
+    if (preCreatedContactId) {
+      console.log(`[BookService] Using pre-created contact: ${preCreatedContactId}`);
+      contactId = preCreatedContactId;
+    } else {
+      console.log(`[BookService] Upserting contact...`);
+      const nameParts = customerName.trim().split(/\s+/);
+      const firstName = nameParts[0];
+      const lastName = nameParts.slice(1).join(" ") || "";
 
-    const contactPayload: Record<string, string> = {
-      locationId,
-      email: customerEmail,
-      firstName,
-    };
-    if (lastName) contactPayload.lastName = lastName;
-    if (customerPhone) contactPayload.phone = normalizePhoneForBooking(customerPhone);
+      const contactPayload: Record<string, string> = {
+        locationId,
+        email: customerEmail,
+        firstName,
+      };
+      if (lastName) contactPayload.lastName = lastName;
+      if (customerPhone) contactPayload.phone = normalizePhoneForBooking(customerPhone);
 
-    console.log(`[BookService] Contact payload:`, JSON.stringify(contactPayload));
-    const contactResp = await client.post("/contacts/upsert", contactPayload, {
-      headers: { Version: "2021-07-28" },
-    });
-    const contactId = contactResp.data?.contact?.id;
-    if (!contactId) {
-      console.error(`[BookService] Contact upsert returned no ID:`, JSON.stringify(contactResp.data));
-      return { success: false, error: "Failed to create contact - no ID returned" };
+      console.log(`[BookService] Contact payload:`, JSON.stringify(contactPayload));
+      const contactResp = await client.post("/contacts/upsert", contactPayload, {
+        headers: { Version: "2021-07-28" },
+      });
+      contactId = contactResp.data?.contact?.id;
+      if (!contactId) {
+        console.error(`[BookService] Contact upsert returned no ID:`, JSON.stringify(contactResp.data));
+        return { success: false, error: "Failed to create contact - no ID returned" };
+      }
+      console.log(`[BookService] Contact upserted: ${contactId}`);
     }
-    console.log(`[BookService] Contact upserted: ${contactId}`);
 
     // Calculate times using Luxon (preserves timezone from ISO string)
     const startDateTime = DateTime.fromISO(startTime);
@@ -5140,7 +5148,12 @@ function spellOutNumber(n: number): string {
  * }
  */
 router.post("/check-group-availability", async (req: Request, res: Response) => {
-  console.log("[GroupCheck] Request body:", JSON.stringify(req.body, null, 2));
+  // FIX 1: Detailed logging for debugging ElevenLabs tool call failures
+  console.log("[GroupCheck] ═══════════════════════════════════════════════════════");
+  console.log("[GroupCheck] INCOMING REQUEST");
+  console.log("[GroupCheck] Timestamp:", new Date().toISOString());
+  console.log("[GroupCheck] Raw body:", JSON.stringify(req.body, null, 2));
+  console.log("[GroupCheck] ═══════════════════════════════════════════════════════");
 
   try {
     const {
@@ -5165,12 +5178,15 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
     } = req.body;
 
     const resolvedLocationId = locationId || location_id;
+    console.log(`[GroupCheck] Resolved locationId: ${resolvedLocationId}`);
 
     // Validation
     if (!resolvedLocationId) {
+      console.log("[GroupCheck] VALIDATION FAILED: Missing locationId");
       return res.status(400).json({ success: false, error: "Missing required field: locationId", message: "I need the location ID to check availability." });
     }
     if (!package_name) {
+      console.log("[GroupCheck] VALIDATION FAILED: Missing package_name");
       return res.status(400).json({ success: false, error: "Missing required field: package_name", message: "I need to know which package you'd like to book." });
     }
 
@@ -5184,6 +5200,7 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       // Flat parameter format (for ElevenLabs)
       const size = parseInt(group_size) || 2;
       if (size < 2 || size > 4) {
+        console.log(`[GroupCheck] VALIDATION FAILED: group_size=${group_size} out of range (2-4)`);
         return res.status(400).json({
           success: false,
           error: "group_size must be between 2 and 4",
@@ -5207,6 +5224,7 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
 
       // Validate we have enough people
       if (people.length < 2) {
+        console.log(`[GroupCheck] VALIDATION FAILED: people.length=${people.length} < 2`);
         return res.status(400).json({
           success: false,
           error: "At least person_1_name and person_2_name are required",
@@ -5215,14 +5233,20 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       }
     }
 
+    // Log the reconstructed people array
+    console.log(`[GroupCheck] People array (${people.length}):`, JSON.stringify(people, null, 2));
+
     // Get installation
     const installation = await getInstallation(resolvedLocationId);
+    console.log(`[GroupCheck] Installation found: ${!!installation}, active: ${installation?.is_active}, timezone: ${installation?.timezone}`);
     if (!installation) {
+      console.log("[GroupCheck] VALIDATION FAILED: Installation not found");
       return res.status(404).json({ success: false, error: "Installation not found", message: "I couldn't find this location in our system." });
     }
 
     // Check if installation is active
     if (!installation.is_active) {
+      console.log("[GroupCheck] VALIDATION FAILED: Installation inactive");
       return res.status(403).json({
         success: false,
         error: "App installation is inactive. The business needs to reinstall from the GHL Marketplace.",
@@ -5232,12 +5256,15 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
 
     const tz = installation.timezone;
     if (!tz) {
+      console.log("[GroupCheck] VALIDATION FAILED: Timezone not configured");
       return res.status(500).json({ success: false, error: "Location timezone not configured", message: "I'm sorry, the location timezone hasn't been configured yet." });
     }
 
     // Look up the package
     const pkg = await getPackageByName(resolvedLocationId, package_name);
+    console.log(`[GroupCheck] Package lookup: ${pkg ? pkg.package_name : 'NOT FOUND'}, services: ${pkg?.services?.join(', ') || 'N/A'}`);
     if (!pkg) {
+      console.log(`[GroupCheck] VALIDATION FAILED: Package "${package_name}" not found`);
       const allPackages = await getPackages(resolvedLocationId);
       return res.status(404).json({
         success: false,
@@ -5262,7 +5289,18 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       console.log(`[GroupCheck] Parsed requested date: ${requested_date} => ${parsedDate}`);
     }
 
-    // Find group availability
+    // Find group availability - detailed logging before call
+    console.log("[GroupCheck] ═══════════════════════════════════════════════════════");
+    console.log("[GroupCheck] Calling findGroupPackageAvailability with:");
+    console.log(`[GroupCheck]   locationId: ${resolvedLocationId}`);
+    console.log(`[GroupCheck]   services: ${pkg.services.join(', ')}`);
+    console.log(`[GroupCheck]   timePreference: ${time_preference || '(none)'}`);
+    console.log(`[GroupCheck]   requestedDate: ${parsedDate || '(soonest)'}`);
+    console.log(`[GroupCheck]   timezone: ${tz}`);
+    console.log(`[GroupCheck]   people: ${JSON.stringify(people.map((p: any) => ({ name: p.name, pref: p.therapist_preference })))}`);
+    console.log(`[GroupCheck]   requestedTime: ${requested_time || '(none)'}`);
+    console.log("[GroupCheck] ═══════════════════════════════════════════════════════");
+
     const groupResult = await findGroupPackageAvailability(
       resolvedLocationId,
       pkg.services,
@@ -5279,7 +5317,11 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       requested_time
     );
 
+    // Log the result
+    console.log(`[GroupCheck] findGroupPackageAvailability returned: success=${groupResult.success}`);
     if (!groupResult.success) {
+      console.log(`[GroupCheck] FAILED: ${groupResult.error}`);
+      console.log(`[GroupCheck] Partial results: ${JSON.stringify(groupResult.results, null, 2)}`);
       return res.json({
         success: false,
         error: groupResult.error,
@@ -5304,7 +5346,12 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
     console.log("[GroupCheck] Success:", JSON.stringify(response, null, 2));
     return res.json(response);
   } catch (error: any) {
-    console.error("[GroupCheck] Error:", error?.response?.data || error.message);
+    console.error("[GroupCheck] ═══════════════════════════════════════════════════════");
+    console.error("[GroupCheck] UNHANDLED ERROR:");
+    console.error("[GroupCheck] Error message:", error?.message);
+    console.error("[GroupCheck] Error response data:", JSON.stringify(error?.response?.data, null, 2));
+    console.error("[GroupCheck] Error stack:", error?.stack);
+    console.error("[GroupCheck] ═══════════════════════════════════════════════════════");
     return res.status(500).json({
       success: false,
       error: error?.response?.data?.message || error.message,
@@ -5349,8 +5396,12 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
  * }
  */
 router.post("/book-group", async (req: Request, res: Response) => {
+  // FIX 2: Detailed logging for debugging ElevenLabs tool call failures
   console.log("[GroupBook] ═══════════════════════════════════════════════════════");
-  console.log("[GroupBook] Request body:", JSON.stringify(req.body, null, 2));
+  console.log("[GroupBook] INCOMING REQUEST");
+  console.log("[GroupBook] Timestamp:", new Date().toISOString());
+  console.log("[GroupBook] Raw body:", JSON.stringify(req.body, null, 2));
+  console.log("[GroupBook] ═══════════════════════════════════════════════════════");
 
   try {
     const {
@@ -5387,12 +5438,15 @@ router.post("/book-group", async (req: Request, res: Response) => {
     } = req.body;
 
     const resolvedLocationId = locationId || location_id;
+    console.log(`[GroupBook] Resolved locationId: ${resolvedLocationId}`);
 
     // Validation
     if (!resolvedLocationId) {
+      console.log("[GroupBook] VALIDATION FAILED: Missing locationId");
       return res.status(400).json({ success: false, error: "Missing required field: locationId", message: "I need the location ID to complete the booking." });
     }
     if (!package_name) {
+      console.log("[GroupBook] VALIDATION FAILED: Missing package_name");
       return res.status(400).json({ success: false, error: "Missing required field: package_name", message: "I need to know which package you'd like to book." });
     }
 
@@ -5406,6 +5460,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
       // Flat parameter format (for ElevenLabs)
       const size = parseInt(group_size) || 2;
       if (size < 2 || size > 4) {
+        console.log(`[GroupBook] VALIDATION FAILED: group_size=${group_size} out of range (2-4)`);
         return res.status(400).json({
           success: false,
           error: "group_size must be between 2 and 4",
@@ -5449,6 +5504,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
 
       // Validate we have enough people with complete info
       if (people.length < 2) {
+        console.log(`[GroupBook] VALIDATION FAILED: people.length=${people.length} < 2`);
         return res.status(400).json({
           success: false,
           error: "At least 2 people with complete contact info (name, email, phone) are required",
@@ -5457,10 +5513,18 @@ router.post("/book-group", async (req: Request, res: Response) => {
       }
     }
 
+    // Log the reconstructed people array
+    console.log(`[GroupBook] Reconstructed people (${people.length}):`);
+    for (let i = 0; i < people.length; i++) {
+      const p = people[i];
+      console.log(`[GroupBook]   Person ${i+1}: name="${p.name}", email="${p.email}", phone="${p.phone}", pref="${p.therapist_preference || 'none'}"`);
+    }
+
     // Validate each person has required fields
     for (let i = 0; i < people.length; i++) {
       const p = people[i];
       if (!p.name || !p.email || !p.phone) {
+        console.log(`[GroupBook] VALIDATION FAILED: Person ${i + 1} missing required fields`);
         return res.status(400).json({
           success: false,
           error: `Person ${i + 1} is missing required fields (name, email, phone)`,
@@ -5471,12 +5535,15 @@ router.post("/book-group", async (req: Request, res: Response) => {
 
     // Get installation
     const installation = await getInstallation(resolvedLocationId);
+    console.log(`[GroupBook] Installation found: ${!!installation}, active: ${installation?.is_active}, timezone: ${installation?.timezone}`);
     if (!installation) {
+      console.log("[GroupBook] VALIDATION FAILED: Installation not found");
       return res.status(404).json({ success: false, error: "Installation not found", message: "I couldn't find this location in our system." });
     }
 
     // Check if installation is active
     if (!installation.is_active) {
+      console.log("[GroupBook] VALIDATION FAILED: Installation inactive");
       return res.status(403).json({
         success: false,
         error: "App installation is inactive. The business needs to reinstall from the GHL Marketplace.",
@@ -5486,12 +5553,15 @@ router.post("/book-group", async (req: Request, res: Response) => {
 
     const tz = installation.timezone;
     if (!tz) {
+      console.log("[GroupBook] VALIDATION FAILED: Timezone not configured");
       return res.status(500).json({ success: false, error: "Location timezone not configured", message: "I'm sorry, the location timezone hasn't been configured yet." });
     }
 
     // Look up the package
     const pkg = await getPackageByName(resolvedLocationId, package_name);
+    console.log(`[GroupBook] Package lookup: ${pkg ? pkg.package_name : 'NOT FOUND'}, services: ${pkg?.services?.join(', ') || 'N/A'}`);
     if (!pkg) {
+      console.log(`[GroupBook] VALIDATION FAILED: Package "${package_name}" not found`);
       return res.status(404).json({ success: false, error: `Package "${package_name}" not found`, message: `I couldn't find a package called "${package_name}".` });
     }
 
@@ -5512,7 +5582,17 @@ router.post("/book-group", async (req: Request, res: Response) => {
     const client = await ghl.requests(resolvedLocationId);
 
     // Step 1: Find availability for the whole group
-    console.log("[GroupBook] Step 1: Finding availability for all people...");
+    console.log("[GroupBook] ═══════════════════════════════════════════════════════");
+    console.log("[GroupBook] Step 1: Calling findGroupPackageAvailability with:");
+    console.log(`[GroupBook]   locationId: ${resolvedLocationId}`);
+    console.log(`[GroupBook]   services: ${pkg.services.join(', ')}`);
+    console.log(`[GroupBook]   timePreference: ${time_preference || '(none)'}`);
+    console.log(`[GroupBook]   selectedDate: ${parsedDate || '(soonest)'}`);
+    console.log(`[GroupBook]   timezone: ${tz}`);
+    console.log(`[GroupBook]   people: ${JSON.stringify(people.map((p: any) => ({ name: p.name, pref: p.therapist_preference })))}`);
+    console.log(`[GroupBook]   requestedTime: ${requested_time || '(none)'}`);
+    console.log("[GroupBook] ═══════════════════════════════════════════════════════");
+
     const groupAvailability = await findGroupPackageAvailability(
       resolvedLocationId,
       pkg.services,
@@ -5529,13 +5609,42 @@ router.post("/book-group", async (req: Request, res: Response) => {
       requested_time
     );
 
+    // Log the result
+    console.log(`[GroupBook] findGroupPackageAvailability returned: success=${groupAvailability.success}`);
     if (!groupAvailability.success) {
+      console.log(`[GroupBook] FAILED: ${groupAvailability.error}`);
+      console.log(`[GroupBook] Partial results: ${JSON.stringify(groupAvailability.results, null, 2)}`);
       return res.json({
         success: false,
         error: groupAvailability.error,
         message: `Unable to find availability for ${people.length} people. ${groupAvailability.error}`,
       });
     }
+
+    // FIX 3: Pre-create caller contact ONCE and reuse for all bookings
+    // This prevents the contact name collision bug where guest names overwrite the caller's GHL contact
+    const caller = people[0]; // First person is always the caller
+    console.log("[GroupBook] Pre-creating caller contact...");
+    const callerNameParts = caller.name.trim().split(/\s+/);
+    const callerFirstName = callerNameParts[0];
+    const callerLastName = callerNameParts.slice(1).join(" ") || "";
+    const callerContactPayload: Record<string, string> = {
+      locationId: resolvedLocationId,
+      email: caller.email,
+      firstName: callerFirstName,
+    };
+    if (callerLastName) callerContactPayload.lastName = callerLastName;
+    if (caller.phone) callerContactPayload.phone = normalizePhoneForBooking(caller.phone);
+
+    const callerContactResp = await client.post("/contacts/upsert", callerContactPayload, {
+      headers: { Version: "2021-07-28" },
+    });
+    const callerContactId = callerContactResp.data?.contact?.id;
+    if (!callerContactId) {
+      console.error("[GroupBook] Failed to create caller contact:", JSON.stringify(callerContactResp.data));
+      return res.status(500).json({ success: false, error: "Failed to create contact", message: "I'm sorry, I couldn't set up your contact information." });
+    }
+    console.log(`[GroupBook] Caller contact created: ${callerContactId} (${caller.name})`);
 
     // Step 2: Book each person's appointments with rollback on failure
     console.log("[GroupBook] Step 2: Booking appointments for all people...");
@@ -5546,30 +5655,42 @@ router.post("/book-group", async (req: Request, res: Response) => {
     for (let i = 0; i < people.length; i++) {
       const person = people[i];
       const personSlots = groupAvailability.results[i];
+      const isCaller = i === 0;
+      const isGuest = !isCaller;
 
-      console.log(`[GroupBook] Booking Person ${i + 1}: ${person.name}`);
+      console.log(`[GroupBook] Booking Person ${i + 1}: ${person.name} (${isCaller ? 'caller' : 'guest'})`);
 
       const personAppointments: PersonBookingResult["appointments"] = [];
       const personBlockSlotIds: string[] = [];
 
       // Book each service in the person's chain
       for (const slot of personSlots.slots) {
-        console.log(`[GroupBook]   Service: ${slot.service} at ${slot.startTime}`);
+        // FIX 3: For guests, append guest name to service title so spa knows who the appointment is for
+        // Caller's appointments: "Body Treatment-60 Mins"
+        // Guest's appointments: "Body Treatment-60 Mins (Amber)"
+        const serviceTitle = isGuest ? `${slot.service} (${person.name})` : slot.service;
+        console.log(`[GroupBook]   Service: ${serviceTitle} at ${slot.startTime}`);
 
-        // Create the appointment
+        // FIX 3: Use caller's contact info for ALL bookings to prevent name collision
+        // All appointments are associated with the caller's GHL contact
+        // Guest names appear in appointment title and notes
         const bookResult = await bookServiceAppointment(
           client,
           resolvedLocationId,
           slot.calendar_id,
           slot.startTime,
-          slot.service,
-          person.name,
-          person.email,
-          person.phone,
-          notes ? `${notes} (Group booking: ${people.length} people)` : `Group booking: ${people.length} people`,
+          serviceTitle,
+          isCaller ? caller.name : caller.name,  // Always use caller's name for contact
+          caller.email,   // Always use caller's email
+          caller.phone,   // Always use caller's phone
+          notes ? `${notes} | Guest: ${person.name} (Group booking: ${people.length} people)` : isGuest ? `Guest: ${person.name} | Group booking: ${people.length} people` : `Group booking: ${people.length} people`,
           person.therapist_preference,
-          slot.staff_user_id || undefined
+          slot.staff_user_id || undefined,
+          callerContactId  // FIX 3: Pre-created contact prevents name overwriting
         );
+
+        // Log the booking result
+        console.log(`[GroupBook]   bookServiceAppointment result: success=${bookResult.success}, apptId=${bookResult.appointmentId || 'N/A'}, error=${bookResult.error || 'none'}`);
 
         if (!bookResult.success) {
           console.log(`[GroupBook] FAILED: Could not book ${slot.service} for ${person.name}`);
@@ -5622,12 +5743,60 @@ router.post("/book-group", async (req: Request, res: Response) => {
       bookingResults.push({
         person_index: i,
         person_name: person.name,
+        is_caller: isCaller,  // FIX 4: Track caller vs guest for internal notes
         appointments: personAppointments,
         blockSlotIds: personBlockSlotIds,
       });
 
       console.log(`[GroupBook] ✓ Completed booking for ${person.name}: ${personAppointments.length} appointments`);
     }
+
+    // FIX 4: Write internal notes to every appointment with full group context
+    // This gives staff visibility into the full group picture when they click on any appointment
+    console.log("[GroupBook] Step 3: Writing internal notes to all appointments...");
+
+    const allNames = people.map((p: any) => p.name).join(" + ");
+
+    for (const personResult of bookingResults) {
+      for (const appt of personResult.appointments) {
+        // Build the note content with full group manifest
+        let noteBody = `GROUP BOOKING\n`;
+        noteBody += `Package: ${pkg.package_name}\n`;
+        noteBody += `Party: ${allNames} (${people.length} people)\n\n`;
+        noteBody += `This appointment is for: ${personResult.person_name}${personResult.is_caller ? ' (caller)' : ' (guest)'}\n`;
+        noteBody += `Service: ${appt.service}\n`;
+
+        // Find this person's therapist preference
+        const personData = people.find((p: any) => p.name === personResult.person_name);
+        if (personData?.therapist_preference) {
+          noteBody += `Therapist preference: ${personData.therapist_preference}\n`;
+        }
+
+        noteBody += `\nAll appointments in this group:\n`;
+
+        for (const pr of bookingResults) {
+          noteBody += `\n${pr.person_name}${pr.is_caller ? ' (caller)' : ' (guest)'}:\n`;
+          for (const a of pr.appointments) {
+            // Convert startTime to local time for display
+            const localTime = DateTime.fromISO(a.startTime, { zone: tz }).toFormat("h:mm a");
+            noteBody += `  - ${a.service} @ ${localTime} (ID: ${a.appointmentId})\n`;
+          }
+        }
+
+        try {
+          await client.post(
+            `/calendars/events/appointments/${appt.appointmentId}/notes`,
+            { body: noteBody },
+            { headers: { Version: "2021-07-28" } }
+          );
+          console.log(`[GroupBook] Internal note written for ${appt.service} (${personResult.person_name})`);
+        } catch (noteErr: any) {
+          // Don't fail the whole booking if notes fail — appointments are already created
+          console.error(`[GroupBook] Failed to write note for ${appt.appointmentId}: ${noteErr?.message || noteErr}`);
+        }
+      }
+    }
+    console.log("[GroupBook] All internal notes written.");
 
     // Build success response
     const bookingDate = groupAvailability.results[0]?.date;
@@ -5655,7 +5824,12 @@ router.post("/book-group", async (req: Request, res: Response) => {
 
     return res.json(response);
   } catch (error: any) {
-    console.error("[GroupBook] Error:", error?.response?.data || error.message);
+    console.error("[GroupBook] ═══════════════════════════════════════════════════════");
+    console.error("[GroupBook] UNHANDLED ERROR:");
+    console.error("[GroupBook] Error message:", error?.message);
+    console.error("[GroupBook] Error response data:", JSON.stringify(error?.response?.data, null, 2));
+    console.error("[GroupBook] Error stack:", error?.stack);
+    console.error("[GroupBook] ═══════════════════════════════════════════════════════");
     return res.status(500).json({
       success: false,
       error: error?.response?.data?.message || error.message,
