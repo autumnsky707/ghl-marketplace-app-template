@@ -4735,13 +4735,19 @@ async function findGroupPackageAvailability(
   }
 
   // Step 3: For each person, determine eligible therapists based on gender preference
+  // IMPORTANT: Gender preference ONLY applies to massage services, not body treatments, facials, etc.
+  const isMassageCalendar = isMassageService(firstService, calendars[0].calendar_name || undefined);
+  console.log(`[GroupParallel] Service "${firstService}" is massage: ${isMassageCalendar} (gender filter ${isMassageCalendar ? "ENABLED" : "DISABLED"})`);
+
   const eligibleTherapistsPerPerson: Array<{ person: PersonPreference; therapists: typeof allTeamMembers }> = [];
   for (const person of people) {
     let eligible = allTeamMembers;
-    if (person.therapist_preference && ["male", "female"].includes(person.therapist_preference.toLowerCase())) {
+
+    // Only apply gender filter for massage services
+    if (isMassageCalendar && person.therapist_preference && ["male", "female"].includes(person.therapist_preference.toLowerCase())) {
       const pref = person.therapist_preference.toLowerCase();
       eligible = allTeamMembers.filter(tm => tm.gender === pref);
-      console.log(`[GroupParallel] ${person.name} (wants ${pref}): ${eligible.length} eligible therapists`);
+      console.log(`[GroupParallel] ${person.name} (wants ${pref} for massage): ${eligible.length} eligible therapists`);
       if (eligible.length === 0) {
         console.log(`[GroupParallel] ERROR: No ${pref} therapists available for ${person.name}`);
         return {
@@ -4751,7 +4757,8 @@ async function findGroupPackageAvailability(
         };
       }
     } else {
-      console.log(`[GroupParallel] ${person.name} (any gender): ${eligible.length} eligible therapists`);
+      // Non-massage service OR no gender preference: all team members eligible
+      console.log(`[GroupParallel] ${person.name} (${isMassageCalendar ? "any gender" : "non-massage service"}): ${eligible.length} eligible therapists`);
     }
     eligibleTherapistsPerPerson.push({ person, therapists: eligible });
   }
