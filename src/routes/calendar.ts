@@ -1976,8 +1976,6 @@ router.post("/book", async (req: Request, res: Response) => {
     const therapistPreference = body.therapistPreference || body.therapist_preference;
     const strictGender = body.strictGender || body.strict_gender;  // When true, no gender fallback
     const notes = body.notes;
-    const groupBookingNote = body.group_booking_note;  // Optional: "Group booking with: John, Jane" for group bookings
-    const existingContactId = body.contact_id || body.contactId;  // Optional: reuse existing contact for group bookings
 
     // ========== PACKAGE BOOKING ==========
     if (type === "package") {
@@ -2545,16 +2543,6 @@ router.post("/book", async (req: Request, res: Response) => {
         console.log(`[Book]   ${idx + 1}. ${s.service}: ${s.startTime} -> ${s.endTime} (staff: ${s.staff_name || "any"}, userId: ${s.staff_user_id || "none"})`);
       });
 
-      // Build notes with group booking info if provided
-      let finalNotes = notes || "";
-      if (groupBookingNote) {
-        finalNotes = finalNotes ? `${finalNotes} | ${groupBookingNote}` : groupBookingNote;
-        console.log(`[Book] Group booking note appended: ${groupBookingNote}`);
-      }
-
-      // Track contactId from first booking to reuse for subsequent bookings in same package
-      let bookingContactId: string | undefined = existingContactId;
-
       for (let i = 0; i < packagePlan.slots.length; i++) {
         const slotInfo = packagePlan.slots[i];
         console.log(`[Book] ===== Booking service ${i + 1}/${packagePlan.slots.length}: ${slotInfo.service} =====`);
@@ -2562,7 +2550,6 @@ router.post("/book", async (req: Request, res: Response) => {
         console.log(`[Book]   Start time: ${slotInfo.startTime}`);
         console.log(`[Book]   Staff: ${slotInfo.staff_name || "any"} (userId: ${slotInfo.staff_user_id || "none"})`);
         console.log(`[Book]   Customer: ${customerName}, ${customerEmail}, ${customerPhone}`);
-        console.log(`[Book]   Existing contactId: ${bookingContactId || "(will create new)"}`);
 
         try {
           console.log(`[Book]   Calling bookServiceAppointment...`);
@@ -2575,17 +2562,10 @@ router.post("/book", async (req: Request, res: Response) => {
             customerName,
             customerEmail,
             customerPhone,
-            finalNotes,
+            notes,
             therapistPreference,
-            slotInfo.staff_user_id || undefined,
-            bookingContactId  // Reuse contact for all services in package
+            slotInfo.staff_user_id || undefined
           );
-
-          // Capture contactId from first booking for subsequent services
-          if (bookingResult.contactId && !bookingContactId) {
-            bookingContactId = bookingResult.contactId;
-            console.log(`[Book]   Captured contactId for reuse: ${bookingContactId}`);
-          }
 
           console.log(`[Book]   bookServiceAppointment result:`, JSON.stringify(bookingResult));
 
@@ -2704,7 +2684,6 @@ router.post("/book", async (req: Request, res: Response) => {
         total_duration_minutes: pkg.total_duration_minutes,
         appointments: confirmedAppointments,
         confirmation_message: confirmationMessage,
-        contactId: bookingContactId,  // Return for group bookings (Sophia passes this to subsequent guests)
       });
     }
 
@@ -3401,8 +3380,6 @@ router.post("/book-package", async (req: Request, res: Response) => {
       notes,
       therapist_preference,
       strict_gender,  // When true, no gender fallback for any service
-      group_booking_note,  // Optional: "Group booking with: John, Jane" for group bookings
-      contact_id,  // Optional: reuse existing contact for group bookings
     } = req.body;
 
     const resolvedLocationId = locationId || location_id;
@@ -3596,16 +3573,6 @@ router.post("/book-package", async (req: Request, res: Response) => {
 
     console.log(`[BookPackage] Found valid day: ${packagePlan.date} with ${packagePlan.slots.length} slots`);
 
-    // Build notes with group booking info if provided
-    let finalNotes = notes || "";
-    if (group_booking_note) {
-      finalNotes = finalNotes ? `${finalNotes} | ${group_booking_note}` : group_booking_note;
-      console.log(`[BookPackage] Group booking note appended: ${group_booking_note}`);
-    }
-
-    // Track contactId from first booking to reuse for subsequent bookings
-    let bookingContactId: string | undefined = contact_id;
-
     // Step 4: Book all services on the found day
     const appointments: Array<{
       service: string;
@@ -3624,7 +3591,6 @@ router.post("/book-package", async (req: Request, res: Response) => {
     for (let i = 0; i < packagePlan.slots.length; i++) {
       const slotInfo = packagePlan.slots[i];
       console.log(`[BookPackage] Booking service ${i + 1}/${packagePlan.slots.length}: ${slotInfo.service} at ${slotInfo.startTime}`);
-      console.log(`[BookPackage] Existing contactId: ${bookingContactId || "(will create new)"}`);
 
       try {
         const bookingResult = await bookServiceAppointment(
@@ -3636,17 +3602,10 @@ router.post("/book-package", async (req: Request, res: Response) => {
           customer_name,
           email,
           phone,
-          finalNotes,
+          notes,
           therapist_preference,
-          slotInfo.staff_user_id || undefined,  // BUG FIX: Assign to specific staff
-          bookingContactId  // Reuse contact for all services in package
+          slotInfo.staff_user_id || undefined  // BUG FIX: Assign to specific staff
         );
-
-        // Capture contactId from first booking for subsequent services
-        if (bookingResult.contactId && !bookingContactId) {
-          bookingContactId = bookingResult.contactId;
-          console.log(`[BookPackage] Captured contactId for reuse: ${bookingContactId}`);
-        }
 
         if (!bookingResult.success) {
           console.log(`[BookPackage] Booking failed for ${slotInfo.service}: ${bookingResult.error}`);
@@ -3731,7 +3690,6 @@ router.post("/book-package", async (req: Request, res: Response) => {
       total_duration_minutes: pkg.total_duration_minutes,
       appointments: confirmedAppointments,
       confirmation_message: confirmationMessage,
-      contactId: bookingContactId,  // Return for group bookings (Sophia passes this to subsequent guests)
     });
 
   } catch (error: any) {
@@ -4706,42 +4664,36 @@ interface GroupSlotResult {
 // PersonBookingResult interface REMOVED — book-group endpoint removed
 
 /**
- * PHASE 3: Find PARALLEL group availability using intersection algorithm.
+ * PHASE 3: Find PARALLEL package availability for multiple people (couples/groups).
  *
- * This is the industry-standard approach used by Zenoti, Boulevard, Mindbody, and Vagaro.
- *
- * Strategy:
+ * INTERSECTION ALGORITHM:
  * 1. Get the first service in the package to find the calendar
  * 2. Get ALL team members for that calendar (with gender info)
- * 3. For each person, filter therapists by their gender preference
- * 4. Fetch free slots for each therapist IN PARALLEL using GHL API with userId param
- * 5. Find INTERSECTION: times where N different therapists are ALL free simultaneously
- * 6. Return ONLY parallel start times (everyone starts at the SAME time with DIFFERENT therapists)
+ * 3. Fetch free slots for EACH therapist separately (using userId parameter)
+ * 4. Build a map of time -> available therapists at that time
+ * 5. Find times where N DIFFERENT therapists (matching gender preferences) are ALL free
+ * 6. Return ONLY parallel start times (everyone starts at the SAME time)
  *
- * Key insight: We query GHL's free-slots endpoint per therapist, then find the overlap.
- * This guarantees parallel booking and avoids the "split to different days" problem.
+ * This is the industry-standard approach used by Zenoti, Boulevard, Mindbody, and Vagaro.
  */
-async function findGroupParallelAvailability(
-  client: any,
+async function findGroupPackageAvailability(
   locationId: string,
-  packageName: string,
   services: string[],
   timePreference: string,
   requestedDate: string | null,
   tz: string,
+  installation: any,
+  localNow: Date,
   people: PersonPreference[],
   requestedTime?: string
 ): Promise<{
   success: boolean;
   results: GroupSlotResult[];
-  date?: string;
-  startTime?: string;
   error?: string;
 }> {
   console.log(`[GroupParallel] ═══════════════════════════════════════════════════════`);
   console.log(`[GroupParallel] INTERSECTION ALGORITHM: Finding PARALLEL slots for ${people.length} people`);
-  console.log(`[GroupParallel] Package: ${packageName}`);
-  console.log(`[GroupParallel] Services: ${services.join(", ")}`);
+  console.log(`[GroupParallel] Package services: ${services.join(", ")}`);
   console.log(`[GroupParallel] Time preference: ${timePreference || "(none)"}`);
   console.log(`[GroupParallel] Requested date: ${requestedDate || "(soonest)"}`);
   console.log(`[GroupParallel] Requested time: ${requestedTime || "(none)"}`);
@@ -4783,18 +4735,19 @@ async function findGroupParallelAvailability(
   }
 
   // Step 3: For each person, determine eligible therapists based on gender preference
-  const eligibleTherapistsPerPerson: { person: PersonPreference; therapists: typeof allTeamMembers }[] = [];
+  const eligibleTherapistsPerPerson: Array<{ person: PersonPreference; therapists: typeof allTeamMembers }> = [];
   for (const person of people) {
     let eligible = allTeamMembers;
-    if (person.therapist_preference) {
-      eligible = allTeamMembers.filter(tm => tm.gender === person.therapist_preference);
-      console.log(`[GroupParallel] ${person.name} (wants ${person.therapist_preference}): ${eligible.length} eligible therapists`);
+    if (person.therapist_preference && ["male", "female"].includes(person.therapist_preference.toLowerCase())) {
+      const pref = person.therapist_preference.toLowerCase();
+      eligible = allTeamMembers.filter(tm => tm.gender === pref);
+      console.log(`[GroupParallel] ${person.name} (wants ${pref}): ${eligible.length} eligible therapists`);
       if (eligible.length === 0) {
-        console.log(`[GroupParallel] ERROR: No ${person.therapist_preference} therapists available for ${person.name}`);
+        console.log(`[GroupParallel] ERROR: No ${pref} therapists available for ${person.name}`);
         return {
           success: false,
           results: [],
-          error: `No ${person.therapist_preference} therapist available for ${person.name}. Would they be flexible on therapist preference?`,
+          error: `No ${pref} therapist available for ${person.name}. Would they be flexible on therapist preference?`,
         };
       }
     } else {
@@ -4804,29 +4757,19 @@ async function findGroupParallelAvailability(
   }
 
   // Step 4: Determine date range to search
-  const localNow = DateTime.now().setZone(tz);
+  const DAYS_TO_SEARCH = 14;
+  const localNowDt = DateTime.fromJSDate(localNow, { zone: tz });
   let searchStart: DateTime;
   let searchEnd: DateTime;
 
   if (requestedDate) {
-    // Parse the requested date (returns ISO string like "2026-02-15")
-    const parsedStr = parseRequestedDate(requestedDate, localNow.toJSDate(), tz);
-    if (parsedStr) {
-      const parsedDt = DateTime.fromISO(parsedStr, { zone: tz });
-      searchStart = parsedDt.startOf("day");
-      searchEnd = parsedDt.endOf("day");
-      console.log(`[GroupParallel] Searching specific date: ${searchStart.toISODate()}`);
-    } else {
-      // Couldn't parse, search next 7 days
-      searchStart = localNow.startOf("day");
-      searchEnd = localNow.plus({ days: 7 }).endOf("day");
-      console.log(`[GroupParallel] Could not parse "${requestedDate}", searching next 7 days`);
-    }
+    searchStart = DateTime.fromISO(requestedDate, { zone: tz }).startOf("day");
+    searchEnd = DateTime.fromISO(requestedDate, { zone: tz }).endOf("day");
+    console.log(`[GroupParallel] Searching specific date: ${searchStart.toISODate()}`);
   } else {
-    // No date specified, search next 7 days
-    searchStart = localNow.startOf("day");
-    searchEnd = localNow.plus({ days: 7 }).endOf("day");
-    console.log(`[GroupParallel] No date specified, searching next 7 days`);
+    searchStart = localNowDt.startOf("day");
+    searchEnd = localNowDt.plus({ days: DAYS_TO_SEARCH }).endOf("day");
+    console.log(`[GroupParallel] Searching next ${DAYS_TO_SEARCH} days`);
   }
 
   // Step 5: Fetch free slots for ALL unique therapists in parallel
@@ -4838,171 +4781,189 @@ async function findGroupParallelAvailability(
   }
   console.log(`[GroupParallel] Fetching free slots for ${uniqueTherapistIds.size} unique therapists...`);
 
-  // Map: therapistUserId -> Set of free slot start times (ISO strings)
-  const therapistFreeSlots: Map<string, Set<string>> = new Map();
-  const therapistNameMap: Map<string, string> = new Map();
+  // Map: therapistUserId -> { name, gender, slots: Map<date, Set<timeSlot>> }
+  const therapistSlotsMap: Map<string, { name: string; gender: string | null; slots: Map<string, Set<string>> }> = new Map();
+
+  const startMs = searchStart.toMillis();
+  const endMs = searchEnd.toMillis();
 
   const fetchPromises = Array.from(uniqueTherapistIds).map(async (userId) => {
     const therapist = allTeamMembers.find(tm => tm.user_id === userId);
-    therapistNameMap.set(userId, therapist?.user_name || "Unknown");
+    const therapistName = therapist?.user_name || "Unknown";
+    const therapistGender = therapist?.gender || null;
 
     try {
-      const slotsResp = await client.get(`/calendars/${calendarId}/free-slots`, {
-        params: {
-          startDate: searchStart.toMillis(),
-          endDate: searchEnd.toMillis(),
-          timezone: tz,
-          userId: userId,
+      const slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${calendarId}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}&userId=${encodeURIComponent(userId)}`;
+      console.log(`[GroupParallel] Fetching slots for ${therapistName} (${therapistGender || "unknown"}) userId=${userId}`);
+
+      const resp = await axios.get(slotsUrl, {
+        headers: {
+          Authorization: `Bearer ${installation.access_token}`,
+          Version: "2021-07-28",
         },
-        headers: { Version: "2021-07-28" },
       });
 
-      const freeSlots = new Set<string>();
-      const slotsData = slotsResp.data || {};
+      const rawData = resp.data || {};
+      const slotsByDate: Map<string, Set<string>> = new Map();
+      let totalSlots = 0;
 
-      // GHL returns { "YYYY-MM-DD": { slots: [{ slot: "HH:mm" }] } }
-      for (const [dateStr, dayData] of Object.entries(slotsData)) {
-        const daySlots = (dayData as any)?.slots || [];
-        for (const slotObj of daySlots) {
-          const slotTime = slotObj.slot; // "09:00", "09:30", etc.
-          // Convert to full ISO datetime
-          const slotDt = DateTime.fromFormat(`${dateStr} ${slotTime}`, "yyyy-MM-dd HH:mm", { zone: tz });
-          if (slotDt.isValid && slotDt > localNow) {
-            freeSlots.add(slotDt.toISO()!);
+      for (const dateKey of Object.keys(rawData)) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) continue;
+        const entry = rawData[dateKey];
+        const isoSlots: string[] = Array.isArray(entry) ? entry : entry?.slots || [];
+
+        const slotsSet = new Set<string>();
+        for (const isoStr of isoSlots) {
+          // Parse ISO time to HH:mm format for comparison
+          const slotDt = DateTime.fromISO(isoStr, { zone: tz });
+          if (slotDt.isValid && slotDt > localNowDt) {
+            slotsSet.add(slotDt.toFormat("HH:mm"));
           }
+        }
+        if (slotsSet.size > 0) {
+          slotsByDate.set(dateKey, slotsSet);
+          totalSlots += slotsSet.size;
         }
       }
 
-      console.log(`[GroupParallel] ${therapist?.user_name}: ${freeSlots.size} free slots`);
-      therapistFreeSlots.set(userId, freeSlots);
+      console.log(`[GroupParallel] ${therapistName}: ${totalSlots} free slots across ${slotsByDate.size} days`);
+      therapistSlotsMap.set(userId, { name: therapistName, gender: therapistGender, slots: slotsByDate });
     } catch (err: any) {
-      console.log(`[GroupParallel] ERROR fetching slots for ${therapist?.user_name}: ${err.message}`);
-      therapistFreeSlots.set(userId, new Set());
+      console.error(`[GroupParallel] ERROR fetching slots for ${therapistName}: ${err.message}`);
+      therapistSlotsMap.set(userId, { name: therapistName, gender: therapistGender, slots: new Map() });
     }
   });
 
   await Promise.all(fetchPromises);
 
-  // Step 6: Find intersection - times where N DIFFERENT therapists are ALL free
-  // We need to assign each person to a unique therapist who is free at the same time
-  console.log(`[GroupParallel] Finding intersection across ${people.length} people...`);
+  // Step 6: Build a map of (date, time) -> available therapists
+  const timeTherapistMap: Map<string, Array<{ userId: string; name: string; gender: string | null }>> = new Map();
 
-  // Collect all possible start times from all therapists
-  const allStartTimes = new Set<string>();
-  for (const slots of therapistFreeSlots.values()) {
-    for (const slot of slots) {
-      allStartTimes.add(slot);
+  for (const [userId, data] of therapistSlotsMap) {
+    for (const [dateStr, times] of data.slots) {
+      for (const timeStr of times) {
+        const key = `${dateStr}_${timeStr}`;
+        if (!timeTherapistMap.has(key)) {
+          timeTherapistMap.set(key, []);
+        }
+        timeTherapistMap.get(key)!.push({
+          userId,
+          name: data.name,
+          gender: data.gender,
+        });
+      }
     }
   }
 
-  // Sort by time
-  const sortedTimes = Array.from(allStartTimes).sort();
-  console.log(`[GroupParallel] Total unique time slots to check: ${sortedTimes.length}`);
+  console.log(`[GroupParallel] Total unique time slots to check: ${timeTherapistMap.size}`);
 
-  // Filter by time preference
-  let filteredTimes = sortedTimes;
+  // Step 7: Filter by time preference
+  let filteredKeys = Array.from(timeTherapistMap.keys()).sort();
+
   if (timePreference === "morning") {
-    filteredTimes = sortedTimes.filter(t => {
-      const dt = DateTime.fromISO(t, { zone: tz });
-      return dt.hour < 12;
+    filteredKeys = filteredKeys.filter(k => {
+      const time = k.split("_")[1];
+      const hour = parseInt(time.split(":")[0], 10);
+      return hour < 12;
     });
-    console.log(`[GroupParallel] After morning filter: ${filteredTimes.length} slots`);
+    console.log(`[GroupParallel] After morning filter: ${filteredKeys.length} slots`);
   } else if (timePreference === "afternoon") {
-    filteredTimes = sortedTimes.filter(t => {
-      const dt = DateTime.fromISO(t, { zone: tz });
-      return dt.hour >= 12;
+    filteredKeys = filteredKeys.filter(k => {
+      const time = k.split("_")[1];
+      const hour = parseInt(time.split(":")[0], 10);
+      return hour >= 12;
     });
-    console.log(`[GroupParallel] After afternoon filter: ${filteredTimes.length} slots`);
+    console.log(`[GroupParallel] After afternoon filter: ${filteredKeys.length} slots`);
   }
 
   // Filter by requested time if specified
   if (requestedTime) {
-    const requestedHourMin = parseTimeString(requestedTime);
-    if (requestedHourMin) {
-      filteredTimes = filteredTimes.filter(t => {
-        const dt = DateTime.fromISO(t, { zone: tz });
-        return dt.hour === requestedHourMin.hour && dt.minute === requestedHourMin.minute;
-      });
-      console.log(`[GroupParallel] After requested time filter (${requestedTime}): ${filteredTimes.length} slots`);
+    const reqTimeMins = parseTimeToMinutes(requestedTime, tz);
+    if (reqTimeMins !== null) {
+      const reqHour = Math.floor(reqTimeMins / 60);
+      const reqMin = reqTimeMins % 60;
+      const reqTimeStr = `${reqHour.toString().padStart(2, "0")}:${reqMin.toString().padStart(2, "0")}`;
+      filteredKeys = filteredKeys.filter(k => k.split("_")[1] === reqTimeStr);
+      console.log(`[GroupParallel] After requested time filter (${reqTimeStr}): ${filteredKeys.length} slots`);
     }
   }
 
-  // Step 7: For each candidate time, try to assign each person to a unique therapist
-  for (const candidateTime of filteredTimes) {
-    const candidateDt = DateTime.fromISO(candidateTime, { zone: tz });
-    console.log(`[GroupParallel] Checking ${candidateDt.toFormat("yyyy-MM-dd HH:mm")}...`);
+  // Step 8: For each candidate time, try to assign each person to a unique therapist
+  for (const key of filteredKeys) {
+    const [dateStr, timeStr] = key.split("_");
+    const availableTherapists = timeTherapistMap.get(key) || [];
 
-    // Most-constrained-first: sort people by number of eligible therapists (ascending)
-    const sortedPeople = [...eligibleTherapistsPerPerson].sort(
-      (a, b) => a.therapists.length - b.therapists.length
-    );
+    console.log(`[GroupParallel] Checking ${dateStr} ${timeStr}: ${availableTherapists.length} therapists available`);
 
-    const assignments: { person: PersonPreference; therapistId: string; therapistName: string }[] = [];
+    // Sort people by number of eligible therapists (most-constrained-first)
+    const sortedPeopleWithIndex = eligibleTherapistsPerPerson
+      .map((e, idx) => ({ ...e, originalIndex: idx }))
+      .sort((a, b) => a.therapists.length - b.therapists.length);
+
     const usedTherapists = new Set<string>();
-    let success = true;
+    const assignments: Array<{ personIndex: number; person: PersonPreference; therapistId: string; therapistName: string }> = [];
+    let feasible = true;
 
-    for (const { person, therapists } of sortedPeople) {
+    for (const { person, therapists, originalIndex } of sortedPeopleWithIndex) {
       // Find a therapist who is:
-      // 1. Free at this time
-      // 2. Not already assigned to another person
-      let assigned = false;
-      for (const therapist of therapists) {
-        if (usedTherapists.has(therapist.user_id)) continue;
-        const therapistSlots = therapistFreeSlots.get(therapist.user_id);
-        if (therapistSlots && therapistSlots.has(candidateTime)) {
-          // Found a match!
-          assignments.push({
-            person,
-            therapistId: therapist.user_id,
-            therapistName: therapist.user_name || "Unknown",
-          });
-          usedTherapists.add(therapist.user_id);
-          assigned = true;
-          console.log(`[GroupParallel]   ✓ ${person.name} -> ${therapist.user_name}`);
-          break;
-        }
-      }
-      if (!assigned) {
+      // 1. Free at this time (in availableTherapists)
+      // 2. Matches gender preference (in person's eligible therapists)
+      // 3. Not already assigned to another person
+      const matchingTherapist = availableTherapists.find(t =>
+        !usedTherapists.has(t.userId) &&
+        therapists.some(eligible => eligible.user_id === t.userId)
+      );
+
+      if (matchingTherapist) {
+        usedTherapists.add(matchingTherapist.userId);
+        assignments.push({
+          personIndex: originalIndex,
+          person,
+          therapistId: matchingTherapist.userId,
+          therapistName: matchingTherapist.name,
+        });
+        console.log(`[GroupParallel]   ✓ ${person.name} -> ${matchingTherapist.name}`);
+      } else {
         console.log(`[GroupParallel]   ✗ No available therapist for ${person.name}`);
-        success = false;
+        feasible = false;
         break;
       }
     }
 
-    if (success) {
+    if (feasible) {
       // Found a valid parallel slot for everyone!
-      const dateStr = candidateDt.toFormat("yyyy-MM-dd");
-      const timeStr = candidateDt.toFormat("h:mm a");
+      const hour = parseInt(timeStr.split(":")[0], 10);
+      const minute = parseInt(timeStr.split(":")[1], 10);
+      const startDt = DateTime.fromObject(
+        { year: parseInt(dateStr.slice(0, 4)), month: parseInt(dateStr.slice(5, 7)), day: parseInt(dateStr.slice(8, 10)), hour, minute },
+        { zone: tz }
+      );
+      const endDt = startDt.plus({ minutes: slotDuration });
+
       console.log(`[GroupParallel] ═══════════════════════════════════════════════════════`);
       console.log(`[GroupParallel] SUCCESS! Found parallel availability at ${dateStr} ${timeStr}`);
       console.log(`[GroupParallel] ═══════════════════════════════════════════════════════`);
 
-      // Build GroupSlotResult for each person
-      const results: GroupSlotResult[] = [];
-      for (let i = 0; i < assignments.length; i++) {
-        const assignment = assignments.find(a => a.person === people[i])!;
-        const endDt = candidateDt.plus({ minutes: slotDuration });
-
-        results.push({
-          person_index: i,
+      // Build GroupSlotResult for each person (sorted by original index)
+      const results: GroupSlotResult[] = assignments
+        .sort((a, b) => a.personIndex - b.personIndex)
+        .map((assignment) => ({
+          person_index: assignment.personIndex,
           person_name: assignment.person.name,
           date: dateStr,
           slots: [{
             service: firstService,
-            startTime: candidateDt.toISO()!,
+            startTime: startDt.toISO()!,
             endTime: endDt.toISO()!,
             calendar_id: calendarId,
             staff_name: assignment.therapistName,
             staff_user_id: assignment.therapistId,
           }],
-        });
-      }
+        }));
 
       return {
         success: true,
         results,
-        date: dateStr,
-        startTime: candidateDt.toISO()!,
       };
     }
   }
@@ -5036,23 +4997,6 @@ async function findGroupParallelAvailability(
 }
 
 /**
- * Parse time string like "10:00 AM" or "2:30 PM" to hour/minute
- */
-function parseTimeString(timeStr: string): { hour: number; minute: number } | null {
-  const match = timeStr.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
-  if (!match) return null;
-
-  let hour = parseInt(match[1], 10);
-  const minute = parseInt(match[2], 10);
-  const meridiem = match[3]?.toUpperCase();
-
-  if (meridiem === "PM" && hour < 12) hour += 12;
-  if (meridiem === "AM" && hour === 12) hour = 0;
-
-  return { hour, minute };
-}
-
-/**
  * Book an appointment for a service.
  */
 async function bookServiceAppointment(
@@ -5071,7 +5015,6 @@ async function bookServiceAppointment(
 ): Promise<{
   success: boolean;
   appointmentId?: string;
-  contactId?: string;  // Return contactId for group bookings (so Sophia can reuse it)
   endTime?: string;
   bufferEnd?: string;
   error?: string;
@@ -5238,13 +5181,11 @@ async function bookServiceAppointment(
 
     console.log(`[BookService] ===== SUCCESS: ${serviceName} =====`);
     console.log(`[BookService] Appointment ID: ${appointmentId}`);
-    console.log(`[BookService] Contact ID: ${contactId}`);
     console.log(`[BookService] End time: ${endISO}`);
 
     return {
       success: true,
       appointmentId,
-      contactId,  // Return for group bookings
       endTime: endISO,
       bufferEnd: bufferEndISO,
     };
@@ -5614,14 +5555,10 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       console.log(`[GroupCheck] Parsed requested date: ${requested_date} => ${parsedDate}`);
     }
 
-    // Get GHL API client
-    const client = await ghl.requests(resolvedLocationId);
-
-    // Find group availability using NEW INTERSECTION ALGORITHM
+    // Find group availability - detailed logging before call
     console.log("[GroupCheck] ═══════════════════════════════════════════════════════");
-    console.log("[GroupCheck] Calling findGroupParallelAvailability (INTERSECTION ALGORITHM):");
+    console.log("[GroupCheck] Calling findGroupPackageAvailability with:");
     console.log(`[GroupCheck]   locationId: ${resolvedLocationId}`);
-    console.log(`[GroupCheck]   package: ${pkg.package_name}`);
     console.log(`[GroupCheck]   services: ${pkg.services.join(', ')}`);
     console.log(`[GroupCheck]   timePreference: ${time_preference || '(none)'}`);
     console.log(`[GroupCheck]   requestedDate: ${parsedDate || '(soonest)'}`);
@@ -5630,14 +5567,14 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
     console.log(`[GroupCheck]   requestedTime: ${requested_time || '(none)'}`);
     console.log("[GroupCheck] ═══════════════════════════════════════════════════════");
 
-    const groupResult = await findGroupParallelAvailability(
-      client,
+    const groupResult = await findGroupPackageAvailability(
       resolvedLocationId,
-      pkg.package_name,
       pkg.services,
       time_preference || "",
       parsedDate,
       tz,
+      installation,
+      localNow,
       people.map((p: any) => ({
         name: p.name || `Person ${people.indexOf(p) + 1}`,
         therapist_preference: p.therapist_preference || p.gender_preference,
@@ -5647,23 +5584,24 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
     );
 
     // Log the result
-    console.log(`[GroupCheck] findGroupParallelAvailability returned: success=${groupResult.success}`);
+    console.log(`[GroupCheck] findGroupPackageAvailability returned: success=${groupResult.success}`);
     if (!groupResult.success) {
       console.log(`[GroupCheck] FAILED: ${groupResult.error}`);
+      console.log(`[GroupCheck] Partial results: ${JSON.stringify(groupResult.results, null, 2)}`);
       return res.json({
         success: false,
         error: groupResult.error,
-        message: groupResult.error || `Unable to book ${package_name} for ${people.length} people.`,
+        partial_results: groupResult.results,
+        message: `Unable to book ${package_name} for ${people.length} people. ${groupResult.error}`,
       });
     }
 
-    // Build response - use date and startTime directly from new algorithm
+    // Build response
     const response = {
       success: true,
       package_name: pkg.package_name,
       num_people: people.length,
-      date: groupResult.date,
-      startTime: groupResult.startTime,
+      date: groupResult.results[0]?.date,
       today: todayStr,
       currentTime: localNowLuxon.toFormat("h:mm a"),
       timezone: tz,
@@ -5688,13 +5626,9 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
   }
 });
 
-// book-group endpoint REMOVED — use individual /api/calendar/book calls instead
-// (see instructions in docs/elevenlabs-group-booking-config.md)
-
 
 /**
- * Build a human-readable confirmation message for PARALLEL group availability.
- * Everyone starts at the same time with different therapists.
+ * Build a human-readable confirmation message for group availability check.
  */
 function buildGroupConfirmationMessage(
   packageName: string,
@@ -5707,27 +5641,26 @@ function buildGroupConfirmationMessage(
   const dateDt = DateTime.fromISO(date, { zone: tz });
   const dateStr = dateDt.toFormat("EEEE, MMMM d");
 
-  // Get the common start time (should be the same for everyone in parallel booking)
-  const firstSlot = results[0].slots[0];
-  const startTime = DateTime.fromISO(firstSlot.startTime, { zone: tz }).toFormat("h:mm a");
+  let msg = `I found availability for your group on ${dateStr}:\n\n`;
 
-  let msg = `I found availability for everyone on ${dateStr} at ${startTime}. `;
+  for (const person of results) {
+    const firstSlot = person.slots[0];
+    const lastSlot = person.slots[person.slots.length - 1];
+    const startTime = DateTime.fromISO(firstSlot.startTime, { zone: tz }).toFormat("h:mm a");
+    const endTime = DateTime.fromISO(lastSlot.endTime, { zone: tz }).toFormat("h:mm a");
 
-  // List each person with their therapist
-  const assignments = results.map(person => {
-    const slot = person.slots[0];
-    return `${person.person_name} with ${slot.staff_name || "a therapist"}`;
-  });
-
-  if (assignments.length === 2) {
-    msg += `${assignments[0]}, and ${assignments[1]}.`;
-  } else {
-    msg += assignments.slice(0, -1).join(", ") + `, and ${assignments[assignments.length - 1]}.`;
+    msg += `**${person.person_name}**: ${startTime} - ${endTime}`;
+    if (firstSlot.staff_name) {
+      msg += ` with ${firstSlot.staff_name}`;
+    }
+    msg += `\n`;
   }
 
-  msg += " Would you like me to book that?";
+  msg += `\nWould you like me to book this for everyone?`;
 
   return msg;
 }
+
+// book-group endpoint REMOVED — use individual /api/calendar/book calls instead
 
 export default router;
