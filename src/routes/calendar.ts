@@ -5129,14 +5129,32 @@ function spellOutNumber(n: number): string {
  * Accepts FLAT parameters (no arrays) for ElevenLabs compatibility.
  * Supports up to 4 people.
  *
- * Request body:
+ * TWO FORMATS SUPPORTED:
+ *
+ * FORMAT 1: Caller/Guest (PREFERRED for voice — names optional for availability)
+ * {
+ *   locationId: string,
+ *   package_name: string,
+ *   caller_therapist_preference?: "male" | "female",
+ *   guest_1_name?: string,           // Optional — defaults to "Guest 1"
+ *   guest_1_therapist_preference?: "male" | "female",
+ *   guest_2_name?: string,           // Optional — defaults to "Guest 2"
+ *   guest_2_therapist_preference?: "male" | "female",
+ *   guest_3_name?: string,           // Optional — defaults to "Guest 3"
+ *   guest_3_therapist_preference?: "male" | "female",
+ *   time_preference?: "morning" | "afternoon",
+ *   requested_date?: string,
+ *   requested_time?: string
+ * }
+ *
+ * FORMAT 2: Person N (legacy)
  * {
  *   locationId: string,
  *   package_name: string,
  *   group_size: number (2-4),
- *   person_1_name: string,
+ *   person_1_name?: string,          // Optional — defaults to "Person 1"
  *   person_1_therapist_preference?: "male" | "female",
- *   person_2_name: string,
+ *   person_2_name?: string,          // Optional — defaults to "Person 2"
  *   person_2_therapist_preference?: "male" | "female",
  *   person_3_name?: string,
  *   person_3_therapist_preference?: "male" | "female",
@@ -5161,7 +5179,7 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       location_id,
       package_name,
       group_size,
-      // Flat person fields
+      // Flat person fields (person_N format)
       person_1_name,
       person_1_therapist_preference,
       person_2_name,
@@ -5170,6 +5188,14 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       person_3_therapist_preference,
       person_4_name,
       person_4_therapist_preference,
+      // NEW: Caller/Guest format (names optional for availability check)
+      caller_therapist_preference,
+      guest_1_name,
+      guest_1_therapist_preference,
+      guest_2_name,
+      guest_2_therapist_preference,
+      guest_3_name,
+      guest_3_therapist_preference,
       // Legacy array support
       people: legacyPeople,
       time_preference,
@@ -5196,8 +5222,36 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
     if (legacyPeople && Array.isArray(legacyPeople) && legacyPeople.length >= 2) {
       // Legacy array format (for backward compatibility)
       people = legacyPeople;
+    } else if (caller_therapist_preference !== undefined || guest_1_name || guest_1_therapist_preference) {
+      // NEW caller/guest format — names are OPTIONAL for availability check
+      // This allows Sophia to check availability with just therapist preferences,
+      // then collect guest names later before booking
+      console.log("[GroupCheck] Using caller/guest format");
+
+      // Caller is always person 1
+      people.push({ name: "Caller", therapist_preference: caller_therapist_preference });
+
+      // Guest 1 — add if name OR preference provided (name defaults to "Guest 1")
+      if (guest_1_name || guest_1_therapist_preference !== undefined) {
+        people.push({ name: guest_1_name || "Guest 1", therapist_preference: guest_1_therapist_preference });
+      } else {
+        // At minimum we need 2 people, so add Guest 1 even without preference
+        people.push({ name: "Guest 1", therapist_preference: undefined });
+      }
+
+      // Guest 2 — only add if name OR preference provided
+      if (guest_2_name || guest_2_therapist_preference !== undefined) {
+        people.push({ name: guest_2_name || "Guest 2", therapist_preference: guest_2_therapist_preference });
+      }
+
+      // Guest 3 — only add if name OR preference provided
+      if (guest_3_name || guest_3_therapist_preference !== undefined) {
+        people.push({ name: guest_3_name || "Guest 3", therapist_preference: guest_3_therapist_preference });
+      }
+
+      console.log(`[GroupCheck] Caller/guest format: ${people.length} people`);
     } else {
-      // Flat parameter format (for ElevenLabs)
+      // Flat parameter format (person_N style for ElevenLabs)
       const size = parseInt(group_size) || 2;
       if (size < 2 || size > 4) {
         console.log(`[GroupCheck] VALIDATION FAILED: group_size=${group_size} out of range (2-4)`);
@@ -5208,18 +5262,18 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
         });
       }
 
-      // Build people array from flat fields
-      if (person_1_name) {
-        people.push({ name: person_1_name, therapist_preference: person_1_therapist_preference });
+      // Build people array from flat fields — allow name OR preference to count as a person
+      if (person_1_name || person_1_therapist_preference !== undefined) {
+        people.push({ name: person_1_name || "Person 1", therapist_preference: person_1_therapist_preference });
       }
-      if (person_2_name) {
-        people.push({ name: person_2_name, therapist_preference: person_2_therapist_preference });
+      if (person_2_name || person_2_therapist_preference !== undefined) {
+        people.push({ name: person_2_name || "Person 2", therapist_preference: person_2_therapist_preference });
       }
-      if (size >= 3 && person_3_name) {
-        people.push({ name: person_3_name, therapist_preference: person_3_therapist_preference });
+      if (size >= 3 && (person_3_name || person_3_therapist_preference !== undefined)) {
+        people.push({ name: person_3_name || "Person 3", therapist_preference: person_3_therapist_preference });
       }
-      if (size >= 4 && person_4_name) {
-        people.push({ name: person_4_name, therapist_preference: person_4_therapist_preference });
+      if (size >= 4 && (person_4_name || person_4_therapist_preference !== undefined)) {
+        people.push({ name: person_4_name || "Person 4", therapist_preference: person_4_therapist_preference });
       }
 
       // Validate we have enough people
@@ -5227,8 +5281,8 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
         console.log(`[GroupCheck] VALIDATION FAILED: people.length=${people.length} < 2`);
         return res.status(400).json({
           success: false,
-          error: "At least person_1_name and person_2_name are required",
-          message: "I need names for at least two people to check group availability.",
+          error: "Need at least 2 people (provide names or therapist preferences)",
+          message: "I need information for at least two people to check group availability.",
         });
       }
     }
