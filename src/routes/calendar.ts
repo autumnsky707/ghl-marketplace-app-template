@@ -1960,12 +1960,6 @@ router.post("/check-availability", async (req: Request, res: Response) => {
  * For type=package:
  *   - locationId, package_name, selected_date, time_preference, customer_name, email, phone
  *
- * GROUP BOOKING SUPPORT:
- * Agent calls this endpoint TWICE (once per person) instead of using book_group:
- *   1. First call: Caller booking (normal upsert contact)
- *   2. Second call: Guest booking with is_guest=true (lookup contact, don't overwrite name)
- * Both calls can include booking_notes for group context (e.g., "Group booking (2 people): Jane + Lisa")
- *
  * Accepts both camelCase and snake_case field names.
  */
 router.post("/book", async (req: Request, res: Response) => {
@@ -1982,10 +1976,6 @@ router.post("/book", async (req: Request, res: Response) => {
     const therapistPreference = body.therapistPreference || body.therapist_preference;
     const strictGender = body.strictGender || body.strict_gender;  // When true, no gender fallback
     const notes = body.notes;
-    // Group booking support: Agent calls book_appointment twice (once per person) instead of book_group
-    // Accept both snake_case (is_guest, booking_notes) and camelCase (isGuest, bookingNotes)
-    const isGuest = body.is_guest === true || body.isGuest === true;  // When true, lookup contact by email instead of upserting
-    const bookingNotes = body.booking_notes || body.bookingNotes;  // Additional notes for group booking context
 
     // ========== PACKAGE BOOKING ==========
     if (type === "package") {
@@ -2574,10 +2564,7 @@ router.post("/book", async (req: Request, res: Response) => {
             customerPhone,
             notes,
             therapistPreference,
-            slotInfo.staff_user_id || undefined,
-            undefined,  // preCreatedContactId
-            isGuest,  // For group bookings: lookup contact instead of upserting
-            bookingNotes  // For group bookings: additional context notes
+            slotInfo.staff_user_id || undefined
           );
 
           console.log(`[Book]   bookServiceAppointment result:`, JSON.stringify(bookingResult));
@@ -4831,9 +4818,7 @@ async function bookServiceAppointment(
   notes?: string,
   therapistPreference?: string,
   staffUserId?: string,  // BUG FIX: Assign to specific staff member
-  preCreatedContactId?: string,  // FIX 3: Skip contact creation if provided (prevents name collision)
-  isGuest?: boolean,  // When true, lookup contact by email instead of upserting (prevents name collision for group bookings)
-  bookingNotes?: string  // Additional notes for group booking context (appended to appointment notes)
+  preCreatedContactId?: string  // FIX 3: Skip contact creation if provided (prevents name collision)
 ): Promise<{
   success: boolean;
   appointmentId?: string;
@@ -4855,30 +4840,11 @@ async function bookServiceAppointment(
     const slotBuffer = syncedCalendar?.slot_buffer || 15;
     console.log(`[BookService] Calendar settings: duration=${slotDuration}min, buffer=${slotBuffer}min`);
 
-    // Create/upsert contact OR use pre-created contact OR lookup existing (for guests)
-    // Group booking flow: Agent calls book_appointment twice - once for caller (upsert), once for guest (lookup)
+    // Create/upsert contact OR use pre-created contact (FIX 3: prevents name collision in group bookings)
     let contactId: string;
     if (preCreatedContactId) {
       console.log(`[BookService] Using pre-created contact: ${preCreatedContactId}`);
       contactId = preCreatedContactId;
-    } else if (isGuest) {
-      // Guest booking: lookup existing contact by email instead of upserting
-      // This prevents overwriting the caller's name when booking for a guest using caller's email
-      console.log(`[BookService] Guest booking - looking up contact by email: ${customerEmail}`);
-      try {
-        const lookupResp = await client.get(`/contacts/lookup?email=${encodeURIComponent(customerEmail)}`, {
-          headers: { Version: "2021-07-28" },
-        });
-        contactId = lookupResp.data?.contacts?.[0]?.id;
-        if (!contactId) {
-          console.error(`[BookService] Contact lookup returned no results for: ${customerEmail}`);
-          return { success: false, error: "Contact not found for guest booking - caller must be booked first" };
-        }
-        console.log(`[BookService] Found existing contact for guest: ${contactId}`);
-      } catch (lookupErr: any) {
-        console.error(`[BookService] Contact lookup failed:`, lookupErr?.response?.data || lookupErr.message);
-        return { success: false, error: "Failed to lookup contact for guest booking" };
-      }
     } else {
       console.log(`[BookService] Upserting contact...`);
       const nameParts = customerName.trim().split(/\s+/);
@@ -4929,13 +4895,6 @@ async function bookServiceAppointment(
       } else {
         console.log(`[BookService] Skipping therapist preference for non-massage service: ${serviceName}`);
       }
-    }
-
-    // Append booking_notes if provided (for group booking context)
-    // Format: "Group booking (2 people): Jane Smith + Lisa | Therapist preference: Jane - female, Lisa - male"
-    if (bookingNotes) {
-      appointmentNotes = appointmentNotes ? `${appointmentNotes}\n${bookingNotes}` : bookingNotes;
-      console.log(`[BookService] Added booking notes: ${bookingNotes}`);
     }
 
     // Build appointment
