@@ -5812,6 +5812,19 @@ router.post("/book-group", async (req: Request, res: Response) => {
         console.log("[GroupBook] ═══════════════════════════════════════════════════════");
         console.log("[GroupBook] BACKGROUND: Starting appointment bookings...");
 
+        // Build the full group booking note BEFORE booking so it's on every appointment
+        // Format: Group booking (X people): [names] | Package: [name] | Services: [...] | Therapist preference: [...]
+        const guestNames = people.slice(1).map((p: any) => p.name);
+        const namesStr = `${caller.name}${guestNames.length > 0 ? ' + ' + guestNames.join(' + ') : ''}`;
+        const firstPersonSlots = groupAvailability.results[0]?.slots || [];
+        const servicesStr = firstPersonSlots.map((slot: any) => slot.service).join(', ');
+        const prefsStr = people.map((p: any) => {
+          const pref = p.therapist_preference || 'no preference';
+          return `${p.name} - ${pref}`;
+        }).join(', ');
+        const groupBookingNote = `Group booking (${people.length} people): ${namesStr} | Package: ${package_name} | Services: ${servicesStr} | Therapist preference: ${prefsStr}`;
+        console.log(`[GroupBook] BACKGROUND: Group note for all appointments: ${groupBookingNote}`);
+
         const bookingResults: PersonBookingResult[] = [];
 
         // Book each person
@@ -5851,7 +5864,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
               caller.name,  // Always use caller's name for contact
               caller.email,   // Always use caller's email
               caller.phone,   // Always use caller's phone
-              notes ? `${notes} | Guest: ${person.name} (Group booking: ${people.length} people)` : isGuest ? `Guest: ${person.name} | Group booking: ${people.length} people` : `Group booking: ${people.length} people`,
+              groupBookingNote,  // Full formatted note for every appointment
               person.therapist_preference,
               slot.staff_user_id || undefined,
               callerContactId  // FIX 3: Pre-created contact prevents name overwriting
@@ -5932,31 +5945,9 @@ router.post("/book-group", async (req: Request, res: Response) => {
           console.log(`[GroupBook] BACKGROUND: ✓ Completed booking for ${person.name}: ${personAppointments.length} appointments`);
         }
 
-        // FIX 2: Write group booking notes to every appointment
-        // Format: Group booking (X people): [names] | Package: [name] | Services: [...] | Therapist preference: [...]
-        console.log("[GroupBook] BACKGROUND: Writing group booking notes to all appointments...");
-
-        // Build the names part: "Jane Smith + John" (supports up to 4 people)
-        // Note: 'caller' was already defined above as people[0]
-        const guestNames = people.slice(1).map((p: any) => p.name);
-        const namesStr = `${caller.name}${guestNames.length > 0 ? ' + ' + guestNames.join(' + ') : ''}`;
-
-        // Build the services part - service names already include duration (e.g., "Body Treatment-60 mins")
-        const firstPersonSlots = groupAvailability.results[0]?.slots || [];
-        const servicesStr = firstPersonSlots.map((slot: any) => slot.service).join(', ');
-
-        // Build the therapist preference part (supports up to 4 people)
-        const prefsStr = people.map((p: any) => {
-          const pref = p.therapist_preference || 'no preference';
-          return `${p.name} - ${pref}`;
-        }).join(', ');
-
-        // Build the complete note with package name
-        const groupNote = `Group booking (${people.length} people): ${namesStr} | Package: ${package_name} | Services: ${servicesStr} | Therapist preference: ${prefsStr}`;
-
-        console.log(`[GroupBook] BACKGROUND: Group note: ${groupNote}`);
-
-        // Write the SAME note to EVERY appointment in the group
+        // Note: groupBookingNote was already built and passed to each appointment during booking
+        // Also write via Notes API as backup (the notes field in appointment payload may not display in all GHL views)
+        console.log("[GroupBook] BACKGROUND: Writing group booking notes via Notes API as backup...");
         console.log(`[GroupBook] ───────────────────────────────────────────────────────`);
         console.log(`[GroupBook] BACKGROUND: Writing notes to ${bookingResults.reduce((sum, pr) => sum + pr.appointments.length, 0)} appointments...`);
         for (const personResult of bookingResults) {
@@ -5965,7 +5956,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
               console.log(`[GroupBook] BACKGROUND: Writing note to appointment ${appt.appointmentId} (${appt.service} for ${personResult.person_name})`);
               await client.post(
                 `/calendars/events/appointments/${appt.appointmentId}/notes`,
-                { body: groupNote },
+                { body: groupBookingNote },
                 { headers: { Version: "2021-07-28" } }
               );
               console.log(`[GroupBook] BACKGROUND: ✓ Note written successfully`);
