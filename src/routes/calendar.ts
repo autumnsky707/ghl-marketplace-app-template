@@ -2907,8 +2907,8 @@ router.post("/book", async (req: Request, res: Response) => {
     // STEP 5: Create or upsert contact in GHL
     console.log(`[Book] STEP 5: Contact upsert starting...`);
     const nameParts = customerName.trim().split(/\s+/);
-    const firstName = nameParts[0];
-    const lastName = nameParts.slice(1).join(" ") || "";
+    const firstName = toTitleCase(nameParts[0]);
+    const lastName = nameParts.slice(1).length > 0 ? toTitleCase(nameParts.slice(1).join(" ")) : "";
 
     const normalizedPhone = customerPhone ? normalizePhone(customerPhone) : null;
     console.log(`[Book] Phone normalization: "${customerPhone}" -> "${normalizedPhone}"`);
@@ -4937,8 +4937,8 @@ async function bookServiceAppointment(
     } else {
       console.log(`[BookService] Upserting contact...`);
       const nameParts = customerName.trim().split(/\s+/);
-      const firstName = nameParts[0];
-      const lastName = nameParts.slice(1).join(" ") || "";
+      const firstName = toTitleCase(nameParts[0]);
+      const lastName = nameParts.slice(1).length > 0 ? toTitleCase(nameParts.slice(1).join(" ")) : "";
 
       const contactPayload: Record<string, string> = {
         locationId,
@@ -5323,7 +5323,7 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
 
       // Guest 1 — add if name OR preference provided (name defaults to "Guest 1")
       if (guest_1_name || guest_1_therapist_preference !== undefined) {
-        people.push({ name: guest_1_name || "Guest 1", therapist_preference: guest_1_therapist_preference });
+        people.push({ name: guest_1_name ? toTitleCase(guest_1_name) : "Guest 1", therapist_preference: guest_1_therapist_preference });
       } else {
         // At minimum we need 2 people, so add Guest 1 even without preference
         people.push({ name: "Guest 1", therapist_preference: undefined });
@@ -5331,12 +5331,12 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
 
       // Guest 2 — only add if name OR preference provided
       if (guest_2_name || guest_2_therapist_preference !== undefined) {
-        people.push({ name: guest_2_name || "Guest 2", therapist_preference: guest_2_therapist_preference });
+        people.push({ name: guest_2_name ? toTitleCase(guest_2_name) : "Guest 2", therapist_preference: guest_2_therapist_preference });
       }
 
       // Guest 3 — only add if name OR preference provided
       if (guest_3_name || guest_3_therapist_preference !== undefined) {
-        people.push({ name: guest_3_name || "Guest 3", therapist_preference: guest_3_therapist_preference });
+        people.push({ name: guest_3_name ? toTitleCase(guest_3_name) : "Guest 3", therapist_preference: guest_3_therapist_preference });
       }
 
       console.log(`[GroupCheck] Caller/guest format: ${people.length} people`);
@@ -5354,16 +5354,16 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
 
       // Build people array from flat fields — allow name OR preference to count as a person
       if (person_1_name || person_1_therapist_preference !== undefined) {
-        people.push({ name: person_1_name || "Person 1", therapist_preference: person_1_therapist_preference });
+        people.push({ name: person_1_name ? toTitleCase(person_1_name) : "Person 1", therapist_preference: person_1_therapist_preference });
       }
       if (person_2_name || person_2_therapist_preference !== undefined) {
-        people.push({ name: person_2_name || "Person 2", therapist_preference: person_2_therapist_preference });
+        people.push({ name: person_2_name ? toTitleCase(person_2_name) : "Person 2", therapist_preference: person_2_therapist_preference });
       }
       if (size >= 3 && (person_3_name || person_3_therapist_preference !== undefined)) {
-        people.push({ name: person_3_name || "Person 3", therapist_preference: person_3_therapist_preference });
+        people.push({ name: person_3_name ? toTitleCase(person_3_name) : "Person 3", therapist_preference: person_3_therapist_preference });
       }
       if (size >= 4 && (person_4_name || person_4_therapist_preference !== undefined)) {
-        people.push({ name: person_4_name || "Person 4", therapist_preference: person_4_therapist_preference });
+        people.push({ name: person_4_name ? toTitleCase(person_4_name) : "Person 4", therapist_preference: person_4_therapist_preference });
       }
 
       // Validate we have enough people
@@ -5598,19 +5598,20 @@ router.post("/book-group", async (req: Request, res: Response) => {
 
     // Map caller_*/guest_N_* to person_N_* (ElevenLabs format to internal format)
     // Prefer caller_* over person_1_* if both present
-    const person_1_name = caller_name || p1_name;
+    // Apply toTitleCase to names for proper capitalization (e.g., "john smith" -> "John Smith")
+    const person_1_name = (caller_name || p1_name) ? toTitleCase(caller_name || p1_name) : undefined;
     const person_1_email = caller_email || p1_email;
     const person_1_phone = caller_phone || p1_phone;
     const person_1_therapist_preference = caller_therapist_preference || p1_pref;
-    const person_2_name = guest_1_name || p2_name;
+    const person_2_name = (guest_1_name || p2_name) ? toTitleCase(guest_1_name || p2_name) : undefined;
     const person_2_email = guest_1_email || p2_email;
     const person_2_phone = guest_1_phone || p2_phone;
     const person_2_therapist_preference = guest_1_therapist_preference || p2_pref;
-    const person_3_name = guest_2_name || p3_name;
+    const person_3_name = (guest_2_name || p3_name) ? toTitleCase(guest_2_name || p3_name) : undefined;
     const person_3_email = guest_2_email || p3_email;
     const person_3_phone = guest_2_phone || p3_phone;
     const person_3_therapist_preference = guest_2_therapist_preference || p3_pref;
-    const person_4_name = guest_3_name || p4_name;
+    const person_4_name = (guest_3_name || p4_name) ? toTitleCase(guest_3_name || p4_name) : undefined;
     const person_4_email = guest_3_email || p4_email;
     const person_4_phone = guest_3_phone || p4_phone;
     const person_4_therapist_preference = guest_3_therapist_preference || p4_pref;
