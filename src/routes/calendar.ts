@@ -5513,26 +5513,41 @@ router.post("/book-group", async (req: Request, res: Response) => {
       location_id,
       package_name,
       group_size,
-      // Flat person fields - Person 1
-      person_1_name,
-      person_1_email,
-      person_1_phone,
-      person_1_therapist_preference,
-      // Flat person fields - Person 2
-      person_2_name,
-      person_2_email,
-      person_2_phone,
-      person_2_therapist_preference,
-      // Flat person fields - Person 3 (optional)
-      person_3_name,
-      person_3_email,
-      person_3_phone,
-      person_3_therapist_preference,
-      // Flat person fields - Person 4 (optional)
-      person_4_name,
-      person_4_email,
-      person_4_phone,
-      person_4_therapist_preference,
+      // ElevenLabs uses "caller_*" for first person and "guest_N_*" for others
+      // Map these to person_N_* format for consistency
+      caller_name,
+      caller_email,
+      caller_phone,
+      caller_therapist_preference,
+      guest_1_name,
+      guest_1_email,
+      guest_1_phone,
+      guest_1_therapist_preference,
+      guest_2_name,
+      guest_2_email,
+      guest_2_phone,
+      guest_2_therapist_preference,
+      guest_3_name,
+      guest_3_email,
+      guest_3_phone,
+      guest_3_therapist_preference,
+      // Also support person_N_* format for backward compatibility
+      person_1_name: p1_name,
+      person_1_email: p1_email,
+      person_1_phone: p1_phone,
+      person_1_therapist_preference: p1_pref,
+      person_2_name: p2_name,
+      person_2_email: p2_email,
+      person_2_phone: p2_phone,
+      person_2_therapist_preference: p2_pref,
+      person_3_name: p3_name,
+      person_3_email: p3_email,
+      person_3_phone: p3_phone,
+      person_3_therapist_preference: p3_pref,
+      person_4_name: p4_name,
+      person_4_email: p4_email,
+      person_4_phone: p4_phone,
+      person_4_therapist_preference: p4_pref,
       // Legacy array support
       people: legacyPeople,
       time_preference,
@@ -5540,6 +5555,27 @@ router.post("/book-group", async (req: Request, res: Response) => {
       requested_time,
       notes,
     } = req.body;
+
+    // Map caller_*/guest_N_* to person_N_* (ElevenLabs format to internal format)
+    // Prefer caller_* over person_1_* if both present
+    const person_1_name = caller_name || p1_name;
+    const person_1_email = caller_email || p1_email;
+    const person_1_phone = caller_phone || p1_phone;
+    const person_1_therapist_preference = caller_therapist_preference || p1_pref;
+    const person_2_name = guest_1_name || p2_name;
+    const person_2_email = guest_1_email || p2_email;
+    const person_2_phone = guest_1_phone || p2_phone;
+    const person_2_therapist_preference = guest_1_therapist_preference || p2_pref;
+    const person_3_name = guest_2_name || p3_name;
+    const person_3_email = guest_2_email || p3_email;
+    const person_3_phone = guest_2_phone || p3_phone;
+    const person_3_therapist_preference = guest_2_therapist_preference || p3_pref;
+    const person_4_name = guest_3_name || p4_name;
+    const person_4_email = guest_3_email || p4_email;
+    const person_4_phone = guest_3_phone || p4_phone;
+    const person_4_therapist_preference = guest_3_therapist_preference || p4_pref;
+
+    console.log(`[GroupBook] Mapped fields: person_1_name=${person_1_name}, person_2_name=${person_2_name}`);
 
     const resolvedLocationId = locationId || location_id;
     console.log(`[GroupBook] Resolved locationId: ${resolvedLocationId}`);
