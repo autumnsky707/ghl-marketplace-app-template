@@ -2430,7 +2430,14 @@ router.post("/book", async (req: Request, res: Response) => {
       const lastSlot = packagePlan.slots[packagePlan.slots.length - 1];
       const startTimeFmt = DateTime.fromISO(firstSlot.startTime, { zone: tz }).toFormat("h:mm a");
       const endTimeFmt = DateTime.fromISO(lastSlot.endTime, { zone: tz }).toFormat("h:mm a");
-      const dateFmt = DateTime.fromISO(packagePlan.date, { zone: tz }).toFormat("EEEE, MMMM d");
+      // Format date with ordinal suffix (e.g., "Wednesday, February 25th")
+      const dateDt = DateTime.fromISO(packagePlan.date, { zone: tz });
+      const day = dateDt.day;
+      const suffix = day === 1 || day === 21 || day === 31 ? "st"
+                   : day === 2 || day === 22 ? "nd"
+                   : day === 3 || day === 23 ? "rd"
+                   : "th";
+      const dateFmt = `${dateDt.toFormat("EEEE, MMMM")} ${day}${suffix}`;
 
       const immediateResponse = {
         success: true,
@@ -5833,7 +5840,17 @@ router.post("/book-group", async (req: Request, res: Response) => {
     const availDate = groupAvailability.results[0]?.date;
     const firstSlot = groupAvailability.results[0]?.slots[0];
     const startTimeFmt = firstSlot ? DateTime.fromISO(firstSlot.startTime, { zone: tz }).toFormat("h:mm a") : "";
-    const dateFmt = availDate ? DateTime.fromISO(availDate, { zone: tz }).toFormat("EEEE, MMMM d") : "";
+    // Format date with ordinal suffix (e.g., "Wednesday, February 25th")
+    const dateDt = availDate ? DateTime.fromISO(availDate, { zone: tz }) : null;
+    let dateFmt = "";
+    if (dateDt) {
+      const day = dateDt.day;
+      const suffix = day === 1 || day === 21 || day === 31 ? "st"
+                   : day === 2 || day === 22 ? "nd"
+                   : day === 3 || day === 23 ? "rd"
+                   : "th";
+      dateFmt = `${dateDt.toFormat("EEEE, MMMM")} ${day}${suffix}`;
+    }
 
     // RESPOND IMMEDIATELY — before booking to avoid ElevenLabs timeout
     const immediateResponse = {
@@ -6071,24 +6088,20 @@ function buildGroupConfirmationMessage(
 
   const date = results[0].date;
   const dateDt = DateTime.fromISO(date, { zone: tz });
-  const dateStr = dateDt.toFormat("EEEE, MMMM d");
+  // Include the ordinal suffix (1st, 2nd, 3rd, etc.) for clarity
+  const day = dateDt.day;
+  const suffix = day === 1 || day === 21 || day === 31 ? "st"
+               : day === 2 || day === 22 ? "nd"
+               : day === 3 || day === 23 ? "rd"
+               : "th";
+  const dateStr = `${dateDt.toFormat("EEEE, MMMM")} ${day}${suffix}`;
 
-  let msg = `I found availability for your group on ${dateStr}:\n\n`;
+  // Get the first person's start time for the summary
+  const firstSlot = results[0].slots[0];
+  const startTime = DateTime.fromISO(firstSlot.startTime, { zone: tz }).toFormat("h:mm a");
 
-  for (const person of results) {
-    const firstSlot = person.slots[0];
-    const lastSlot = person.slots[person.slots.length - 1];
-    const startTime = DateTime.fromISO(firstSlot.startTime, { zone: tz }).toFormat("h:mm a");
-    const endTime = DateTime.fromISO(lastSlot.endTime, { zone: tz }).toFormat("h:mm a");
-
-    msg += `**${person.person_name}**: ${startTime} - ${endTime}`;
-    if (firstSlot.staff_name) {
-      msg += ` with ${firstSlot.staff_name}`;
-    }
-    msg += `\n`;
-  }
-
-  msg += `\nWould you like me to book this for everyone?`;
+  // Simple, clear message for voice: just the date, time, and ask to confirm
+  const msg = `I have availability for your group on ${dateStr} starting at ${startTime}. Would you like me to book that for you?`;
 
   return msg;
 }
