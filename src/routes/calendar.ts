@@ -2424,15 +2424,56 @@ router.post("/book", async (req: Request, res: Response) => {
 
       console.log(`[Book] STEP 5 SUCCESS: All ${packagePlan.slots.length} slots re-validated. Proceeding with booking.`);
 
-      // ========== FIX 1.5 + 1.6: ATOMIC RESERVATION WITH ROLLBACK ==========
-      // Strategy:
-      // 1. TRY to create block-slot holds for ALL slots (nice-to-have protection)
-      // 2. If block-slots fail, continue anyway (fallback to old behavior)
-      // 3. Book real appointments one by one (with 500ms delay between)
-      // 4. After each successful booking, delete its block-slot hold (if any)
-      // 5. If ANY booking fails: rollback all confirmed appointments + remaining block-slots
+      // ========== FIRE-AND-FORGET: Respond immediately, book in background ==========
+      // This prevents ElevenLabs timeout when booking multiple services sequentially
+      const firstSlot = packagePlan.slots[0];
+      const lastSlot = packagePlan.slots[packagePlan.slots.length - 1];
+      const startTimeFmt = DateTime.fromISO(firstSlot.startTime, { zone: tz }).toFormat("h:mm a");
+      const endTimeFmt = DateTime.fromISO(lastSlot.endTime, { zone: tz }).toFormat("h:mm a");
+      const dateFmt = DateTime.fromISO(packagePlan.date, { zone: tz }).toFormat("EEEE, MMMM d");
 
-      console.log(`[Book] ===== STEP 5.5: ATTEMPTING BLOCK-SLOT HOLDS =====`);
+      const immediateResponse = {
+        success: true,
+        package_name: pkg.package_name,
+        total_price: pkg.price,
+        total_duration_minutes: pkg.total_duration_minutes,
+        date: packagePlan.date,
+        start_time: startTimeFmt,
+        end_time: endTimeFmt,
+        message: `Your ${pkg.package_name} has been booked for ${dateFmt} from ${startTimeFmt} to ${endTimeFmt}. You will receive a confirmation email shortly.`,
+      };
+
+      console.log("[Book] FIRE-AND-FORGET: Responding immediately");
+      console.log("[Book] Response:", JSON.stringify(immediateResponse, null, 2));
+      res.json(immediateResponse);
+
+      // Capture variables for background closure (TypeScript needs explicit capture)
+      const bgPackagePlan = packagePlan;
+      const bgClient = client;
+      const bgPkg = pkg;
+      const bgTz = tz;
+      const bgLocationId = locationId;
+      const bgCustomerName = customerName;
+      const bgCustomerEmail = customerEmail;
+      const bgCustomerPhone = customerPhone;
+      const bgNotes = notes;
+      const bgTherapistPreference = therapistPreference;
+
+      // ========== BOOK IN BACKGROUND ==========
+      setImmediate(async () => {
+        try {
+          console.log("[Book] ═══════════════════════════════════════════════════════");
+          console.log("[Book] BACKGROUND: Starting appointment bookings...");
+
+          // ========== FIX 1.5 + 1.6: ATOMIC RESERVATION WITH ROLLBACK ==========
+          // Strategy:
+          // 1. TRY to create block-slot holds for ALL slots (nice-to-have protection)
+          // 2. If block-slots fail, continue anyway (fallback to old behavior)
+          // 3. Book real appointments one by one (with 500ms delay between)
+          // 4. After each successful booking, delete its block-slot hold (if any)
+          // 5. If ANY booking fails: rollback all confirmed appointments + remaining block-slots
+
+          console.log(`[Book] BACKGROUND: ===== STEP 5.5: ATTEMPTING BLOCK-SLOT HOLDS =====`);
 
       interface BlockSlotHold {
         slotIndex: number;
@@ -2441,39 +2482,39 @@ router.post("/book", async (req: Request, res: Response) => {
         service: string;
       }
 
-      const blockSlotHolds: BlockSlotHold[] = [];
-      let blockSlotsEnabled = true; // Will be set to false if block-slots fail
+          const blockSlotHolds: BlockSlotHold[] = [];
+          let blockSlotsEnabled = true; // Will be set to false if block-slots fail
 
-      for (let i = 0; i < packagePlan.slots.length; i++) {
-        const slotInfo = packagePlan.slots[i];
-        console.log(`[Book] Creating hold ${i + 1}/${packagePlan.slots.length} for ${slotInfo.service}...`);
+          for (let i = 0; i < bgPackagePlan.slots.length; i++) {
+            const slotInfo = bgPackagePlan.slots[i];
+            console.log(`[Book] BACKGROUND: Creating hold ${i + 1}/${bgPackagePlan.slots.length} for ${slotInfo.service}...`);
 
-        try {
-          // Convert times to UTC for GHL API
-          const startDt = DateTime.fromISO(slotInfo.startTime, { zone: tz });
-          const endDt = DateTime.fromISO(slotInfo.endTime, { zone: tz });
+            try {
+              // Convert times to UTC for GHL API
+              const startDt = DateTime.fromISO(slotInfo.startTime, { zone: bgTz });
+              const endDt = DateTime.fromISO(slotInfo.endTime, { zone: bgTz });
 
-          // Try with calendarId in URL path (some GHL endpoints expect this)
-          const blockUrl = `/calendars/${slotInfo.calendar_id}/events/block-slots`;
+              // Try with calendarId in URL path (some GHL endpoints expect this)
+              const blockUrl = `/calendars/${slotInfo.calendar_id}/events/block-slots`;
 
-          const blockPayload: Record<string, any> = {
-            locationId,
-            startTime: startDt.toUTC().toISO(),
-            endTime: endDt.toUTC().toISO(),
-            title: `HOLD: ${slotInfo.service} - ${customerName}`,
-          };
+              const blockPayload: Record<string, any> = {
+                locationId: bgLocationId,
+                startTime: startDt.toUTC().toISO(),
+                endTime: endDt.toUTC().toISO(),
+                title: `HOLD: ${slotInfo.service} - ${bgCustomerName}`,
+              };
 
           // Try userId instead of assignedUserId (GHL API naming varies)
           if (slotInfo.staff_user_id) {
             blockPayload.userId = slotInfo.staff_user_id;
           }
 
-          console.log(`[Book] Block-slot URL: ${blockUrl}`);
-          console.log(`[Book] Block-slot payload:`, JSON.stringify(blockPayload, null, 2));
+              console.log(`[Book] BACKGROUND: Block-slot URL: ${blockUrl}`);
+              console.log(`[Book] BACKGROUND: Block-slot payload:`, JSON.stringify(blockPayload, null, 2));
 
-          const blockResp = await client.post(blockUrl, blockPayload, {
-            headers: { Version: "2021-07-28" },
-          });
+              const blockResp = await bgClient.post(blockUrl, blockPayload, {
+                headers: { Version: "2021-07-28" },
+              });
 
           const blockId = blockResp.data?.id || blockResp.data?.eventId || blockResp.data?.event?.id;
 
@@ -2496,15 +2537,15 @@ router.post("/book", async (req: Request, res: Response) => {
           // FALLBACK: If block-slots don't work, clean up any we created and continue without them
           if (blockSlotHolds.length > 0) {
             console.log(`[Book] Cleaning up ${blockSlotHolds.length} partial holds before fallback...`);
-            for (const hold of blockSlotHolds) {
-              try {
-                await client.delete(`/calendars/events/${hold.blockId}`, {
-                  headers: { Version: "2021-07-28" },
-                });
-              } catch (delErr: any) {
-                console.log(`[Book] Warning: Failed to cleanup hold ${hold.blockId}`);
+              for (const hold of blockSlotHolds) {
+                try {
+                  await bgClient.delete(`/calendars/events/${hold.blockId}`, {
+                    headers: { Version: "2021-07-28" },
+                  });
+                } catch (delErr: any) {
+                  console.log(`[Book] BACKGROUND: Warning: Failed to cleanup hold ${hold.blockId}`);
+                }
               }
-            }
             blockSlotHolds.length = 0; // Clear the array
           }
 
@@ -2538,36 +2579,36 @@ router.post("/book", async (req: Request, res: Response) => {
       let failedService = "";
       let failedError = "";
 
-      console.log(`[Book] Booking ${packagePlan.slots.length} services...`);
-      packagePlan.slots.forEach((s, idx) => {
-        console.log(`[Book]   ${idx + 1}. ${s.service}: ${s.startTime} -> ${s.endTime} (staff: ${s.staff_name || "any"}, userId: ${s.staff_user_id || "none"})`);
-      });
+          console.log(`[Book] BACKGROUND: Booking ${bgPackagePlan.slots.length} services...`);
+          bgPackagePlan.slots.forEach((s, idx) => {
+            console.log(`[Book] BACKGROUND:   ${idx + 1}. ${s.service}: ${s.startTime} -> ${s.endTime} (staff: ${s.staff_name || "any"}, userId: ${s.staff_user_id || "none"})`);
+          });
 
-      for (let i = 0; i < packagePlan.slots.length; i++) {
-        const slotInfo = packagePlan.slots[i];
-        console.log(`[Book] ===== Booking service ${i + 1}/${packagePlan.slots.length}: ${slotInfo.service} =====`);
-        console.log(`[Book]   Calendar: ${slotInfo.calendar_id}`);
-        console.log(`[Book]   Start time: ${slotInfo.startTime}`);
-        console.log(`[Book]   Staff: ${slotInfo.staff_name || "any"} (userId: ${slotInfo.staff_user_id || "none"})`);
-        console.log(`[Book]   Customer: ${customerName}, ${customerEmail}, ${customerPhone}`);
+          for (let i = 0; i < bgPackagePlan.slots.length; i++) {
+            const slotInfo = bgPackagePlan.slots[i];
+            console.log(`[Book] BACKGROUND: ===== Booking service ${i + 1}/${bgPackagePlan.slots.length}: ${slotInfo.service} =====`);
+            console.log(`[Book] BACKGROUND:   Calendar: ${slotInfo.calendar_id}`);
+            console.log(`[Book] BACKGROUND:   Start time: ${slotInfo.startTime}`);
+            console.log(`[Book] BACKGROUND:   Staff: ${slotInfo.staff_name || "any"} (userId: ${slotInfo.staff_user_id || "none"})`);
+            console.log(`[Book] BACKGROUND:   Customer: ${bgCustomerName}, ${bgCustomerEmail}, ${bgCustomerPhone}`);
 
-        try {
-          // Add customer name to service title so staff knows who the appointment is for
-          const serviceTitle = `${slotInfo.service} (${customerName})`;
-          console.log(`[Book]   Calling bookServiceAppointment...`);
-          const bookingResult = await bookServiceAppointment(
-            client,
-            locationId,
-            slotInfo.calendar_id,
-            slotInfo.startTime,
-            serviceTitle,
-            customerName,
-            customerEmail,
-            customerPhone,
-            notes,
-            therapistPreference,
-            slotInfo.staff_user_id || undefined
-          );
+            try {
+              // Add customer name to service title so staff knows who the appointment is for
+              const serviceTitle = `${slotInfo.service} (${bgCustomerName})`;
+              console.log(`[Book] BACKGROUND:   Calling bookServiceAppointment...`);
+              const bookingResult = await bookServiceAppointment(
+                bgClient,
+                bgLocationId,
+                slotInfo.calendar_id,
+                slotInfo.startTime,
+                serviceTitle,
+                bgCustomerName,
+                bgCustomerEmail,
+                bgCustomerPhone,
+                bgNotes,
+                bgTherapistPreference,
+                slotInfo.staff_user_id || undefined
+              );
 
           console.log(`[Book]   bookServiceAppointment result:`, JSON.stringify(bookingResult));
 
@@ -2581,38 +2622,38 @@ router.post("/book", async (req: Request, res: Response) => {
 
           console.log(`[Book]   SUCCESS: appointmentId=${bookingResult.appointmentId}, endTime=${bookingResult.endTime}`);
 
-          // Delete the corresponding block-slot hold (it's now replaced by real appointment)
-          const hold = blockSlotHolds.find(h => h.slotIndex === i);
-          if (hold) {
-            try {
-              await client.delete(`/calendars/events/${hold.blockId}`, {
-                headers: { Version: "2021-07-28" },
+              // Delete the corresponding block-slot hold (it's now replaced by real appointment)
+              const hold = blockSlotHolds.find(h => h.slotIndex === i);
+              if (hold) {
+                try {
+                  await bgClient.delete(`/calendars/events/${hold.blockId}`, {
+                    headers: { Version: "2021-07-28" },
+                  });
+                  console.log(`[Book] BACKGROUND:   Removed hold: ${hold.blockId}`);
+                } catch (delErr: any) {
+                  console.log(`[Book] BACKGROUND:   Warning: Failed to delete hold ${hold.blockId}: ${delErr.message}`);
+                  // Non-fatal - the appointment was created successfully
+                }
+              }
+
+              const startDate = new Date(slotInfo.startTime);
+              const endDate = new Date(bookingResult.endTime!);
+              appointments.push({
+                service: slotInfo.service,
+                date: bgPackagePlan.date,
+                start_time: formatTimeForVoice(startDate, bgTz),
+                end_time: formatTimeForVoice(endDate, bgTz),
+                staff_name: slotInfo.staff_name || undefined,
+                calendar_id: slotInfo.calendar_id,
+                appointment_id: bookingResult.appointmentId,
+                status: "confirmed",
               });
-              console.log(`[Book]   Removed hold: ${hold.blockId}`);
-            } catch (delErr: any) {
-              console.log(`[Book]   Warning: Failed to delete hold ${hold.blockId}: ${delErr.message}`);
-              // Non-fatal - the appointment was created successfully
-            }
-          }
 
-          const startDate = new Date(slotInfo.startTime);
-          const endDate = new Date(bookingResult.endTime!);
-          appointments.push({
-            service: slotInfo.service,
-            date: packagePlan.date,
-            start_time: formatTimeForVoice(startDate, tz),
-            end_time: formatTimeForVoice(endDate, tz),
-            staff_name: slotInfo.staff_name || undefined,
-            calendar_id: slotInfo.calendar_id,
-            appointment_id: bookingResult.appointmentId,
-            status: "confirmed",
-          });
-
-          // FIX 1.5: 500ms delay between bookings to let GHL update availability
-          if (i < packagePlan.slots.length - 1) {
-            console.log(`[Book]   Waiting 500ms before next booking...`);
-            await new Promise(resolve => setTimeout(resolve, 500));
-          }
+              // FIX 1.5: 500ms delay between bookings to let GHL update availability
+              if (i < bgPackagePlan.slots.length - 1) {
+                console.log(`[Book] BACKGROUND:   Waiting 500ms before next booking...`);
+                await new Promise(resolve => setTimeout(resolve, 500));
+              }
         } catch (err: any) {
           console.error(`[Book]   FATAL ERROR booking ${slotInfo.service}:`);
           console.error(`[Book]   Error message:`, err.message);
@@ -2624,69 +2665,65 @@ router.post("/book", async (req: Request, res: Response) => {
         }
       }
 
-      // ========== ROLLBACK ON FAILURE ==========
-      if (bookingFailed) {
-        console.log(`[Book] ===== ROLLBACK TRIGGERED =====`);
-        console.log(`[Book] Booking failed at: ${failedService}`);
-        console.log(`[Book] Error: ${failedError}`);
-        console.log(`[Book] Rolling back ${appointments.length} confirmed appointments...`);
+          // ========== ROLLBACK ON FAILURE ==========
+          if (bookingFailed) {
+            console.log(`[Book] BACKGROUND: ===== ROLLBACK TRIGGERED =====`);
+            console.log(`[Book] BACKGROUND: Booking failed at: ${failedService}`);
+            console.log(`[Book] BACKGROUND: Error: ${failedError}`);
+            console.log(`[Book] BACKGROUND: Rolling back ${appointments.length} confirmed appointments...`);
 
-        // 1. Delete all confirmed appointments
-        for (const appt of appointments) {
-          if (appt.appointment_id) {
-            try {
-              await client.delete(`/calendars/events/appointments/${appt.appointment_id}`, {
-                headers: { Version: "2021-07-28" },
-              });
-              console.log(`[Book] Rolled back appointment: ${appt.appointment_id} (${appt.service})`);
-            } catch (delErr: any) {
-              console.error(`[Book] WARNING: Failed to rollback appointment ${appt.appointment_id}: ${delErr.message}`);
+            // 1. Delete all confirmed appointments
+            for (const appt of appointments) {
+              if (appt.appointment_id) {
+                try {
+                  await bgClient.delete(`/calendars/events/appointments/${appt.appointment_id}`, {
+                    headers: { Version: "2021-07-28" },
+                  });
+                  console.log(`[Book] BACKGROUND: Rolled back appointment: ${appt.appointment_id} (${appt.service})`);
+                } catch (delErr: any) {
+                  console.error(`[Book] BACKGROUND: WARNING: Failed to rollback appointment ${appt.appointment_id}: ${delErr.message}`);
+                }
+              }
             }
+
+            // 2. Delete remaining block-slot holds
+            const remainingHolds = blockSlotHolds.filter(h => h.slotIndex >= appointments.length);
+            console.log(`[Book] BACKGROUND: Deleting ${remainingHolds.length} remaining block-slot holds...`);
+
+            for (const hold of remainingHolds) {
+              try {
+                await bgClient.delete(`/calendars/events/${hold.blockId}`, {
+                  headers: { Version: "2021-07-28" },
+                });
+                console.log(`[Book] BACKGROUND: Deleted hold: ${hold.blockId} (${hold.service})`);
+              } catch (delErr: any) {
+                console.log(`[Book] BACKGROUND: Warning: Failed to delete hold ${hold.blockId}: ${delErr.message}`);
+              }
+            }
+
+            console.log(`[Book] BACKGROUND: Rollback complete`);
+            console.error(`[Book] BACKGROUND: CRITICAL - Booking failed but customer already received confirmation. Manual follow-up needed for ${bgCustomerName} (${bgCustomerEmail})`);
+            return; // Exit background processing
           }
+
+          // Full success - all services booked
+          const confirmedAppointments = appointments.filter((a) => a.status === "confirmed");
+          console.log(`[Book] ═══════════════════════════════════════════════════════`);
+          console.log(`[Book] BACKGROUND: ===== PACKAGE BOOKING SUCCESS =====`);
+          console.log(`[Book] BACKGROUND: Package: ${bgPkg.package_name}`);
+          console.log(`[Book] BACKGROUND: Services booked: ${confirmedAppointments.length}`);
+          confirmedAppointments.forEach((a, idx) => {
+            console.log(`[Book] BACKGROUND:   ${idx + 1}. ${a.service}: ${a.start_time} - ${a.end_time} (apptId: ${a.appointment_id})`);
+          });
+          console.log(`[Book] ═══════════════════════════════════════════════════════`);
+
+        } catch (bgErr: any) {
+          console.error("[Book] BACKGROUND: Fatal error during booking:", bgErr.message);
+          console.error("[Book] BACKGROUND: Stack:", bgErr.stack);
         }
+      }); // End setImmediate
 
-        // 2. Delete remaining block-slot holds
-        const remainingHolds = blockSlotHolds.filter(h => h.slotIndex >= appointments.length);
-        console.log(`[Book] Deleting ${remainingHolds.length} remaining block-slot holds...`);
-
-        for (const hold of remainingHolds) {
-          try {
-            await client.delete(`/calendars/events/${hold.blockId}`, {
-              headers: { Version: "2021-07-28" },
-            });
-            console.log(`[Book] Deleted hold: ${hold.blockId} (${hold.service})`);
-          } catch (delErr: any) {
-            console.log(`[Book] Warning: Failed to delete hold ${hold.blockId}: ${delErr.message}`);
-          }
-        }
-
-        console.log(`[Book] Rollback complete`);
-
-        return res.json({
-          success: false,
-          error: `Booking failed for ${failedService}: ${failedError}. All reservations have been cancelled. Please try again.`,
-          retry_suggested: true,
-        });
-      }
-
-      // Full success - all services booked
-      const confirmedAppointments = appointments.filter((a) => a.status === "confirmed");
-      const confirmationMessage = buildPackageConfirmation(pkg.package_name, confirmedAppointments, pkg.price, tz);
-      console.log(`[Book] ===== PACKAGE BOOKING SUCCESS =====`);
-      console.log(`[Book] Package: ${pkg.package_name}`);
-      console.log(`[Book] Services booked: ${confirmedAppointments.length}`);
-      confirmedAppointments.forEach((a, idx) => {
-        console.log(`[Book]   ${idx + 1}. ${a.service}: ${a.start_time} - ${a.end_time} (apptId: ${a.appointment_id})`);
-      });
-
-      return res.json({
-        success: true,
-        package_name: pkg.package_name,
-        total_price: pkg.price,
-        total_duration_minutes: pkg.total_duration_minutes,
-        appointments: confirmedAppointments,
-        confirmation_message: confirmationMessage,
-      });
+      return; // Response already sent, exit handler
     }
 
     // ========== SERVICE BOOKING (default) ==========
