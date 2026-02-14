@@ -5505,6 +5505,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
     }
 
     // Reconstruct people array from flat fields OR use legacy array
+    // FIX 1: Caller needs name, email, phone. Guests only need name (booked under caller's contact).
     let people: Array<{ name: string; email: string; phone: string; therapist_preference?: string }> = [];
 
     if (legacyPeople && Array.isArray(legacyPeople) && legacyPeople.length >= 2) {
@@ -5522,47 +5523,57 @@ router.post("/book-group", async (req: Request, res: Response) => {
         });
       }
 
-      // Build people array from flat fields
-      if (person_1_name && person_1_email && person_1_phone) {
-        people.push({
-          name: person_1_name,
-          email: person_1_email,
-          phone: person_1_phone,
-          therapist_preference: person_1_therapist_preference,
+      // CALLER (person_1) must have name, email, and phone
+      if (!person_1_name || !person_1_email || !person_1_phone) {
+        console.log(`[GroupBook] VALIDATION FAILED: Caller missing required fields`);
+        return res.status(400).json({
+          success: false,
+          error: "Caller must have name, email, and phone",
+          message: "I need your name, email, and phone number to complete the booking.",
         });
       }
-      if (person_2_name && person_2_email && person_2_phone) {
+
+      // Add caller as first person
+      people.push({
+        name: person_1_name,
+        email: person_1_email,
+        phone: person_1_phone,
+        therapist_preference: person_1_therapist_preference,
+      });
+
+      // GUESTS only need a name - they get booked under the caller's contact
+      if (person_2_name) {
         people.push({
           name: person_2_name,
-          email: person_2_email,
-          phone: person_2_phone,
+          email: person_1_email,  // Use caller's email
+          phone: person_1_phone,  // Use caller's phone
           therapist_preference: person_2_therapist_preference,
         });
       }
-      if (size >= 3 && person_3_name && person_3_email && person_3_phone) {
+      if (size >= 3 && person_3_name) {
         people.push({
           name: person_3_name,
-          email: person_3_email,
-          phone: person_3_phone,
+          email: person_1_email,  // Use caller's email
+          phone: person_1_phone,  // Use caller's phone
           therapist_preference: person_3_therapist_preference,
         });
       }
-      if (size >= 4 && person_4_name && person_4_email && person_4_phone) {
+      if (size >= 4 && person_4_name) {
         people.push({
           name: person_4_name,
-          email: person_4_email,
-          phone: person_4_phone,
+          email: person_1_email,  // Use caller's email
+          phone: person_1_phone,  // Use caller's phone
           therapist_preference: person_4_therapist_preference,
         });
       }
 
-      // Validate we have enough people with complete info
+      // Validate we have at least 2 people (caller + at least one guest)
       if (people.length < 2) {
         console.log(`[GroupBook] VALIDATION FAILED: people.length=${people.length} < 2`);
         return res.status(400).json({
           success: false,
-          error: "At least 2 people with complete contact info (name, email, phone) are required",
-          message: "I need the name, email, and phone number for at least two people to complete the booking.",
+          error: "At least 2 people required (caller + guest)",
+          message: "I need at least one guest name to complete the group booking.",
         });
       }
     }
@@ -5571,20 +5582,8 @@ router.post("/book-group", async (req: Request, res: Response) => {
     console.log(`[GroupBook] Reconstructed people (${people.length}):`);
     for (let i = 0; i < people.length; i++) {
       const p = people[i];
-      console.log(`[GroupBook]   Person ${i+1}: name="${p.name}", email="${p.email}", phone="${p.phone}", pref="${p.therapist_preference || 'none'}"`);
-    }
-
-    // Validate each person has required fields
-    for (let i = 0; i < people.length; i++) {
-      const p = people[i];
-      if (!p.name || !p.email || !p.phone) {
-        console.log(`[GroupBook] VALIDATION FAILED: Person ${i + 1} missing required fields`);
-        return res.status(400).json({
-          success: false,
-          error: `Person ${i + 1} is missing required fields (name, email, phone)`,
-          message: `I need the complete contact information for person ${i + 1}.`,
-        });
-      }
+      const role = i === 0 ? "caller" : "guest";
+      console.log(`[GroupBook]   Person ${i+1} (${role}): name="${p.name}", email="${p.email}", phone="${p.phone}", pref="${p.therapist_preference || 'none'}"`);
     }
 
     // Get installation
@@ -5820,41 +5819,46 @@ router.post("/book-group", async (req: Request, res: Response) => {
           console.log(`[GroupBook] BACKGROUND: ✓ Completed booking for ${person.name}: ${personAppointments.length} appointments`);
         }
 
-        // FIX 4: Write internal notes to every appointment with full group context
-        console.log("[GroupBook] BACKGROUND: Writing internal notes to all appointments...");
+        // FIX 2: Write group booking notes to every appointment
+        // Format: Group booking (X people): [caller] + [guest] | Services: [...] | Therapist preference: [...]
+        console.log("[GroupBook] BACKGROUND: Writing group booking notes to all appointments...");
 
-        const allNames = people.map((p: any) => p.name).join(" + ");
+        // Build the names part: "Jane Smith + John"
+        // Note: 'caller' was already defined above as people[0]
+        const guestNames = people.slice(1).map((p: any) => p.name);
+        const namesStr = `${caller.name}${guestNames.length > 0 ? ' + ' + guestNames.join(' + ') : ''}`;
 
+        // Build the services part with durations from the first person's slots
+        const firstPersonSlots = groupAvailability.results[0]?.slots || [];
+        const servicesWithDurations = firstPersonSlots.map((slot: any) => {
+          const startMs = DateTime.fromISO(slot.startTime).toMillis();
+          const endMs = DateTime.fromISO(slot.endTime).toMillis();
+          const durationMins = Math.round((endMs - startMs) / 60000);
+          return `${slot.service} ${durationMins} min`;
+        });
+        const servicesStr = servicesWithDurations.join(', ');
+
+        // Build the therapist preference part
+        const prefsStr = people.map((p: any) => {
+          const pref = p.therapist_preference || 'no preference';
+          return `${p.name} - ${pref}`;
+        }).join(', ');
+
+        // Build the complete note
+        const groupNote = `Group booking (${people.length} people): ${namesStr} | Services: ${servicesStr} | Therapist preference: ${prefsStr}`;
+
+        console.log(`[GroupBook] BACKGROUND: Group note: ${groupNote}`);
+
+        // Write the SAME note to EVERY appointment in the group
         for (const personResult of bookingResults) {
           for (const appt of personResult.appointments) {
-            let noteBody = `GROUP BOOKING\n`;
-            noteBody += `Package: ${pkg.package_name}\n`;
-            noteBody += `Party: ${allNames} (${people.length} people)\n\n`;
-            noteBody += `This appointment is for: ${personResult.person_name}${personResult.is_caller ? ' (caller)' : ' (guest)'}\n`;
-            noteBody += `Service: ${appt.service}\n`;
-
-            const personData = people.find((p: any) => p.name === personResult.person_name);
-            if (personData?.therapist_preference) {
-              noteBody += `Therapist preference: ${personData.therapist_preference}\n`;
-            }
-
-            noteBody += `\nAll appointments in this group:\n`;
-
-            for (const pr of bookingResults) {
-              noteBody += `\n${pr.person_name}${pr.is_caller ? ' (caller)' : ' (guest)'}:\n`;
-              for (const a of pr.appointments) {
-                const localTime = DateTime.fromISO(a.startTime, { zone: tz }).toFormat("h:mm a");
-                noteBody += `  - ${a.service} @ ${localTime} (ID: ${a.appointmentId})\n`;
-              }
-            }
-
             try {
               await client.post(
                 `/calendars/events/appointments/${appt.appointmentId}/notes`,
-                { body: noteBody },
+                { body: groupNote },
                 { headers: { Version: "2021-07-28" } }
               );
-              console.log(`[GroupBook] BACKGROUND: Internal note written for ${appt.service} (${personResult.person_name})`);
+              console.log(`[GroupBook] BACKGROUND: Note written for ${appt.service} (${personResult.person_name})`);
             } catch (noteErr: any) {
               console.error(`[GroupBook] BACKGROUND: Failed to write note for ${appt.appointmentId}: ${noteErr?.message || noteErr}`);
             }
