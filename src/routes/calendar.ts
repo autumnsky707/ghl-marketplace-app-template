@@ -5700,183 +5700,180 @@ router.post("/book-group", async (req: Request, res: Response) => {
     }
     console.log(`[GroupBook] Caller contact created: ${callerContactId} (${caller.name})`);
 
-    // Step 2: Book each person's appointments with rollback on failure
-    console.log("[GroupBook] Step 2: Booking appointments for all people...");
+    // Build the response using availability data (NOT booking data) — respond BEFORE booking
+    const availDate = groupAvailability.results[0]?.date;
+    const firstSlot = groupAvailability.results[0]?.slots[0];
+    const startTimeFmt = firstSlot ? DateTime.fromISO(firstSlot.startTime, { zone: tz }).toFormat("h:mm a") : "";
+    const dateFmt = availDate ? DateTime.fromISO(availDate, { zone: tz }).toFormat("EEEE, MMMM d") : "";
 
-    const bookingResults: PersonBookingResult[] = [];
-
-    // Book each person
-    for (let i = 0; i < people.length; i++) {
-      const person = people[i];
-      const personSlots = groupAvailability.results[i];
-      const isCaller = i === 0;
-      const isGuest = !isCaller;
-
-      console.log(`[GroupBook] Booking Person ${i + 1}: ${person.name} (${isCaller ? 'caller' : 'guest'})`);
-
-      const personAppointments: PersonBookingResult["appointments"] = [];
-      const personBlockSlotIds: string[] = [];
-
-      // Book each service in the person's chain
-      for (const slot of personSlots.slots) {
-        // FIX 3: For guests, append guest name to service title so spa knows who the appointment is for
-        // Caller's appointments: "Body Treatment-60 Mins"
-        // Guest's appointments: "Body Treatment-60 Mins (Amber)"
-        const serviceTitle = isGuest ? `${slot.service} (${person.name})` : slot.service;
-        console.log(`[GroupBook]   Service: ${serviceTitle} at ${slot.startTime}`);
-
-        // FIX 3: Use caller's contact info for ALL bookings to prevent name collision
-        // All appointments are associated with the caller's GHL contact
-        // Guest names appear in appointment title and notes
-        const bookResult = await bookServiceAppointment(
-          client,
-          resolvedLocationId,
-          slot.calendar_id,
-          slot.startTime,
-          serviceTitle,
-          isCaller ? caller.name : caller.name,  // Always use caller's name for contact
-          caller.email,   // Always use caller's email
-          caller.phone,   // Always use caller's phone
-          notes ? `${notes} | Guest: ${person.name} (Group booking: ${people.length} people)` : isGuest ? `Guest: ${person.name} | Group booking: ${people.length} people` : `Group booking: ${people.length} people`,
-          person.therapist_preference,
-          slot.staff_user_id || undefined,
-          callerContactId  // FIX 3: Pre-created contact prevents name overwriting
-        );
-
-        // Log the booking result
-        console.log(`[GroupBook]   bookServiceAppointment result: success=${bookResult.success}, apptId=${bookResult.appointmentId || 'N/A'}, error=${bookResult.error || 'none'}`);
-
-        if (!bookResult.success) {
-          console.log(`[GroupBook] FAILED: Could not book ${slot.service} for ${person.name}`);
-
-          // ROLLBACK: Cancel all appointments for this person
-          for (const appt of personAppointments) {
-            try {
-              await client.delete(`/calendars/events/appointments/${appt.appointmentId}`, {
-                headers: { Version: "2021-07-28" },
-              });
-              console.log(`[GroupBook] ROLLBACK: Cancelled ${appt.service} for ${person.name}`);
-            } catch (err: any) {
-              console.error(`[GroupBook] ROLLBACK FAILED: ${err.message}`);
-            }
-          }
-
-          // ROLLBACK: Cancel all appointments for previous people
-          for (const prevResult of bookingResults) {
-            for (const appt of prevResult.appointments) {
-              try {
-                await client.delete(`/calendars/events/appointments/${appt.appointmentId}`, {
-                  headers: { Version: "2021-07-28" },
-                });
-                console.log(`[GroupBook] ROLLBACK: Cancelled ${appt.service} for ${prevResult.person_name}`);
-              } catch (err: any) {
-                console.error(`[GroupBook] ROLLBACK FAILED: ${err.message}`);
-              }
-            }
-          }
-
-          return res.json({
-            success: false,
-            error: `Failed to book ${slot.service} for ${person.name}: ${bookResult.error}`,
-            message: `Could not complete the group booking. All appointments have been cancelled.`,
-          });
-        }
-
-        personAppointments.push({
-          appointmentId: bookResult.appointmentId!,
-          service: slot.service,
-          startTime: slot.startTime,
-          endTime: bookResult.endTime || slot.endTime,
-          staff_name: slot.staff_name,
-        });
-
-        // Small delay between bookings to avoid rate limits
-        await new Promise(resolve => setTimeout(resolve, 300));
-      }
-
-      bookingResults.push({
-        person_index: i,
-        person_name: person.name,
-        is_caller: isCaller,  // FIX 4: Track caller vs guest for internal notes
-        appointments: personAppointments,
-        blockSlotIds: personBlockSlotIds,
-      });
-
-      console.log(`[GroupBook] ✓ Completed booking for ${person.name}: ${personAppointments.length} appointments`);
-    }
-
-    // FIX 4: Write internal notes to every appointment with full group context
-    // This gives staff visibility into the full group picture when they click on any appointment
-    console.log("[GroupBook] Step 3: Writing internal notes to all appointments...");
-
-    const allNames = people.map((p: any) => p.name).join(" + ");
-
-    for (const personResult of bookingResults) {
-      for (const appt of personResult.appointments) {
-        // Build the note content with full group manifest
-        let noteBody = `GROUP BOOKING\n`;
-        noteBody += `Package: ${pkg.package_name}\n`;
-        noteBody += `Party: ${allNames} (${people.length} people)\n\n`;
-        noteBody += `This appointment is for: ${personResult.person_name}${personResult.is_caller ? ' (caller)' : ' (guest)'}\n`;
-        noteBody += `Service: ${appt.service}\n`;
-
-        // Find this person's therapist preference
-        const personData = people.find((p: any) => p.name === personResult.person_name);
-        if (personData?.therapist_preference) {
-          noteBody += `Therapist preference: ${personData.therapist_preference}\n`;
-        }
-
-        noteBody += `\nAll appointments in this group:\n`;
-
-        for (const pr of bookingResults) {
-          noteBody += `\n${pr.person_name}${pr.is_caller ? ' (caller)' : ' (guest)'}:\n`;
-          for (const a of pr.appointments) {
-            // Convert startTime to local time for display
-            const localTime = DateTime.fromISO(a.startTime, { zone: tz }).toFormat("h:mm a");
-            noteBody += `  - ${a.service} @ ${localTime} (ID: ${a.appointmentId})\n`;
-          }
-        }
-
-        try {
-          await client.post(
-            `/calendars/events/appointments/${appt.appointmentId}/notes`,
-            { body: noteBody },
-            { headers: { Version: "2021-07-28" } }
-          );
-          console.log(`[GroupBook] Internal note written for ${appt.service} (${personResult.person_name})`);
-        } catch (noteErr: any) {
-          // Don't fail the whole booking if notes fail — appointments are already created
-          console.error(`[GroupBook] Failed to write note for ${appt.appointmentId}: ${noteErr?.message || noteErr}`);
-        }
-      }
-    }
-    console.log("[GroupBook] All internal notes written.");
-
-    // Build success response
-    const bookingDate = groupAvailability.results[0]?.date;
-    const response = {
+    // RESPOND IMMEDIATELY — before booking to avoid ElevenLabs timeout
+    const immediateResponse = {
       success: true,
       package_name: pkg.package_name,
       num_people: people.length,
-      date: bookingDate,
-      bookings: bookingResults.map(r => ({
-        person_name: r.person_name,
-        appointments: r.appointments.map(a => ({
-          service: a.service,
-          startTime: a.startTime,
-          endTime: a.endTime,
-          staff_name: a.staff_name,
-          appointmentId: a.appointmentId,
-        })),
-      })),
-      message: buildGroupBookingConfirmationMessage(pkg.package_name, bookingResults, tz),
+      date: availDate,
+      message: `Your ${pkg.package_name} has been booked for ${people.length} people on ${dateFmt} starting at ${startTimeFmt}. You will receive a confirmation email shortly.`,
     };
 
-    console.log("[GroupBook] ═══════════════════════════════════════════════════════");
-    console.log("[GroupBook] SUCCESS: All appointments booked");
-    console.log("[GroupBook] ═══════════════════════════════════════════════════════");
+    console.log("[GroupBook] Responding immediately to avoid timeout");
+    console.log("[GroupBook] Response:", JSON.stringify(immediateResponse, null, 2));
+    res.json(immediateResponse);
 
-    return res.json(response);
+    // BOOK IN BACKGROUND — after response is sent
+    setImmediate(async () => {
+      try {
+        console.log("[GroupBook] ═══════════════════════════════════════════════════════");
+        console.log("[GroupBook] BACKGROUND: Starting appointment bookings...");
+
+        const bookingResults: PersonBookingResult[] = [];
+
+        // Book each person
+        for (let i = 0; i < people.length; i++) {
+          const person = people[i];
+          const personSlots = groupAvailability.results[i];
+          const isCaller = i === 0;
+          const isGuest = !isCaller;
+
+          console.log(`[GroupBook] BACKGROUND: Booking Person ${i + 1}: ${person.name} (${isCaller ? 'caller' : 'guest'})`);
+
+          const personAppointments: PersonBookingResult["appointments"] = [];
+          const personBlockSlotIds: string[] = [];
+
+          // Book each service in the person's chain
+          for (const slot of personSlots.slots) {
+            // FIX 3: For guests, append guest name to service title so spa knows who the appointment is for
+            const serviceTitle = isGuest ? `${slot.service} (${person.name})` : slot.service;
+            console.log(`[GroupBook] BACKGROUND:   Service: ${serviceTitle} at ${slot.startTime}`);
+
+            // FIX 3: Use caller's contact info for ALL bookings to prevent name collision
+            const bookResult = await bookServiceAppointment(
+              client,
+              resolvedLocationId,
+              slot.calendar_id,
+              slot.startTime,
+              serviceTitle,
+              caller.name,  // Always use caller's name for contact
+              caller.email,   // Always use caller's email
+              caller.phone,   // Always use caller's phone
+              notes ? `${notes} | Guest: ${person.name} (Group booking: ${people.length} people)` : isGuest ? `Guest: ${person.name} | Group booking: ${people.length} people` : `Group booking: ${people.length} people`,
+              person.therapist_preference,
+              slot.staff_user_id || undefined,
+              callerContactId  // FIX 3: Pre-created contact prevents name overwriting
+            );
+
+            console.log(`[GroupBook] BACKGROUND:   bookServiceAppointment result: success=${bookResult.success}, apptId=${bookResult.appointmentId || 'N/A'}, error=${bookResult.error || 'none'}`);
+
+            if (!bookResult.success) {
+              console.log(`[GroupBook] BACKGROUND FAILED: Could not book ${slot.service} for ${person.name}`);
+
+              // ROLLBACK: Cancel all appointments for this person
+              for (const appt of personAppointments) {
+                try {
+                  await client.delete(`/calendars/events/appointments/${appt.appointmentId}`, {
+                    headers: { Version: "2021-07-28" },
+                  });
+                  console.log(`[GroupBook] BACKGROUND ROLLBACK: Cancelled ${appt.service} for ${person.name}`);
+                } catch (err: any) {
+                  console.error(`[GroupBook] BACKGROUND ROLLBACK FAILED: ${err.message}`);
+                }
+              }
+
+              // ROLLBACK: Cancel all appointments for previous people
+              for (const prevResult of bookingResults) {
+                for (const appt of prevResult.appointments) {
+                  try {
+                    await client.delete(`/calendars/events/appointments/${appt.appointmentId}`, {
+                      headers: { Version: "2021-07-28" },
+                    });
+                    console.log(`[GroupBook] BACKGROUND ROLLBACK: Cancelled ${appt.service} for ${prevResult.person_name}`);
+                  } catch (err: any) {
+                    console.error(`[GroupBook] BACKGROUND ROLLBACK FAILED: ${err.message}`);
+                  }
+                }
+              }
+
+              // Response already sent — log for manual review
+              console.error(`[GroupBook] BACKGROUND: Booking failed after response sent. Manual review needed.`);
+              return;
+            }
+
+            personAppointments.push({
+              appointmentId: bookResult.appointmentId!,
+              service: slot.service,
+              startTime: slot.startTime,
+              endTime: bookResult.endTime || slot.endTime,
+              staff_name: slot.staff_name,
+            });
+
+            // Small delay between bookings to avoid rate limits
+            await new Promise(resolve => setTimeout(resolve, 300));
+          }
+
+          bookingResults.push({
+            person_index: i,
+            person_name: person.name,
+            is_caller: isCaller,
+            appointments: personAppointments,
+            blockSlotIds: personBlockSlotIds,
+          });
+
+          console.log(`[GroupBook] BACKGROUND: ✓ Completed booking for ${person.name}: ${personAppointments.length} appointments`);
+        }
+
+        // FIX 4: Write internal notes to every appointment with full group context
+        console.log("[GroupBook] BACKGROUND: Writing internal notes to all appointments...");
+
+        const allNames = people.map((p: any) => p.name).join(" + ");
+
+        for (const personResult of bookingResults) {
+          for (const appt of personResult.appointments) {
+            let noteBody = `GROUP BOOKING\n`;
+            noteBody += `Package: ${pkg.package_name}\n`;
+            noteBody += `Party: ${allNames} (${people.length} people)\n\n`;
+            noteBody += `This appointment is for: ${personResult.person_name}${personResult.is_caller ? ' (caller)' : ' (guest)'}\n`;
+            noteBody += `Service: ${appt.service}\n`;
+
+            const personData = people.find((p: any) => p.name === personResult.person_name);
+            if (personData?.therapist_preference) {
+              noteBody += `Therapist preference: ${personData.therapist_preference}\n`;
+            }
+
+            noteBody += `\nAll appointments in this group:\n`;
+
+            for (const pr of bookingResults) {
+              noteBody += `\n${pr.person_name}${pr.is_caller ? ' (caller)' : ' (guest)'}:\n`;
+              for (const a of pr.appointments) {
+                const localTime = DateTime.fromISO(a.startTime, { zone: tz }).toFormat("h:mm a");
+                noteBody += `  - ${a.service} @ ${localTime} (ID: ${a.appointmentId})\n`;
+              }
+            }
+
+            try {
+              await client.post(
+                `/calendars/events/appointments/${appt.appointmentId}/notes`,
+                { body: noteBody },
+                { headers: { Version: "2021-07-28" } }
+              );
+              console.log(`[GroupBook] BACKGROUND: Internal note written for ${appt.service} (${personResult.person_name})`);
+            } catch (noteErr: any) {
+              console.error(`[GroupBook] BACKGROUND: Failed to write note for ${appt.appointmentId}: ${noteErr?.message || noteErr}`);
+            }
+          }
+        }
+
+        console.log("[GroupBook] ═══════════════════════════════════════════════════════");
+        console.log("[GroupBook] BACKGROUND: All appointments booked successfully");
+        console.log("[GroupBook] ═══════════════════════════════════════════════════════");
+
+      } catch (error: any) {
+        console.error("[GroupBook] BACKGROUND ERROR:", error?.response?.data || error.message);
+        console.error("[GroupBook] Stack:", error?.stack);
+        // Appointments may have partially booked — log for manual review
+      }
+    });
+
+    // Return here — response already sent, background booking in progress
+    return;
   } catch (error: any) {
     console.error("[GroupBook] ═══════════════════════════════════════════════════════");
     console.error("[GroupBook] UNHANDLED ERROR:");
