@@ -5933,10 +5933,10 @@ router.post("/book-group", async (req: Request, res: Response) => {
         }
 
         // FIX 2: Write group booking notes to every appointment
-        // Format: Group booking (X people): [caller] + [guest] | Services: [...] | Therapist preference: [...]
+        // Format: Group booking (X people): [names] | Package: [name] | Services: [...] | Therapist preference: [...]
         console.log("[GroupBook] BACKGROUND: Writing group booking notes to all appointments...");
 
-        // Build the names part: "Jane Smith + John"
+        // Build the names part: "Jane Smith + John" (supports up to 4 people)
         // Note: 'caller' was already defined above as people[0]
         const guestNames = people.slice(1).map((p: any) => p.name);
         const namesStr = `${caller.name}${guestNames.length > 0 ? ' + ' + guestNames.join(' + ') : ''}`;
@@ -5945,14 +5945,14 @@ router.post("/book-group", async (req: Request, res: Response) => {
         const firstPersonSlots = groupAvailability.results[0]?.slots || [];
         const servicesStr = firstPersonSlots.map((slot: any) => slot.service).join(', ');
 
-        // Build the therapist preference part
+        // Build the therapist preference part (supports up to 4 people)
         const prefsStr = people.map((p: any) => {
           const pref = p.therapist_preference || 'no preference';
           return `${p.name} - ${pref}`;
         }).join(', ');
 
-        // Build the complete note
-        const groupNote = `Group booking (${people.length} people): ${namesStr} | Services: ${servicesStr} | Therapist preference: ${prefsStr}`;
+        // Build the complete note with package name
+        const groupNote = `Group booking (${people.length} people): ${namesStr} | Package: ${package_name} | Services: ${servicesStr} | Therapist preference: ${prefsStr}`;
 
         console.log(`[GroupBook] BACKGROUND: Group note: ${groupNote}`);
 
