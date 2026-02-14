@@ -5813,16 +5813,32 @@ router.post("/book-group", async (req: Request, res: Response) => {
         console.log("[GroupBook] BACKGROUND: Starting appointment bookings...");
 
         // Build the full group booking note BEFORE booking so it's on every appointment
-        // Format: Group booking (X people): [names] | Package: [name] | Services: [...] | Therapist preference: [...]
+        // Format: Group booking (X people): [names] | Package: [name] | Services: [...] | Massage therapist preference: [...]
         const guestNames = people.slice(1).map((p: any) => p.name);
         const namesStr = `${caller.name}${guestNames.length > 0 ? ' + ' + guestNames.join(' + ') : ''}`;
         const firstPersonSlots = groupAvailability.results[0]?.slots || [];
         const servicesStr = firstPersonSlots.map((slot: any) => slot.service).join(', ');
+
+        // Build therapist preference string with clear wording
+        // Check if anyone requested all-gender preference (strict_gender flag)
         const prefsStr = people.map((p: any) => {
-          const pref = p.therapist_preference || 'no preference';
-          return `${p.name} - ${pref}`;
+          const pref = p.therapist_preference?.toLowerCase();
+          const isStrict = p.strict_gender === true;
+
+          if (pref === 'female') {
+            return isStrict
+              ? `${p.name} - all female service providers requested`
+              : `${p.name} - female massage therapist`;
+          } else if (pref === 'male') {
+            return isStrict
+              ? `${p.name} - all male service providers requested`
+              : `${p.name} - male massage therapist`;
+          } else {
+            return `${p.name} - no preference for massage therapist gender`;
+          }
         }).join(', ');
-        const groupBookingNote = `Group booking (${people.length} people): ${namesStr} | Package: ${package_name} | Services: ${servicesStr} | Therapist preference: ${prefsStr}`;
+
+        const groupBookingNote = `Group booking (${people.length} people): ${namesStr} | Package: ${package_name} | Services: ${servicesStr} | Massage therapist preference: ${prefsStr}`;
         console.log(`[GroupBook] BACKGROUND: Group note for all appointments: ${groupBookingNote}`);
 
         const bookingResults: PersonBookingResult[] = [];
@@ -5841,8 +5857,8 @@ router.post("/book-group", async (req: Request, res: Response) => {
 
           // Book each service in the person's chain
           for (const slot of personSlots.slots) {
-            // FIX 3: For guests, append guest name to service title so spa knows who the appointment is for
-            const serviceTitle = isGuest ? `${slot.service} (${person.name})` : slot.service;
+            // Add person's name to service title for ALL appointments so spa knows who each appointment is for
+            const serviceTitle = `${slot.service} (${person.name})`;
             console.log(`[GroupBook] ───────────────────────────────────────────────────────`);
             console.log(`[GroupBook] BACKGROUND: Booking appointment:`);
             console.log(`[GroupBook]   Person: ${person.name} (${isCaller ? 'caller' : 'guest'})`);
