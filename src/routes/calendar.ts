@@ -6013,7 +6013,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
             try {
               console.log(`[GroupBook] BACKGROUND: Writing note to appointment ${appt.appointmentId} (${appt.service} for ${personResult.person_name})`);
               await client.post(
-                `/calendars/events/appointments/${appt.appointmentId}/notes`,
+                `/calendars/appointments/${appt.appointmentId}/notes`,
                 { body: groupBookingNote },
                 { headers: { Version: "2021-07-28" } }
               );
