@@ -2430,14 +2430,29 @@ router.post("/book", async (req: Request, res: Response) => {
       const lastSlot = packagePlan.slots[packagePlan.slots.length - 1];
       const startTimeFmt = DateTime.fromISO(firstSlot.startTime, { zone: tz }).toFormat("h:mm a");
       const endTimeFmt = DateTime.fromISO(lastSlot.endTime, { zone: tz }).toFormat("h:mm a");
-      // Format date with ordinal suffix (e.g., "Wednesday, February 25th")
+      // Format date with ordinal suffix and relative reference (e.g., "next Wednesday, February 25th")
       const dateDt = DateTime.fromISO(packagePlan.date, { zone: tz });
+      const localNowDt = DateTime.now().setZone(tz);
       const day = dateDt.day;
       const suffix = day === 1 || day === 21 || day === 31 ? "st"
                    : day === 2 || day === 22 ? "nd"
                    : day === 3 || day === 23 ? "rd"
                    : "th";
-      const dateFmt = `${dateDt.toFormat("EEEE, MMMM")} ${day}${suffix}`;
+      const fullDate = `${dateDt.toFormat("EEEE, MMMM")} ${day}${suffix}`;
+      const daysUntil = Math.floor(dateDt.diff(localNowDt.startOf("day"), "days").days);
+      let relativePrefix = "";
+      if (daysUntil === 0) {
+        relativePrefix = "today, ";
+      } else if (daysUntil === 1) {
+        relativePrefix = "tomorrow, ";
+      } else if (daysUntil <= 7) {
+        relativePrefix = "this coming ";
+      } else if (daysUntil <= 14) {
+        relativePrefix = "next ";
+      } else {
+        relativePrefix = "the following ";
+      }
+      const dateFmt = `${relativePrefix}${fullDate}`;
 
       const immediateResponse = {
         success: true,
@@ -5840,8 +5855,9 @@ router.post("/book-group", async (req: Request, res: Response) => {
     const availDate = groupAvailability.results[0]?.date;
     const firstSlot = groupAvailability.results[0]?.slots[0];
     const startTimeFmt = firstSlot ? DateTime.fromISO(firstSlot.startTime, { zone: tz }).toFormat("h:mm a") : "";
-    // Format date with ordinal suffix (e.g., "Wednesday, February 25th")
+    // Format date with ordinal suffix and relative reference (e.g., "next Wednesday, February 25th")
     const dateDt = availDate ? DateTime.fromISO(availDate, { zone: tz }) : null;
+    const now = DateTime.now().setZone(tz);
     let dateFmt = "";
     if (dateDt) {
       const day = dateDt.day;
@@ -5849,7 +5865,21 @@ router.post("/book-group", async (req: Request, res: Response) => {
                    : day === 2 || day === 22 ? "nd"
                    : day === 3 || day === 23 ? "rd"
                    : "th";
-      dateFmt = `${dateDt.toFormat("EEEE, MMMM")} ${day}${suffix}`;
+      const fullDate = `${dateDt.toFormat("EEEE, MMMM")} ${day}${suffix}`;
+      const daysUntil = Math.floor(dateDt.diff(now.startOf("day"), "days").days);
+      let relativePrefix = "";
+      if (daysUntil === 0) {
+        relativePrefix = "today, ";
+      } else if (daysUntil === 1) {
+        relativePrefix = "tomorrow, ";
+      } else if (daysUntil <= 7) {
+        relativePrefix = "this coming ";
+      } else if (daysUntil <= 14) {
+        relativePrefix = "next ";
+      } else {
+        relativePrefix = "the following ";
+      }
+      dateFmt = `${relativePrefix}${fullDate}`;
     }
 
     // RESPOND IMMEDIATELY — before booking to avoid ElevenLabs timeout
@@ -6088,19 +6118,38 @@ function buildGroupConfirmationMessage(
 
   const date = results[0].date;
   const dateDt = DateTime.fromISO(date, { zone: tz });
+  const now = DateTime.now().setZone(tz);
+
   // Include the ordinal suffix (1st, 2nd, 3rd, etc.) for clarity
   const day = dateDt.day;
   const suffix = day === 1 || day === 21 || day === 31 ? "st"
                : day === 2 || day === 22 ? "nd"
                : day === 3 || day === 23 ? "rd"
                : "th";
-  const dateStr = `${dateDt.toFormat("EEEE, MMMM")} ${day}${suffix}`;
+  const fullDate = `${dateDt.toFormat("EEEE, MMMM")} ${day}${suffix}`;
+
+  // Calculate relative week reference
+  const daysUntil = Math.floor(dateDt.diff(now.startOf("day"), "days").days);
+  let relativePrefix = "";
+  if (daysUntil === 0) {
+    relativePrefix = "today, ";
+  } else if (daysUntil === 1) {
+    relativePrefix = "tomorrow, ";
+  } else if (daysUntil <= 7) {
+    relativePrefix = "this coming ";
+  } else if (daysUntil <= 14) {
+    relativePrefix = "next ";
+  } else {
+    relativePrefix = "the following ";
+  }
+
+  const dateStr = `${relativePrefix}${fullDate}`;
 
   // Get the first person's start time for the summary
   const firstSlot = results[0].slots[0];
   const startTime = DateTime.fromISO(firstSlot.startTime, { zone: tz }).toFormat("h:mm a");
 
-  // Simple, clear message for voice: just the date, time, and ask to confirm
+  // Simple, clear message for voice: relative reference + full date + time
   const msg = `I have availability for your group on ${dateStr} starting at ${startTime}. Would you like me to book that for you?`;
 
   return msg;
