@@ -4195,7 +4195,13 @@ async function findPackageDayAvailability(
     }
   }
 
-  const normalizedGender = genderPreference?.toLowerCase() as "male" | "female" | undefined;
+  // Normalize gender preference: only "male" or "female" apply a filter
+  // Anything else ("no preference", "none", empty, etc.) means no filter
+  const rawGender = genderPreference?.toLowerCase().trim();
+  const normalizedGender: "male" | "female" | undefined =
+    rawGender === "male" ? "male" :
+    rawGender === "female" ? "female" :
+    undefined;
 
   // ══════════════════════════════════════════════════════════════════
   // PHASE 1: Build service info with eligible staff for each service
