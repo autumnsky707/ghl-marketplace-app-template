@@ -2594,7 +2594,7 @@ router.post("/book", async (req: Request, res: Response) => {
 
             try {
               // Add customer name to service title so staff knows who the appointment is for
-              const serviceTitle = `${slotInfo.service} (${bgCustomerName})`;
+              const serviceTitle = `${slotInfo.service} (${toTitleCase(bgCustomerName)})`;
               console.log(`[Book] BACKGROUND:   Calling bookServiceAppointment...`);
               const bookingResult = await bookServiceAppointment(
                 bgClient,
@@ -5807,8 +5807,8 @@ router.post("/book-group", async (req: Request, res: Response) => {
     const caller = people[0]; // First person is always the caller
     console.log("[GroupBook] Pre-creating caller contact...");
     const callerNameParts = caller.name.trim().split(/\s+/);
-    const callerFirstName = callerNameParts[0];
-    const callerLastName = callerNameParts.slice(1).join(" ") || "";
+    const callerFirstName = toTitleCase(callerNameParts[0]);
+    const callerLastName = callerNameParts.slice(1).length > 0 ? toTitleCase(callerNameParts.slice(1).join(" ")) : "";
     const callerContactPayload: Record<string, string> = {
       locationId: resolvedLocationId,
       email: caller.email,
@@ -5898,7 +5898,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
           // Book each service in the person's chain
           for (const slot of personSlots.slots) {
             // Add person's name to service title for ALL appointments so spa knows who each appointment is for
-            const serviceTitle = `${slot.service} (${person.name})`;
+            const serviceTitle = `${slot.service} (${toTitleCase(person.name)})`;
             console.log(`[GroupBook] ───────────────────────────────────────────────────────`);
             console.log(`[GroupBook] BACKGROUND: Booking appointment:`);
             console.log(`[GroupBook]   Person: ${person.name} (${isCaller ? 'caller' : 'guest'})`);
