@@ -5941,15 +5941,9 @@ router.post("/book-group", async (req: Request, res: Response) => {
         const guestNames = people.slice(1).map((p: any) => p.name);
         const namesStr = `${caller.name}${guestNames.length > 0 ? ' + ' + guestNames.join(' + ') : ''}`;
 
-        // Build the services part with durations from the first person's slots
+        // Build the services part - service names already include duration (e.g., "Body Treatment-60 mins")
         const firstPersonSlots = groupAvailability.results[0]?.slots || [];
-        const servicesWithDurations = firstPersonSlots.map((slot: any) => {
-          const startMs = DateTime.fromISO(slot.startTime).toMillis();
-          const endMs = DateTime.fromISO(slot.endTime).toMillis();
-          const durationMins = Math.round((endMs - startMs) / 60000);
-          return `${slot.service} ${durationMins} min`;
-        });
-        const servicesStr = servicesWithDurations.join(', ');
+        const servicesStr = firstPersonSlots.map((slot: any) => slot.service).join(', ');
 
         // Build the therapist preference part
         const prefsStr = people.map((p: any) => {
