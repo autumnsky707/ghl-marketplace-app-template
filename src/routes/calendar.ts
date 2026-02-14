@@ -5253,7 +5253,8 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       requested_time,
     } = req.body;
 
-    const resolvedLocationId = locationId || location_id;
+    // Trim locationId to remove any trailing whitespace/newlines from ElevenLabs
+    const resolvedLocationId = (locationId || location_id || "").toString().trim();
     console.log(`[GroupCheck] Resolved locationId: ${resolvedLocationId}`);
 
     // Validation
@@ -5577,7 +5578,8 @@ router.post("/book-group", async (req: Request, res: Response) => {
 
     console.log(`[GroupBook] Mapped fields: person_1_name=${person_1_name}, person_2_name=${person_2_name}`);
 
-    const resolvedLocationId = locationId || location_id;
+    // Trim locationId to remove any trailing whitespace/newlines from ElevenLabs
+    const resolvedLocationId = (locationId || location_id || "").toString().trim();
     console.log(`[GroupBook] Resolved locationId: ${resolvedLocationId}`);
 
     // Validation
