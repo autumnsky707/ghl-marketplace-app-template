@@ -5742,7 +5742,16 @@ router.post("/book-group", async (req: Request, res: Response) => {
           for (const slot of personSlots.slots) {
             // FIX 3: For guests, append guest name to service title so spa knows who the appointment is for
             const serviceTitle = isGuest ? `${slot.service} (${person.name})` : slot.service;
-            console.log(`[GroupBook] BACKGROUND:   Service: ${serviceTitle} at ${slot.startTime}`);
+            console.log(`[GroupBook] ───────────────────────────────────────────────────────`);
+            console.log(`[GroupBook] BACKGROUND: Booking appointment:`);
+            console.log(`[GroupBook]   Person: ${person.name} (${isCaller ? 'caller' : 'guest'})`);
+            console.log(`[GroupBook]   Service: ${serviceTitle}`);
+            console.log(`[GroupBook]   Start time: ${slot.startTime}`);
+            console.log(`[GroupBook]   End time: ${slot.endTime}`);
+            console.log(`[GroupBook]   Calendar ID: ${slot.calendar_id}`);
+            console.log(`[GroupBook]   Staff user ID: ${slot.staff_user_id || '(none)'}`);
+            console.log(`[GroupBook]   Staff name: ${slot.staff_name || '(none)'}`);
+            console.log(`[GroupBook]   Therapist preference: ${person.therapist_preference || '(none)'}`);
 
             // FIX 3: Use caller's contact info for ALL bookings to prevent name collision
             const bookResult = await bookServiceAppointment(
@@ -5760,10 +5769,23 @@ router.post("/book-group", async (req: Request, res: Response) => {
               callerContactId  // FIX 3: Pre-created contact prevents name overwriting
             );
 
-            console.log(`[GroupBook] BACKGROUND:   bookServiceAppointment result: success=${bookResult.success}, apptId=${bookResult.appointmentId || 'N/A'}, error=${bookResult.error || 'none'}`);
+            console.log(`[GroupBook] BACKGROUND: bookServiceAppointment returned:`);
+            console.log(`[GroupBook]   success: ${bookResult.success}`);
+            console.log(`[GroupBook]   appointmentId: ${bookResult.appointmentId || 'N/A'}`);
+            console.log(`[GroupBook]   endTime: ${bookResult.endTime || 'N/A'}`);
+            if (bookResult.error) {
+              console.log(`[GroupBook]   error: ${bookResult.error}`);
+            }
 
             if (!bookResult.success) {
-              console.log(`[GroupBook] BACKGROUND FAILED: Could not book ${slot.service} for ${person.name}`);
+              console.error(`[GroupBook] ═══════════════════════════════════════════════════════`);
+              console.error(`[GroupBook] BACKGROUND BOOKING FAILED`);
+              console.error(`[GroupBook]   Service: ${slot.service}`);
+              console.error(`[GroupBook]   Person: ${person.name}`);
+              console.error(`[GroupBook]   Calendar: ${slot.calendar_id}`);
+              console.error(`[GroupBook]   Time: ${slot.startTime}`);
+              console.error(`[GroupBook]   Error: ${bookResult.error}`);
+              console.error(`[GroupBook] ═══════════════════════════════════════════════════════`);
 
               // ROLLBACK: Cancel all appointments for this person
               for (const appt of personAppointments) {
@@ -5803,6 +5825,9 @@ router.post("/book-group", async (req: Request, res: Response) => {
               endTime: bookResult.endTime || slot.endTime,
               staff_name: slot.staff_name,
             });
+
+            console.log(`[GroupBook] BACKGROUND: ✓ Appointment created successfully`);
+            console.log(`[GroupBook]   Appointment ID: ${bookResult.appointmentId}`);
 
             // Small delay between bookings to avoid rate limits
             await new Promise(resolve => setTimeout(resolve, 300));
@@ -5850,17 +5875,22 @@ router.post("/book-group", async (req: Request, res: Response) => {
         console.log(`[GroupBook] BACKGROUND: Group note: ${groupNote}`);
 
         // Write the SAME note to EVERY appointment in the group
+        console.log(`[GroupBook] ───────────────────────────────────────────────────────`);
+        console.log(`[GroupBook] BACKGROUND: Writing notes to ${bookingResults.reduce((sum, pr) => sum + pr.appointments.length, 0)} appointments...`);
         for (const personResult of bookingResults) {
           for (const appt of personResult.appointments) {
             try {
+              console.log(`[GroupBook] BACKGROUND: Writing note to appointment ${appt.appointmentId} (${appt.service} for ${personResult.person_name})`);
               await client.post(
                 `/calendars/events/appointments/${appt.appointmentId}/notes`,
                 { body: groupNote },
                 { headers: { Version: "2021-07-28" } }
               );
-              console.log(`[GroupBook] BACKGROUND: Note written for ${appt.service} (${personResult.person_name})`);
+              console.log(`[GroupBook] BACKGROUND: ✓ Note written successfully`);
             } catch (noteErr: any) {
-              console.error(`[GroupBook] BACKGROUND: Failed to write note for ${appt.appointmentId}: ${noteErr?.message || noteErr}`);
+              console.error(`[GroupBook] BACKGROUND: ✗ Failed to write note for ${appt.appointmentId}`);
+              console.error(`[GroupBook]   Error: ${noteErr?.message || noteErr}`);
+              console.error(`[GroupBook]   Response: ${JSON.stringify(noteErr?.response?.data || {})}`);
             }
           }
         }
@@ -5870,8 +5900,13 @@ router.post("/book-group", async (req: Request, res: Response) => {
         console.log("[GroupBook] ═══════════════════════════════════════════════════════");
 
       } catch (error: any) {
-        console.error("[GroupBook] BACKGROUND ERROR:", error?.response?.data || error.message);
-        console.error("[GroupBook] Stack:", error?.stack);
+        console.error("[GroupBook] ═══════════════════════════════════════════════════════");
+        console.error("[GroupBook] BACKGROUND UNHANDLED ERROR");
+        console.error("[GroupBook] Timestamp:", new Date().toISOString());
+        console.error("[GroupBook] Error message:", error?.message);
+        console.error("[GroupBook] Error response data:", JSON.stringify(error?.response?.data, null, 2));
+        console.error("[GroupBook] Error stack:", error?.stack);
+        console.error("[GroupBook] ═══════════════════════════════════════════════════════");
         // Appointments may have partially booked — log for manual review
       }
     });
