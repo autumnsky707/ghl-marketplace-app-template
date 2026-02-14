@@ -1983,8 +1983,9 @@ router.post("/book", async (req: Request, res: Response) => {
     const strictGender = body.strictGender || body.strict_gender;  // When true, no gender fallback
     const notes = body.notes;
     // Group booking support: Agent calls book_appointment twice (once per person) instead of book_group
-    const isGuest = body.is_guest === true;  // When true, lookup contact by email instead of upserting
-    const bookingNotes = body.booking_notes;  // Additional notes for group booking context
+    // Accept both snake_case (is_guest, booking_notes) and camelCase (isGuest, bookingNotes)
+    const isGuest = body.is_guest === true || body.isGuest === true;  // When true, lookup contact by email instead of upserting
+    const bookingNotes = body.booking_notes || body.bookingNotes;  // Additional notes for group booking context
 
     // ========== PACKAGE BOOKING ==========
     if (type === "package") {
