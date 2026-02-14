@@ -2594,7 +2594,7 @@ router.post("/book", async (req: Request, res: Response) => {
 
             try {
               // Add customer name to service title so staff knows who the appointment is for
-              const serviceTitle = `${slotInfo.service} (${toTitleCase(bgCustomerName)})`;
+              const serviceTitle = `${toTitleCase(slotInfo.service)} (${toTitleCase(bgCustomerName)})`;
               console.log(`[Book] BACKGROUND:   Calling bookServiceAppointment...`);
               const bookingResult = await bookServiceAppointment(
                 bgClient,
@@ -4987,13 +4987,15 @@ async function bookServiceAppointment(
     }
 
     // Build appointment
+    // Note: serviceName may already include customer name in parentheses like "Facial-60 Min (John Smith)"
+    // so we don't apply toTitleCase here - caller is responsible for formatting
     const appointmentPayload: Record<string, any> = {
       calendarId,
       locationId,
       contactId,
       startTime: startISO,
       endTime: endISO,
-      title: toTitleCase(serviceName),
+      title: serviceName,
       appointmentStatus: "confirmed",
       notes: appointmentNotes || undefined,
     };
@@ -5898,7 +5900,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
           // Book each service in the person's chain
           for (const slot of personSlots.slots) {
             // Add person's name to service title for ALL appointments so spa knows who each appointment is for
-            const serviceTitle = `${slot.service} (${toTitleCase(person.name)})`;
+            const serviceTitle = `${toTitleCase(slot.service)} (${toTitleCase(person.name)})`;
             console.log(`[GroupBook] ───────────────────────────────────────────────────────`);
             console.log(`[GroupBook] BACKGROUND: Booking appointment:`);
             console.log(`[GroupBook]   Person: ${person.name} (${isCaller ? 'caller' : 'guest'})`);
