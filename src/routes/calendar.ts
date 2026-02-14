@@ -2552,13 +2552,15 @@ router.post("/book", async (req: Request, res: Response) => {
         console.log(`[Book]   Customer: ${customerName}, ${customerEmail}, ${customerPhone}`);
 
         try {
+          // Add customer name to service title so staff knows who the appointment is for
+          const serviceTitle = `${slotInfo.service} (${customerName})`;
           console.log(`[Book]   Calling bookServiceAppointment...`);
           const bookingResult = await bookServiceAppointment(
             client,
             locationId,
             slotInfo.calendar_id,
             slotInfo.startTime,
-            slotInfo.service,
+            serviceTitle,
             customerName,
             customerEmail,
             customerPhone,
