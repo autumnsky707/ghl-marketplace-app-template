@@ -137,16 +137,27 @@
     .btn-primary:hover {
       background: #333;
     }
+    .btn-secondary {
+      background: #fff;
+      color: #333;
+      border: 1px solid #ddd;
+    }
+    .btn-secondary:hover {
+      background: #f5f5f5;
+      border-color: #ccc;
+    }
     .btn-danger {
       background: #fff;
       color: #dc3545;
       border: 1px solid #dc3545;
-      padding: 6px 12px;
-      font-size: 13px;
     }
     .btn-danger:hover {
       background: #dc3545;
       color: #fff;
+    }
+    .btn-sm {
+      padding: 6px 12px;
+      font-size: 13px;
     }
     .package-item {
       display: flex;
@@ -654,8 +665,8 @@
         <div class="package-item" id="pkg-${pkg.id}">
           <div class="package-info">
             <h3>${pkg.package_name}</h3>
-            <div class="services" style="font-size: 13px; color: #333;">
-              <strong>Booking Order:</strong> ${pkg.services.map((s, i) => `<span style="background:#f0f0f0;padding:2px 6px;border-radius:3px;margin:2px;">${i + 1}. ${s}</span>`).join(' → ')}
+            <div class="services" style="font-size: 13px; color: #333; margin: 4px 0;">
+              <strong>Booking Order:</strong> ${pkg.services.map((s, i) => `<span style="background:#f0f0f0;padding:2px 6px;border-radius:3px;margin:2px;display:inline-block;">${i + 1}. ${s}</span>`).join(' → ')}
             </div>
             <div class="meta">
               ${pkg.total_duration_minutes ? pkg.total_duration_minutes + ' min' : ''}
@@ -663,9 +674,9 @@
               ${pkg.description ? ' · ' + pkg.description : ''}
             </div>
           </div>
-          <div style="display: flex; gap: 8px;">
-            <button class="btn btn-primary" style="padding: 6px 12px; font-size: 13px;" onclick="openEditModal('${pkg.id}')">Edit Order</button>
-            <button class="btn btn-danger" onclick="deletePackage('${pkg.id}')">Delete</button>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <button class="btn btn-secondary btn-sm" onclick="openEditModal('${pkg.id}')">Edit</button>
+            <button class="btn btn-danger btn-sm" onclick="deletePackage('${pkg.id}')">Delete</button>
           </div>
         </div>
       `).join('');
@@ -674,13 +685,18 @@
     // Edit modal state
     let editingPackageId = null;
     let editingServices = [];
+    let editingDescription = '';
 
     function openEditModal(pkgId) {
       const pkg = packagesData.find(p => p.id === pkgId);
-      if (!pkg) return;
+      if (!pkg) {
+        console.error('Package not found:', pkgId);
+        return;
+      }
 
       editingPackageId = pkgId;
       editingServices = [...pkg.services]; // Copy array
+      editingDescription = pkg.description || '';
 
       // Create modal
       const modal = document.createElement('div');
@@ -688,12 +704,18 @@
       modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:1000;';
       modal.innerHTML = `
         <div style="background:#fff;border-radius:8px;padding:24px;max-width:500px;width:90%;max-height:80vh;overflow-y:auto;">
-          <h3 style="margin:0 0 8px 0;font-size:18px;">Edit Service Order</h3>
-          <p style="color:#666;font-size:14px;margin:0 0 16px 0;">${pkg.package_name} — Drag to reorder</p>
+          <h3 style="margin:0 0 8px 0;font-size:18px;">Edit Package</h3>
+          <p style="color:#666;font-size:14px;margin:0 0 16px 0;">${pkg.package_name}</p>
+
+          <label style="display:block;font-size:14px;font-weight:500;margin-bottom:6px;">Service Order (drag to reorder)</label>
           <div id="editServicesOrder" class="selected-services-list" style="margin-bottom:16px;"></div>
+
+          <label style="display:block;font-size:14px;font-weight:500;margin-bottom:6px;">Description</label>
+          <input type="text" id="editDescription" value="${editingDescription}" placeholder="e.g., Massage - 60 min, Facial - 45 min" style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:6px;font-size:14px;margin-bottom:16px;">
+
           <div style="display:flex;gap:8px;justify-content:flex-end;">
-            <button class="btn" style="background:#f0f0f0;color:#333;" onclick="closeEditModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="saveEditOrder()">Save Order</button>
+            <button class="btn btn-secondary" onclick="closeEditModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="saveEditOrder()">Save</button>
           </div>
         </div>
       `;
@@ -760,30 +782,48 @@
     }
 
     async function saveEditOrder() {
-      if (!editingPackageId || editingServices.length === 0) return;
+      if (!editingPackageId || editingServices.length === 0) {
+        console.error('Cannot save: missing packageId or services');
+        showAlert('Cannot save: no package selected or no services.', 'error');
+        return;
+      }
+
+      // Get updated description from input
+      const descInput = document.getElementById('editDescription');
+      const newDescription = descInput ? descInput.value : editingDescription;
+
+      const payload = {
+        locationId,
+        action: 'update',
+        id: editingPackageId,
+        services: editingServices,
+        description: newDescription
+      };
+
+      console.log('Saving package update:', payload);
 
       try {
         const resp = await fetch(`${API_BASE}/api/calendar/packages`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            locationId,
-            action: 'update',
-            id: editingPackageId,
-            services: editingServices
-          })
+          body: JSON.stringify(payload)
         });
+
+        console.log('Response status:', resp.status);
         const data = await resp.json();
+        console.log('Response data:', data);
 
         if (data.success) {
-          showAlert('Package updated! New booking order: ' + editingServices.map((s,i) => `${i+1}. ${s}`).join(' → '), 'success');
+          showAlert('Package updated! Booking order: ' + editingServices.map((s,i) => `${i+1}. ${s}`).join(' → '), 'success');
           closeEditModal();
           loadPackages();
         } else {
+          console.error('Update failed:', data.error);
           showAlert(data.error || 'Failed to update package.', 'error');
         }
       } catch (err) {
-        showAlert('Failed to update package.', 'error');
+        console.error('Save error:', err);
+        showAlert('Failed to update package: ' + err.message, 'error');
       }
     }
 
