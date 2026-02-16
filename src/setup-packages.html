@@ -258,6 +258,74 @@
     .info-box p + p {
       margin-top: 8px;
     }
+    .selected-services-list {
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      background: #f8f9fa;
+      min-height: 60px;
+      padding: 8px;
+    }
+    .selected-service-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 4px;
+      margin-bottom: 6px;
+      cursor: grab;
+      user-select: none;
+    }
+    .selected-service-item:last-child {
+      margin-bottom: 0;
+    }
+    .selected-service-item:active {
+      cursor: grabbing;
+      background: #f0f0f0;
+    }
+    .selected-service-item.dragging {
+      opacity: 0.5;
+      background: #e8e8e8;
+    }
+    .selected-service-item .order-num {
+      background: #111;
+      color: #fff;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+    .selected-service-item .service-name {
+      flex: 1;
+      font-size: 14px;
+    }
+    .selected-service-item .drag-handle {
+      color: #999;
+      font-size: 18px;
+    }
+    .selected-service-item .remove-btn {
+      background: none;
+      border: none;
+      color: #999;
+      cursor: pointer;
+      font-size: 18px;
+      padding: 0 4px;
+    }
+    .selected-service-item .remove-btn:hover {
+      color: #dc3545;
+    }
+    .empty-order-state {
+      color: #999;
+      font-size: 13px;
+      text-align: center;
+      padding: 16px;
+    }
   </style>
 </head>
 <body>
@@ -291,12 +359,18 @@
         </div>
 
         <div class="form-group">
-          <label>Services Included</label>
-          <p style="font-size: 12px; color: #666; margin-bottom: 8px;">
-            <strong>Note:</strong> Services will be booked in the order they appear below. You can edit the order after creating the package.
-          </p>
+          <label>Select Services</label>
           <div id="servicesContainer" class="checkbox-group">
             <div class="loading">Loading services...</div>
+          </div>
+        </div>
+
+        <div class="form-group" id="orderSection" style="display: none;">
+          <label>Service Order (drag to reorder)</label>
+          <p style="font-size: 12px; color: #666; margin-bottom: 8px;">
+            Services will be booked in this order. Drag to rearrange.
+          </p>
+          <div id="selectedServicesOrder" class="selected-services-list">
           </div>
         </div>
 
@@ -437,6 +511,9 @@
       }
     }
 
+    // Track selected services in order
+    let selectedServicesInOrder = [];
+
     function renderServiceCheckboxes() {
       const container = document.getElementById('servicesContainer');
       if (availableServices.length === 0) {
@@ -446,10 +523,102 @@
 
       container.innerHTML = availableServices.map(service => `
         <label class="checkbox-item">
-          <input type="checkbox" name="services" value="${service}">
+          <input type="checkbox" name="services" value="${service}" onchange="handleServiceToggle(this)">
           <span>${service}</span>
         </label>
       `).join('');
+    }
+
+    function handleServiceToggle(checkbox) {
+      const service = checkbox.value;
+      if (checkbox.checked) {
+        // Add to end of ordered list
+        if (!selectedServicesInOrder.includes(service)) {
+          selectedServicesInOrder.push(service);
+        }
+      } else {
+        // Remove from ordered list
+        selectedServicesInOrder = selectedServicesInOrder.filter(s => s !== service);
+      }
+      renderSelectedServicesOrder();
+    }
+
+    function renderSelectedServicesOrder() {
+      const container = document.getElementById('selectedServicesOrder');
+      const section = document.getElementById('orderSection');
+
+      if (selectedServicesInOrder.length === 0) {
+        section.style.display = 'none';
+        return;
+      }
+
+      section.style.display = 'block';
+      container.innerHTML = selectedServicesInOrder.map((service, idx) => `
+        <div class="selected-service-item" draggable="true" data-service="${service}">
+          <span class="order-num">${idx + 1}</span>
+          <span class="service-name">${service}</span>
+          <span class="drag-handle">☰</span>
+          <button type="button" class="remove-btn" onclick="removeService('${service}')" title="Remove">×</button>
+        </div>
+      `).join('');
+
+      // Add drag-and-drop handlers
+      initDragAndDrop();
+    }
+
+    function removeService(service) {
+      selectedServicesInOrder = selectedServicesInOrder.filter(s => s !== service);
+      // Uncheck the checkbox
+      const checkbox = document.querySelector(`input[name="services"][value="${service}"]`);
+      if (checkbox) checkbox.checked = false;
+      renderSelectedServicesOrder();
+    }
+
+    function initDragAndDrop() {
+      const container = document.getElementById('selectedServicesOrder');
+      const items = container.querySelectorAll('.selected-service-item');
+
+      items.forEach(item => {
+        item.addEventListener('dragstart', handleDragStart);
+        item.addEventListener('dragend', handleDragEnd);
+        item.addEventListener('dragover', handleDragOver);
+        item.addEventListener('drop', handleDrop);
+      });
+    }
+
+    let draggedItem = null;
+
+    function handleDragStart(e) {
+      draggedItem = this;
+      this.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    }
+
+    function handleDragEnd(e) {
+      this.classList.remove('dragging');
+      draggedItem = null;
+    }
+
+    function handleDragOver(e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    }
+
+    function handleDrop(e) {
+      e.preventDefault();
+      if (draggedItem === this) return;
+
+      const draggedService = draggedItem.dataset.service;
+      const targetService = this.dataset.service;
+
+      const draggedIdx = selectedServicesInOrder.indexOf(draggedService);
+      const targetIdx = selectedServicesInOrder.indexOf(targetService);
+
+      // Remove dragged item and insert at new position
+      selectedServicesInOrder.splice(draggedIdx, 1);
+      selectedServicesInOrder.splice(targetIdx, 0, draggedService);
+
+      renderSelectedServicesOrder();
     }
 
     async function loadPackages() {
@@ -469,7 +638,11 @@
       }
     }
 
+    // Store packages data for editing
+    let packagesData = [];
+
     function renderPackages(packages) {
+      packagesData = packages || [];
       const container = document.getElementById('packageList');
 
       if (!packages || packages.length === 0) {
@@ -478,51 +651,133 @@
       }
 
       container.innerHTML = packages.map(pkg => `
-        <div class="package-item">
+        <div class="package-item" id="pkg-${pkg.id}">
           <div class="package-info">
             <h3>${pkg.package_name}</h3>
             <div class="services" style="font-size: 13px; color: #333;">
-              <strong>Service Order:</strong> ${pkg.services.map((s, i) => `${i + 1}. ${s}`).join(' → ')}
+              <strong>Booking Order:</strong> ${pkg.services.map((s, i) => `<span style="background:#f0f0f0;padding:2px 6px;border-radius:3px;margin:2px;">${i + 1}. ${s}</span>`).join(' → ')}
             </div>
             <div class="meta">
               ${pkg.total_duration_minutes ? pkg.total_duration_minutes + ' min' : ''}
-              ${pkg.price ? ' &middot; $' + parseFloat(pkg.price).toFixed(2) : ''}
-              ${pkg.description ? ' &middot; ' + pkg.description : ''}
+              ${pkg.price ? ' · $' + parseFloat(pkg.price).toFixed(2) : ''}
+              ${pkg.description ? ' · ' + pkg.description : ''}
             </div>
           </div>
           <div style="display: flex; gap: 8px;">
-            <button class="btn btn-primary" style="padding: 6px 12px; font-size: 13px;" onclick="editPackage('${pkg.id}', ${JSON.stringify(pkg.services).replace(/"/g, '&quot;')})">Edit Order</button>
+            <button class="btn btn-primary" style="padding: 6px 12px; font-size: 13px;" onclick="openEditModal('${pkg.id}')">Edit Order</button>
             <button class="btn btn-danger" onclick="deletePackage('${pkg.id}')">Delete</button>
           </div>
         </div>
       `).join('');
     }
 
-    // Edit package service order
-    function editPackage(id, services) {
-      const newOrder = prompt(
-        'Edit service order (comma-separated, in order of booking):\\n\\n' +
-        'Current: ' + services.join(', ') + '\\n\\n' +
-        'Enter new order (copy/paste and rearrange):'
-      , services.join(', '));
+    // Edit modal state
+    let editingPackageId = null;
+    let editingServices = [];
 
-      if (newOrder && newOrder !== services.join(', ')) {
-        const newServices = newOrder.split(',').map(s => s.trim()).filter(s => s);
-        updatePackageOrder(id, newServices);
-      }
+    function openEditModal(pkgId) {
+      const pkg = packagesData.find(p => p.id === pkgId);
+      if (!pkg) return;
+
+      editingPackageId = pkgId;
+      editingServices = [...pkg.services]; // Copy array
+
+      // Create modal
+      const modal = document.createElement('div');
+      modal.id = 'editModal';
+      modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:1000;';
+      modal.innerHTML = `
+        <div style="background:#fff;border-radius:8px;padding:24px;max-width:500px;width:90%;max-height:80vh;overflow-y:auto;">
+          <h3 style="margin:0 0 8px 0;font-size:18px;">Edit Service Order</h3>
+          <p style="color:#666;font-size:14px;margin:0 0 16px 0;">${pkg.package_name} — Drag to reorder</p>
+          <div id="editServicesOrder" class="selected-services-list" style="margin-bottom:16px;"></div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;">
+            <button class="btn" style="background:#f0f0f0;color:#333;" onclick="closeEditModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="saveEditOrder()">Save Order</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+      renderEditServices();
     }
 
-    async function updatePackageOrder(id, services) {
+    function renderEditServices() {
+      const container = document.getElementById('editServicesOrder');
+      if (!container) return;
+
+      container.innerHTML = editingServices.map((service, idx) => `
+        <div class="selected-service-item" draggable="true" data-service="${service}" data-edit="true">
+          <span class="order-num">${idx + 1}</span>
+          <span class="service-name">${service}</span>
+          <span class="drag-handle">☰</span>
+        </div>
+      `).join('');
+
+      // Add drag handlers for edit modal
+      const items = container.querySelectorAll('.selected-service-item');
+      items.forEach(item => {
+        item.addEventListener('dragstart', handleEditDragStart);
+        item.addEventListener('dragend', handleEditDragEnd);
+        item.addEventListener('dragover', handleDragOver);
+        item.addEventListener('drop', handleEditDrop);
+      });
+    }
+
+    let editDraggedItem = null;
+
+    function handleEditDragStart(e) {
+      editDraggedItem = this;
+      this.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    }
+
+    function handleEditDragEnd(e) {
+      this.classList.remove('dragging');
+      editDraggedItem = null;
+    }
+
+    function handleEditDrop(e) {
+      e.preventDefault();
+      if (editDraggedItem === this) return;
+
+      const draggedService = editDraggedItem.dataset.service;
+      const targetService = this.dataset.service;
+
+      const draggedIdx = editingServices.indexOf(draggedService);
+      const targetIdx = editingServices.indexOf(targetService);
+
+      editingServices.splice(draggedIdx, 1);
+      editingServices.splice(targetIdx, 0, draggedService);
+
+      renderEditServices();
+    }
+
+    function closeEditModal() {
+      const modal = document.getElementById('editModal');
+      if (modal) modal.remove();
+      editingPackageId = null;
+      editingServices = [];
+    }
+
+    async function saveEditOrder() {
+      if (!editingPackageId || editingServices.length === 0) return;
+
       try {
         const resp = await fetch(`${API_BASE}/api/calendar/packages`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ locationId, action: 'update', id, services })
+          body: JSON.stringify({
+            locationId,
+            action: 'update',
+            id: editingPackageId,
+            services: editingServices
+          })
         });
         const data = await resp.json();
 
         if (data.success) {
-          showAlert('Package updated! Services will now book in this order: ' + services.join(' → '), 'success');
+          showAlert('Package updated! New booking order: ' + editingServices.map((s,i) => `${i+1}. ${s}`).join(' → '), 'success');
+          closeEditModal();
           loadPackages();
         } else {
           showAlert(data.error || 'Failed to update package.', 'error');
@@ -535,10 +790,8 @@
     document.getElementById('packageForm').addEventListener('submit', async (e) => {
       e.preventDefault();
 
-      const selectedServices = Array.from(document.querySelectorAll('input[name="services"]:checked'))
-        .map(cb => cb.value);
-
-      if (selectedServices.length === 0) {
+      // Use the ordered list, not checkbox order
+      if (selectedServicesInOrder.length === 0) {
         showAlert('Please select at least one service.', 'error');
         return;
       }
@@ -547,7 +800,7 @@
         locationId,
         action: 'add',
         package_name: document.getElementById('packageName').value,
-        services: selectedServices,
+        services: selectedServicesInOrder,  // Use ordered list!
         total_duration_minutes: parseInt(document.getElementById('duration').value) || null,
         price: parseFloat(document.getElementById('price').value) || null,
         description: document.getElementById('description').value || null
@@ -562,8 +815,10 @@
         const data = await resp.json();
 
         if (data.success) {
-          showAlert('Package created successfully.', 'success');
+          showAlert('Package created! Services will book in order: ' + selectedServicesInOrder.join(' → '), 'success');
           document.getElementById('packageForm').reset();
+          selectedServicesInOrder = [];  // Reset order list
+          renderSelectedServicesOrder();
           loadPackages();
         } else {
           showAlert(data.error || 'Failed to create package.', 'error');
