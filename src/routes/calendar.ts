@@ -4772,17 +4772,394 @@ interface PersonBookingResult {
   blockSlotIds: string[];
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// OPTIMIZATION: Pre-fetched data structures for group availability
+// These allow fetching GHL slots ONCE and reusing for all people/dates
+// ══════════════════════════════════════════════════════════════════════════════
+
+interface StaffEntryWithGender {
+  calendar_id: string;
+  calendar_name: string | null;
+  staff_name: string | null;
+  user_id: string | null;
+  gender: string | null;  // "male" | "female" | null
+  duration_minutes: number;
+  buffer_minutes: number;
+}
+
+interface PrefetchedPackageData {
+  // Service -> all staff (with gender info for filtering)
+  serviceStaffMap: Map<string, StaffEntryWithGender[]>;
+  // "calendarId:userId" -> date -> array of slot minutes
+  staffSlotsMap: Map<string, Map<string, number[]>>;
+  // For logging
+  userIdToName: Map<string, string>;
+}
+
+/**
+ * Pre-fetch ALL data needed for package availability checking.
+ * Call ONCE, then reuse for all date/person combinations.
+ */
+async function prefetchPackageData(
+  locationId: string,
+  services: string[],
+  datesToCheck: string[],
+  tz: string,
+  installation: any
+): Promise<PrefetchedPackageData> {
+  const DEFAULT_BUFFER_MINUTES = 15;
+
+  console.log(`[Prefetch] ═══════════════════════════════════════════════════════`);
+  console.log(`[Prefetch] Pre-fetching data for ${services.length} services, ${datesToCheck.length} days`);
+
+  // STEP 1: Build service -> staff map (with gender info)
+  const serviceStaffMap: Map<string, StaffEntryWithGender[]> = new Map();
+  const userIdToName: Map<string, string> = new Map();
+
+  for (const service of services) {
+    const syncedCals = await getSyncedCalendarsForService(locationId, service);
+    const staffEntries: StaffEntryWithGender[] = [];
+
+    for (const cal of syncedCals) {
+      const members = await getSyncedTeamMembers(locationId, cal.calendar_id);
+      const duration = cal.slot_duration || 60;
+      const buffer = cal.slot_buffer || DEFAULT_BUFFER_MINUTES;
+
+      for (const member of members) {
+        staffEntries.push({
+          calendar_id: cal.calendar_id,
+          calendar_name: cal.calendar_name,
+          staff_name: member.user_name,
+          user_id: member.user_id,
+          gender: member.gender || null,
+          duration_minutes: duration,
+          buffer_minutes: buffer,
+        });
+        if (member.user_id && member.user_name) {
+          userIdToName.set(member.user_id, member.user_name);
+        }
+      }
+    }
+
+    // Fallback to installation calendar if no staff found
+    if (staffEntries.length === 0 && installation.calendar_id) {
+      staffEntries.push({
+        calendar_id: installation.calendar_id,
+        calendar_name: null,
+        staff_name: null,
+        user_id: null,
+        gender: null,
+        duration_minutes: 60,
+        buffer_minutes: DEFAULT_BUFFER_MINUTES,
+      });
+    }
+
+    serviceStaffMap.set(service, staffEntries);
+    console.log(`[Prefetch] Service "${service}": ${staffEntries.length} staff members`);
+  }
+
+  // STEP 2: Build unique staff keys and fetch ALL slots in parallel
+  const staffKeys = new Set<string>();
+  for (const entries of serviceStaffMap.values()) {
+    for (const entry of entries) {
+      staffKeys.add(`${entry.calendar_id}:${entry.user_id || "any"}`);
+    }
+  }
+
+  // GHL API call with date range
+  const startDateTime = DateTime.fromISO(datesToCheck[0], { zone: tz }).startOf("day");
+  const endDateTime = DateTime.fromISO(datesToCheck[datesToCheck.length - 1], { zone: tz }).endOf("day");
+  const startMs = startDateTime.toMillis();
+  const endMs = endDateTime.toMillis();
+
+  console.log(`[Prefetch] Fetching slots for ${staffKeys.size} staff/calendar combos...`);
+
+  const staffSlotsMap: Map<string, Map<string, number[]>> = new Map();
+
+  const fetchPromises = Array.from(staffKeys).map(async (key) => {
+    const [calendarId, userId] = key.split(":");
+
+    let slotsUrl = `${process.env.GHL_API_DOMAIN}/calendars/${calendarId}/free-slots?startDate=${startMs}&endDate=${endMs}&timezone=${encodeURIComponent(tz)}`;
+    if (userId && userId !== "any") {
+      slotsUrl += `&userId=${encodeURIComponent(userId)}`;
+    }
+
+    try {
+      const resp = await axios.get(slotsUrl, {
+        headers: {
+          Authorization: `Bearer ${installation.access_token}`,
+          Version: "2021-07-28",
+        },
+      });
+
+      const rawData = resp.data || {};
+      const dateSlots: Map<string, number[]> = new Map();
+
+      for (const dateKey of Object.keys(rawData)) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) continue;
+        const entry = rawData[dateKey];
+        const isoSlots: string[] = Array.isArray(entry) ? entry : entry?.slots || [];
+
+        const minuteSlots: number[] = [];
+        for (const isoStr of isoSlots) {
+          const mins = parseTimeToMinutes(isoStr, tz);
+          if (mins !== null) minuteSlots.push(mins);
+        }
+        minuteSlots.sort((a, b) => a - b);
+        dateSlots.set(dateKey, minuteSlots);
+      }
+
+      staffSlotsMap.set(key, dateSlots);
+    } catch (err: any) {
+      console.error(`[Prefetch] Error fetching slots for ${key}:`, err.message);
+      staffSlotsMap.set(key, new Map());
+    }
+  });
+
+  await Promise.all(fetchPromises);
+
+  // Log summary
+  let totalSlots = 0;
+  for (const [key, dateSlots] of staffSlotsMap) {
+    const count = Array.from(dateSlots.values()).reduce((sum, arr) => sum + arr.length, 0);
+    totalSlots += count;
+  }
+  console.log(`[Prefetch] Complete: ${totalSlots} total slots across ${staffKeys.size} staff`);
+  console.log(`[Prefetch] ═══════════════════════════════════════════════════════`);
+
+  return { serviceStaffMap, staffSlotsMap, userIdToName };
+}
+
+/**
+ * Find a valid service chain on a specific date using pre-fetched data.
+ * This is the fast path - no DB or API calls, pure in-memory filtering.
+ */
+function findChainOnDate(
+  services: string[],
+  dateKey: string,
+  tz: string,
+  prefetchedData: PrefetchedPackageData,
+  genderPreference: string | undefined,
+  strictGender: boolean,
+  timePreference: string,
+  requestedTimeMins: number | null,
+  excludedSlots: ExcludedSlot[],
+  nowMinutes: number,
+  todayStr: string
+): Array<{
+  service: string;
+  startTime: string;
+  endTime: string;
+  calendar_id: string;
+  staff_name: string | null;
+  staff_user_id: string | null;
+}> | null {
+  const DEFAULT_BUFFER_MINUTES = 15;
+  const MAX_GAP_MINUTES = 30;
+
+  const formatMins = (mins: number): string => {
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    const period = h >= 12 ? "PM" : "AM";
+    const displayH = h > 12 ? h - 12 : (h === 0 ? 12 : h);
+    return `${displayH}:${m.toString().padStart(2, "0")} ${period}`;
+  };
+
+  const minutesToISO = (mins: number, dateStr: string): string => {
+    const hours = Math.floor(mins / 60);
+    const minutes = mins % 60;
+    const dt = DateTime.fromObject(
+      { year: parseInt(dateStr.slice(0, 4)), month: parseInt(dateStr.slice(5, 7)), day: parseInt(dateStr.slice(8, 10)), hour: hours, minute: minutes },
+      { zone: tz }
+    );
+    return dt.toISO() || `${dateStr}T${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:00`;
+  };
+
+  // Normalize gender preference
+  const rawGender = genderPreference?.toLowerCase().trim();
+  const normalizedGender: "male" | "female" | undefined =
+    rawGender === "male" ? "male" : rawGender === "female" ? "female" : undefined;
+
+  // Filter staff by gender preference for each service
+  const filteredServiceStaff: Map<string, StaffEntryWithGender[]> = new Map();
+  for (const service of services) {
+    const allStaff = prefetchedData.serviceStaffMap.get(service) || [];
+    const isMassage = isMassageService(service, allStaff[0]?.calendar_name || undefined);
+    const shouldFilter = normalizedGender && (isMassage || strictGender);
+
+    const filtered = shouldFilter
+      ? allStaff.filter(s => s.gender === normalizedGender || s.gender === null)
+      : allStaff;
+
+    filteredServiceStaff.set(service, filtered);
+  }
+
+  // Get start options for first service
+  const firstService = services[0];
+  const firstServiceStaff = filteredServiceStaff.get(firstService) || [];
+
+  interface StartOption {
+    startMins: number;
+    staff: StaffEntryWithGender;
+    staffKey: string;
+  }
+  const startOptions: StartOption[] = [];
+
+  for (const staff of firstServiceStaff) {
+    const staffKey = `${staff.calendar_id}:${staff.user_id || "any"}`;
+    const daySlots = prefetchedData.staffSlotsMap.get(staffKey)?.get(dateKey) || [];
+
+    for (const slotMins of daySlots) {
+      // Skip past slots for today
+      if (dateKey === todayStr && slotMins < nowMinutes) continue;
+
+      // Apply time preference filter
+      if (requestedTimeMins !== null) {
+        if (slotMins < requestedTimeMins || slotMins > requestedTimeMins + 15) continue;
+      } else if (timePreference === "morning" && slotMins >= 720) {
+        continue;
+      } else if (timePreference === "afternoon" && slotMins < 720) {
+        continue;
+      }
+
+      // Check excluded slots
+      if (staff.user_id) {
+        const slotEnd = slotMins + staff.duration_minutes;
+        const isExcluded = excludedSlots.some(ex =>
+          ex.userId === staff.user_id &&
+          ex.date === dateKey &&
+          slotMins < ex.endMins &&
+          slotEnd > ex.startMins
+        );
+        if (isExcluded) continue;
+      }
+
+      startOptions.push({ startMins: slotMins, staff, staffKey });
+    }
+  }
+
+  startOptions.sort((a, b) => a.startMins - b.startMins);
+
+  if (startOptions.length === 0) return null;
+
+  // Try each start option
+  for (const startOpt of startOptions) {
+    const chain: Array<{
+      service: string;
+      startTime: string;
+      endTime: string;
+      calendar_id: string;
+      staff_name: string | null;
+      staff_user_id: string | null;
+    }> = [];
+
+    const usedStaffTimes: Map<string, Array<{ start: number; end: number }>> = new Map();
+
+    // Add first service
+    const firstEndMins = startOpt.startMins + startOpt.staff.duration_minutes;
+    chain.push({
+      service: firstService,
+      startTime: minutesToISO(startOpt.startMins, dateKey),
+      endTime: minutesToISO(firstEndMins, dateKey),
+      calendar_id: startOpt.staff.calendar_id,
+      staff_name: startOpt.staff.staff_name,
+      staff_user_id: startOpt.staff.user_id,
+    });
+
+    if (startOpt.staff.user_id) {
+      usedStaffTimes.set(startOpt.staff.user_id, [{ start: startOpt.startMins, end: firstEndMins }]);
+    }
+
+    let chainValid = true;
+    let previousEndMins = firstEndMins;
+    let previousBufferMins = startOpt.staff.buffer_minutes;
+
+    // Chain subsequent services
+    for (let i = 1; i < services.length; i++) {
+      const service = services[i];
+      const earliestStart = previousEndMins + previousBufferMins;
+      const latestStart = earliestStart + MAX_GAP_MINUTES;
+
+      const serviceStaff = filteredServiceStaff.get(service) || [];
+      let foundSlot = false;
+
+      for (const staff of serviceStaff) {
+        const staffKey = `${staff.calendar_id}:${staff.user_id || "any"}`;
+        const daySlots = prefetchedData.staffSlotsMap.get(staffKey)?.get(dateKey) || [];
+
+        // Check if staff is already busy
+        if (staff.user_id) {
+          const staffTimes = usedStaffTimes.get(staff.user_id) || [];
+          const wouldOverlap = staffTimes.some(t => {
+            const newEnd = earliestStart + staff.duration_minutes;
+            return earliestStart < t.end && newEnd > t.start;
+          });
+          if (wouldOverlap) continue;
+        }
+
+        // Find slot in range
+        const matchingSlot = daySlots.find(m => {
+          if (m < earliestStart || m > latestStart) return false;
+          if (!staff.user_id) return true;
+          const slotEnd = m + staff.duration_minutes;
+          const isExcluded = excludedSlots.some(ex =>
+            ex.userId === staff.user_id &&
+            ex.date === dateKey &&
+            m < ex.endMins &&
+            slotEnd > ex.startMins
+          );
+          return !isExcluded;
+        });
+
+        if (matchingSlot !== undefined) {
+          const endMins = matchingSlot + staff.duration_minutes;
+          chain.push({
+            service,
+            startTime: minutesToISO(matchingSlot, dateKey),
+            endTime: minutesToISO(endMins, dateKey),
+            calendar_id: staff.calendar_id,
+            staff_name: staff.staff_name,
+            staff_user_id: staff.user_id,
+          });
+
+          if (staff.user_id) {
+            const existing = usedStaffTimes.get(staff.user_id) || [];
+            existing.push({ start: matchingSlot, end: endMins });
+            usedStaffTimes.set(staff.user_id, existing);
+          }
+
+          previousEndMins = endMins;
+          previousBufferMins = staff.buffer_minutes;
+          foundSlot = true;
+          break;
+        }
+      }
+
+      if (!foundSlot) {
+        chainValid = false;
+        break;
+      }
+    }
+
+    if (chainValid && chain.length === services.length) {
+      return chain;
+    }
+  }
+
+  return null;
+}
+
 /**
  * PHASE 3: Find package availability for multiple people (couples/groups).
  *
- * Strategy:
- * 1. Find availability for Person 1
- * 2. Extract their booked slots as "excluded"
- * 3. Find availability for Person 2 with exclusions (same therapist can't be double-booked)
- * 4. Repeat for Person N
+ * OPTIMIZED: Pre-fetches all data ONCE, then iterates in-memory.
+ * This reduces API calls from 22+ to just ~6 (one batch per unique staff/calendar).
  *
- * When multiple therapists are available, people are booked in parallel (same time, different therapists).
- * When only one therapist is available, people are staggered (Person B starts after Person A).
+ * Strategy:
+ * 1. Pre-fetch all staff/calendar info and GHL slots (ONCE)
+ * 2. For each date, try to fit all people using in-memory filtering
+ * 3. Extract booked slots as "excluded" for next person
+ * 4. When found, return immediately
  */
 async function findGroupPackageAvailability(
   locationId: string,
@@ -4800,7 +5177,7 @@ async function findGroupPackageAvailability(
   error?: string;
 }> {
   console.log(`[GroupPackage] ═══════════════════════════════════════════════════════`);
-  console.log(`[GroupPackage] Finding availability for ${people.length} people`);
+  console.log(`[GroupPackage] OPTIMIZED: Finding availability for ${people.length} people`);
   console.log(`[GroupPackage] Package services: ${services.join(", ")}`);
   console.log(`[GroupPackage] Time preference: ${timePreference || "(none)"}`);
   console.log(`[GroupPackage] Requested date: ${requestedDate || "(soonest)"}`);
@@ -4824,13 +5201,32 @@ async function findGroupPackageAvailability(
 
   console.log(`[GroupPackage] Will try ${datesToTry.length} date(s): ${datesToTry.slice(0, 5).join(", ")}${datesToTry.length > 5 ? "..." : ""}`);
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // OPTIMIZATION: Pre-fetch ALL data ONCE instead of per-date/per-person
+  // This reduces 22+ API calls down to ~6 parallel calls
+  // ═══════════════════════════════════════════════════════════════════════════
+  const prefetchStart = Date.now();
+  const prefetchedData = await prefetchPackageData(locationId, services, datesToTry, tz, installation);
+  console.log(`[GroupPackage] Data pre-fetched in ${Date.now() - prefetchStart}ms`);
+
+  // Parse requested time once
+  let requestedTimeMins: number | null = null;
+  if (requestedTime) {
+    requestedTimeMins = parseTimeToMinutes(requestedTime, tz);
+  }
+
+  // Calculate "now" in minutes for today filtering
+  const nowLuxon = DateTime.now().setZone(tz);
+  const todayStr = nowLuxon.toFormat("yyyy-MM-dd");
+  const nowMinutes = nowLuxon.hour * 60 + nowLuxon.minute + 15; // 15-min buffer
+
   // Try each date until we find one where ALL people fit
   for (const candidateDate of datesToTry) {
     console.log(`[GroupPackage] --- Trying date: ${candidateDate} ---`);
 
     const groupResults: GroupSlotResult[] = [];
     const accumulatedExcludedSlots: ExcludedSlot[] = [];
-    let person1StartTime: string | undefined = undefined;
+    let person1StartTimeMins: number | null = null;
     let allPeopleFit = true;
 
     // Try to fit all people on this date
@@ -4838,86 +5234,79 @@ async function findGroupPackageAvailability(
       const person = people[i];
       console.log(`[GroupPackage] Finding slots for Person ${i + 1}: ${person.name} on ${candidateDate}`);
 
-      // Determine time to request
-      let effectiveRequestedTime = requestedTime;
+      // Determine effective requested time
+      let effectiveRequestedTimeMins = requestedTimeMins;
 
       // For Person 2+, try parallel scheduling at Person 1's time
-      if (i > 0 && person1StartTime) {
-        console.log(`[GroupPackage] Attempting PARALLEL at ${person1StartTime}`);
-        effectiveRequestedTime = person1StartTime;
+      if (i > 0 && person1StartTimeMins !== null) {
+        console.log(`[GroupPackage] Attempting PARALLEL at ${person1StartTimeMins} mins`);
+        effectiveRequestedTimeMins = person1StartTimeMins;
       }
 
-      // Find availability for this person on this specific date
-      let personResults = await findPackageDayAvailability(
-        locationId,
+      // Find chain using pre-fetched data (FAST - no API calls)
+      let chain = findChainOnDate(
         services,
-        timePreference,
-        candidateDate,  // Force this specific date
+        candidateDate,
         tz,
-        installation,
-        localNow,
-        1,
+        prefetchedData,
         person.therapist_preference,
         person.strict_gender || false,
-        effectiveRequestedTime,
-        accumulatedExcludedSlots
+        timePreference,
+        effectiveRequestedTimeMins,
+        accumulatedExcludedSlots,
+        nowMinutes,
+        todayStr
       );
 
-      // If no parallel slots for Person 2+, try staggered on same date
-      if (personResults.length === 0 && i > 0) {
+      // If no parallel slots for Person 2+, try staggered (no specific time)
+      if (!chain && i > 0) {
         console.log(`[GroupPackage] No parallel slot, trying STAGGERED on ${candidateDate}`);
-        personResults = await findPackageDayAvailability(
-          locationId,
+        chain = findChainOnDate(
           services,
-          timePreference,
           candidateDate,
           tz,
-          installation,
-          localNow,
-          1,
+          prefetchedData,
           person.therapist_preference,
           person.strict_gender || false,
-          undefined,  // No specific time
-          accumulatedExcludedSlots
+          timePreference,
+          null, // No specific time
+          accumulatedExcludedSlots,
+          nowMinutes,
+          todayStr
         );
       }
 
-      if (personResults.length === 0) {
+      if (!chain) {
         console.log(`[GroupPackage] ✗ Cannot fit ${person.name} on ${candidateDate}`);
         console.log(`[GroupPackage]   - Gender preference: ${person.therapist_preference || "none"}`);
         console.log(`[GroupPackage]   - Time preference: ${timePreference || "any"}`);
-        console.log(`[GroupPackage]   - Requested time: ${effectiveRequestedTime || "any"}`);
         console.log(`[GroupPackage]   - Excluded slots: ${accumulatedExcludedSlots.length}`);
-        if (accumulatedExcludedSlots.length > 0) {
-          console.log(`[GroupPackage]   - Exclusions: ${accumulatedExcludedSlots.map(e => `${e.userId}@${e.startMins}-${e.endMins}`).join(", ")}`);
-        }
         console.log(`[GroupPackage]   -> Trying next date...`);
         allPeopleFit = false;
-        break;  // This date doesn't work, try next date
+        break; // This date doesn't work, try next date
       }
 
       // Person fits on this date
-      const personSlots = personResults[0];
       console.log(`[GroupPackage] ✓ ${person.name} fits on ${candidateDate}`);
 
       // Store Person 1's start time for parallel scheduling
-      if (i === 0 && personSlots.slots.length > 0) {
-        const firstSlot = personSlots.slots[0];
+      if (i === 0 && chain.length > 0) {
+        const firstSlot = chain[0];
         const startDt = DateTime.fromISO(firstSlot.startTime, { zone: tz });
-        person1StartTime = startDt.toFormat("h:mm a");
-        console.log(`[GroupPackage] Person 1 starts at ${person1StartTime}`);
+        person1StartTimeMins = startDt.hour * 60 + startDt.minute;
+        console.log(`[GroupPackage] Person 1 starts at ${person1StartTimeMins} mins`);
       }
 
       // Add to results
       groupResults.push({
         person_index: i,
         person_name: person.name,
-        date: personSlots.date,
-        slots: personSlots.slots,
+        date: candidateDate,
+        slots: chain,
       });
 
       // Add exclusions for next people
-      for (const slot of personSlots.slots) {
+      for (const slot of chain) {
         if (slot.staff_user_id) {
           const startDt = DateTime.fromISO(slot.startTime, { zone: tz });
           const endDt = DateTime.fromISO(slot.endTime, { zone: tz });
@@ -4935,8 +5324,10 @@ async function findGroupPackageAvailability(
 
     // If all people fit on this date, we're done!
     if (allPeopleFit && groupResults.length === people.length) {
+      const totalTime = Date.now() - prefetchStart;
       console.log(`[GroupPackage] ═══════════════════════════════════════════════════════`);
       console.log(`[GroupPackage] SUCCESS: All ${people.length} people fit on ${candidateDate}`);
+      console.log(`[GroupPackage] Total time: ${totalTime}ms (pre-fetch + in-memory search)`);
       console.log(`[GroupPackage] ═══════════════════════════════════════════════════════`);
       return {
         success: true,
