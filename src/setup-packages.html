@@ -349,10 +349,16 @@
     <div id="alert" class="alert hidden"></div>
 
     <div class="section">
-      <h2>Staff Gender</h2>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <h2 style="margin: 0;">Staff Gender</h2>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="syncNow()" id="syncBtn">
+          Sync Now
+        </button>
+      </div>
       <div class="info-box">
         <p>Assign gender to your team members so the AI receptionist can honor customer requests for a male or female therapist. For example, if a customer says "I'd prefer a female massage therapist," the system will only book staff members marked as female.</p>
         <p>Staff without a gender assigned will be available to all customers regardless of preference.</p>
+        <p style="margin-top: 8px; font-size: 13px; color: #666;"><strong>Note:</strong> Staff syncs automatically every 10 minutes. Use "Sync Now" if you just added or removed team members.</p>
       </div>
       <div id="staffList">
         <div class="loading">Loading staff...</div>
@@ -909,6 +915,35 @@
         }
       } catch (err) {
         document.getElementById('staffList').innerHTML = '<div class="empty-state">Failed to load staff.</div>';
+      }
+    }
+
+    async function syncNow() {
+      const btn = document.getElementById('syncBtn');
+      const originalText = btn.textContent;
+      btn.textContent = 'Syncing...';
+      btn.disabled = true;
+
+      try {
+        const resp = await fetch(`${API_BASE}/api/calendar/sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ locationId })
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+          showAlert(`Sync complete! Found ${data.teamMembers} staff members and ${data.calendars} calendars.`, 'success');
+          // Refresh both staff and services lists
+          await Promise.all([loadStaff(), loadServices()]);
+        } else {
+          showAlert(data.error || 'Sync failed. Please try again.', 'error');
+        }
+      } catch (err) {
+        showAlert('Sync failed: ' + err.message, 'error');
+      } finally {
+        btn.textContent = originalText;
+        btn.disabled = false;
       }
     }
 
