@@ -4853,7 +4853,15 @@ async function findGroupPackageAvailability(
       }
 
       if (personResults.length === 0) {
-        console.log(`[GroupPackage] Cannot fit ${person.name} on ${candidateDate}, trying next date...`);
+        console.log(`[GroupPackage] ✗ Cannot fit ${person.name} on ${candidateDate}`);
+        console.log(`[GroupPackage]   - Gender preference: ${person.therapist_preference || "none"}`);
+        console.log(`[GroupPackage]   - Time preference: ${timePreference || "any"}`);
+        console.log(`[GroupPackage]   - Requested time: ${effectiveRequestedTime || "any"}`);
+        console.log(`[GroupPackage]   - Excluded slots: ${accumulatedExcludedSlots.length}`);
+        if (accumulatedExcludedSlots.length > 0) {
+          console.log(`[GroupPackage]   - Exclusions: ${accumulatedExcludedSlots.map(e => `${e.userId}@${e.startMins}-${e.endMins}`).join(", ")}`);
+        }
+        console.log(`[GroupPackage]   -> Trying next date...`);
         allPeopleFit = false;
         break;  // This date doesn't work, try next date
       }
@@ -4908,7 +4916,12 @@ async function findGroupPackageAvailability(
   }
 
   // No date worked for all people
+  console.log(`[GroupPackage] ═══════════════════════════════════════════════════════`);
   console.log(`[GroupPackage] FAILED: Could not find a date where all people fit`);
+  console.log(`[GroupPackage] Dates tried: ${datesToTry.length}`);
+  console.log(`[GroupPackage] People: ${people.map(p => `${p.name}(${p.therapist_preference || "no pref"})`).join(", ")}`);
+  console.log(`[GroupPackage] Time preference: ${timePreference || "any"}`);
+  console.log(`[GroupPackage] ═══════════════════════════════════════════════════════`);
 
   // Build helpful error message
   const prefsDescription = people
