@@ -3309,6 +3309,8 @@ router.post("/packages", async (req: Request, res: Response) => {
 
     // Update action - allows updating services order, name, etc.
     if (actionLower === "update") {
+      console.log(`[Packages] Update request: id=${id}, services=${JSON.stringify(services)}, description=${description}`);
+
       if (!id) {
         return res.status(400).json({ success: false, error: "Missing required field: id" });
       }
@@ -3316,32 +3318,43 @@ router.post("/packages", async (req: Request, res: Response) => {
       // Get existing package first
       const existingPkg = await getPackageById(id);
       if (!existingPkg) {
+        console.log(`[Packages] Package not found: ${id}`);
         return res.status(404).json({ success: false, error: "Package not found" });
       }
 
-      // Build update object - only include fields that were provided
+      console.log(`[Packages] Found existing package: ${existingPkg.package_name}`);
+
+      // Build update object - merge with existing data
       const updateData: any = {
         id,
-        location_id: resolvedLocationId,
+        location_id: existingPkg.location_id,  // Use existing location
+        package_name: existingPkg.package_name,  // Keep existing name
+        services: existingPkg.services,  // Keep existing services by default
+        total_duration_minutes: existingPkg.total_duration_minutes,
+        price: existingPkg.price,
+        description: existingPkg.description,
         is_active: true,
       };
 
-      // Only update fields that were provided in the request
+      // Override with provided values
       if (package_name !== undefined) updateData.package_name = package_name;
       if (services !== undefined && Array.isArray(services)) {
         updateData.services = services;
-        console.log(`[Packages] Updating services order for ${existingPkg.package_name}: ${services.join(" → ")}`);
+        console.log(`[Packages] Updating services order: ${services.join(" → ")}`);
       }
       if (total_duration_minutes !== undefined) updateData.total_duration_minutes = total_duration_minutes;
       if (price !== undefined) updateData.price = price;
       if (description !== undefined) updateData.description = description;
 
+      console.log(`[Packages] Final update data:`, JSON.stringify(updateData));
+
       const updatedPkg = await upsertPackage(updateData);
       if (!updatedPkg) {
+        console.log(`[Packages] upsertPackage returned null`);
         return res.status(500).json({ success: false, error: "Failed to update package" });
       }
 
-      console.log(`[Packages] Updated package ${id}: ${updatedPkg.package_name}`);
+      console.log(`[Packages] Successfully updated package ${id}: ${updatedPkg.package_name}`);
       return res.json({ success: true, package: updatedPkg });
     }
 

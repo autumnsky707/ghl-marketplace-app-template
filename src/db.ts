@@ -931,8 +931,36 @@ export async function getPackageById(id: string): Promise<SpaPackage | null> {
 
 /**
  * Create or update a package.
+ * If id is provided, updates by id. Otherwise upserts by location_id + package_name.
  */
 export async function upsertPackage(pkg: Partial<SpaPackage>): Promise<SpaPackage | null> {
+  // If we have an id, do a direct update
+  if (pkg.id) {
+    console.log(`[DB] Updating package by id: ${pkg.id}`);
+    const { data, error } = await supabase
+      .from(SPA_PACKAGES_TABLE)
+      .update({
+        package_name: pkg.package_name,
+        services: pkg.services,
+        total_duration_minutes: pkg.total_duration_minutes || null,
+        price: pkg.price || null,
+        description: pkg.description || null,
+        is_active: pkg.is_active !== false,
+      })
+      .eq("id", pkg.id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error("[DB] updatePackage error:", error);
+      return null;
+    }
+
+    console.log(`[DB] Updated package: ${pkg.package_name}`);
+    return data as SpaPackage;
+  }
+
+  // No id - do an upsert by location_id + package_name
   const { data, error } = await supabase
     .from(SPA_PACKAGES_TABLE)
     .upsert(
