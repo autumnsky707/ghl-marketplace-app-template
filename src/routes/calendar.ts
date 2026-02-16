@@ -1323,6 +1323,16 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       );
 
       if (packagePlans.length === 0) {
+        console.log(`[Check] ═══════════════════════════════════════════════════════`);
+        console.log(`[Check] PACKAGE AVAILABILITY FAILED - No slots found`);
+        console.log(`[Check]   Package: ${pkg.package_name}`);
+        console.log(`[Check]   Services: ${pkg.services?.join(", ") || "none"}`);
+        console.log(`[Check]   Time preference: ${effectiveTimePreference || "any"}`);
+        console.log(`[Check]   Requested time: ${requested_time || "any"}`);
+        console.log(`[Check]   Requested date: ${startDateFilter || "soonest"}`);
+        console.log(`[Check]   Therapist preference: ${therapist_preference || "none"}`);
+        console.log(`[Check]   Strict gender: ${strict_gender || false}`);
+        console.log(`[Check] ═══════════════════════════════════════════════════════`);
         const alternativePreference = effectiveTimePreference === "afternoon" ? "morning" : "afternoon";
         return res.json({
           success: false,
@@ -1935,6 +1945,17 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       resultSlots = collectSlots(availabilityByDate);
     }
 
+    if (resultSlots.length === 0) {
+      console.log(`[Check] ═══════════════════════════════════════════════════════`);
+      console.log(`[Check] SERVICE AVAILABILITY FAILED - No slots found in 30 days`);
+      console.log(`[Check]   Service: ${serviceToCheck || "any"}`);
+      console.log(`[Check]   Staff: ${staff_name || "any"}`);
+      console.log(`[Check]   Time preference: ${time_preference || "any"}`);
+      console.log(`[Check]   Requested date: ${requested_date || "soonest"}`);
+      console.log(`[Check]   Calendars checked: ${calendarsToCheck.length}`);
+      console.log(`[Check] ═══════════════════════════════════════════════════════`);
+    }
+
     console.log(`[Calendar] Returning ${resultSlots.length} slots: ${resultSlots.map(s => `${s.label} ${s.time}`).join(", ")}`);
     return res.json({
       success: true,
@@ -2294,6 +2315,15 @@ router.post("/book", async (req: Request, res: Response) => {
       }
 
       if (!packagePlan) {
+        console.log(`[Book] ═══════════════════════════════════════════════════════`);
+        console.log(`[Book] BOOKING FAILED - Could not determine slots`);
+        console.log(`[Book]   Package: ${pkg.package_name}`);
+        console.log(`[Book]   Customer: ${customerName}`);
+        console.log(`[Book]   Selected date: ${body.selected_date || "not provided"}`);
+        console.log(`[Book]   Time preference: ${body.time_preference || "not provided"}`);
+        console.log(`[Book]   Plan ID: ${body.plan_id || "not provided"}`);
+        console.log(`[Book]   Provided slots: ${body.slots ? "yes" : "no"}`);
+        console.log(`[Book] ═══════════════════════════════════════════════════════`);
         return res.json({
           success: false,
           package_name: pkg.package_name,
