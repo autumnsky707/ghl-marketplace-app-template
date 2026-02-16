@@ -5490,11 +5490,68 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
     if (!groupResult.success) {
       console.log(`[GroupCheck] FAILED: ${groupResult.error}`);
       console.log(`[GroupCheck] Partial results: ${JSON.stringify(groupResult.results, null, 2)}`);
+
+      // Check if any people had gender preferences - if so, try again without them
+      const hadGenderPreferences = people.some((p: any) =>
+        p.therapist_preference === "male" || p.therapist_preference === "female"
+      );
+
+      if (hadGenderPreferences) {
+        console.log(`[GroupCheck] Retrying WITHOUT gender preferences to find alternative...`);
+
+        // Create people array with no gender preferences
+        const peopleNoPrefs = people.map((p: any) => ({
+          name: p.name || `Person ${people.indexOf(p) + 1}`,
+          therapist_preference: undefined,
+          strict_gender: false,
+        }));
+
+        const alternativeResult = await findGroupPackageAvailability(
+          resolvedLocationId,
+          pkg.services,
+          time_preference || "",
+          parsedDate,
+          tz,
+          installation,
+          localNow,
+          peopleNoPrefs,
+          requested_time
+        );
+
+        if (alternativeResult.success) {
+          // Found availability without preferences - suggest this as alternative
+          const altDate = alternativeResult.results[0]?.date;
+          const altDateDt = DateTime.fromISO(altDate, { zone: tz });
+          const altDay = altDateDt.day;
+          const altSuffix = altDay === 1 || altDay === 21 || altDay === 31 ? "st"
+                          : altDay === 2 || altDay === 22 ? "nd"
+                          : altDay === 3 || altDay === 23 ? "rd"
+                          : "th";
+          const altDateStr = `${altDateDt.toFormat("EEEE, MMMM")} ${altDay}${altSuffix}`;
+          const altFirstSlot = alternativeResult.results[0]?.slots[0];
+          const altStartTime = altFirstSlot ? DateTime.fromISO(altFirstSlot.startTime, { zone: tz }).toFormat("h:mm a") : "";
+
+          console.log(`[GroupCheck] Found alternative on ${altDateStr} at ${altStartTime} (no gender prefs)`);
+
+          return res.json({
+            success: false,
+            error: groupResult.error,
+            partial_results: groupResult.results,
+            alternative_available: true,
+            alternative_date: altDate,
+            alternative_date_formatted: altDateStr,
+            alternative_start_time: altStartTime,
+            message: `I couldn't find availability with those therapist preferences. However, if you're flexible on therapist gender, I have an opening on ${altDateStr} starting at ${altStartTime}. Would you like me to book that instead?`,
+          });
+        }
+      }
+
+      // No alternatives found
       return res.json({
         success: false,
         error: groupResult.error,
         partial_results: groupResult.results,
-        message: `Unable to book ${package_name} for ${people.length} people. ${groupResult.error}`,
+        message: `I'm sorry, I couldn't find availability for the ${package_name} for ${people.length} people in the next 30 days. Would you like to try a different package or check back later?`,
       });
     }
 
