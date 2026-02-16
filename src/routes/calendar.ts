@@ -27,6 +27,7 @@ import {
   getUniqueTeamMembers,
   getPackages,
   getPackageByName,
+  getPackageById,
   upsertPackage,
   deletePackage,
   isInstallationActive,
@@ -2517,6 +2518,19 @@ router.post("/book", async (req: Request, res: Response) => {
           console.log("[Book] ═══════════════════════════════════════════════════════");
           console.log("[Book] BACKGROUND: Starting appointment bookings...");
 
+          // Build package booking note (like group bookings) so staff can see all details
+          // Format: Package: [name] | Services: [1. service, 2. service] | Therapist preference: [pref]
+          const servicesStr = bgPackagePlan.slots.map((slot, idx) => `${idx + 1}. ${slot.service}`).join(", ");
+          let packageBookingNote = `Package: ${bgPkg.package_name} | Services (in order): ${servicesStr}`;
+          if (bgTherapistPreference && ["male", "female"].includes(bgTherapistPreference.toLowerCase())) {
+            packageBookingNote += ` | Massage therapist preference: ${bgTherapistPreference.toLowerCase()}`;
+          }
+          if (bgNotes) {
+            packageBookingNote += ` | Customer notes: ${bgNotes}`;
+          }
+          console.log(`[Book] BACKGROUND: Package note for all appointments: ${packageBookingNote}`);
+          console.log(`[Book] BACKGROUND: Service order from package config: ${bgPkg.services.join(" → ")}`);
+
           // ========== FIX 1.5 + 1.6: ATOMIC RESERVATION WITH ROLLBACK ==========
           // Strategy:
           // 1. TRY to create block-slot holds for ALL slots (nice-to-have protection)
@@ -2648,6 +2662,7 @@ router.post("/book", async (req: Request, res: Response) => {
               // Add customer name to service title so staff knows who the appointment is for
               const serviceTitle = `${toTitleCase(slotInfo.service)} (${toTitleCase(bgCustomerName)})`;
               console.log(`[Book] BACKGROUND:   Calling bookServiceAppointment...`);
+              // Use packageBookingNote instead of bgNotes so all package details appear on each appointment
               const bookingResult = await bookServiceAppointment(
                 bgClient,
                 bgLocationId,
@@ -2657,7 +2672,7 @@ router.post("/book", async (req: Request, res: Response) => {
                 bgCustomerName,
                 bgCustomerEmail,
                 bgCustomerPhone,
-                bgNotes,
+                packageBookingNote,  // Use full package note instead of just customer notes
                 bgTherapistPreference,
                 slotInfo.staff_user_id || undefined
               );
@@ -3290,6 +3305,44 @@ router.post("/packages", async (req: Request, res: Response) => {
       }
 
       return res.json({ success: true, message: "Package deleted" });
+    }
+
+    // Update action - allows updating services order, name, etc.
+    if (actionLower === "update") {
+      if (!id) {
+        return res.status(400).json({ success: false, error: "Missing required field: id" });
+      }
+
+      // Get existing package first
+      const existingPkg = await getPackageById(id);
+      if (!existingPkg) {
+        return res.status(404).json({ success: false, error: "Package not found" });
+      }
+
+      // Build update object - only include fields that were provided
+      const updateData: any = {
+        id,
+        location_id: resolvedLocationId,
+        is_active: true,
+      };
+
+      // Only update fields that were provided in the request
+      if (package_name !== undefined) updateData.package_name = package_name;
+      if (services !== undefined && Array.isArray(services)) {
+        updateData.services = services;
+        console.log(`[Packages] Updating services order for ${existingPkg.package_name}: ${services.join(" → ")}`);
+      }
+      if (total_duration_minutes !== undefined) updateData.total_duration_minutes = total_duration_minutes;
+      if (price !== undefined) updateData.price = price;
+      if (description !== undefined) updateData.description = description;
+
+      const updatedPkg = await upsertPackage(updateData);
+      if (!updatedPkg) {
+        return res.status(500).json({ success: false, error: "Failed to update package" });
+      }
+
+      console.log(`[Packages] Updated package ${id}: ${updatedPkg.package_name}`);
+      return res.json({ success: true, package: updatedPkg });
     }
 
     return res.status(400).json({ success: false, error: `Unknown action: ${action}` });

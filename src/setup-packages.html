@@ -292,6 +292,9 @@
 
         <div class="form-group">
           <label>Services Included</label>
+          <p style="font-size: 12px; color: #666; margin-bottom: 8px;">
+            <strong>Note:</strong> Services will be booked in the order they appear below. You can edit the order after creating the package.
+          </p>
           <div id="servicesContainer" class="checkbox-group">
             <div class="loading">Loading services...</div>
           </div>
@@ -478,16 +481,55 @@
         <div class="package-item">
           <div class="package-info">
             <h3>${pkg.package_name}</h3>
-            <div class="services">${pkg.services.join(', ')}</div>
+            <div class="services" style="font-size: 13px; color: #333;">
+              <strong>Service Order:</strong> ${pkg.services.map((s, i) => `${i + 1}. ${s}`).join(' → ')}
+            </div>
             <div class="meta">
               ${pkg.total_duration_minutes ? pkg.total_duration_minutes + ' min' : ''}
               ${pkg.price ? ' &middot; $' + parseFloat(pkg.price).toFixed(2) : ''}
               ${pkg.description ? ' &middot; ' + pkg.description : ''}
             </div>
           </div>
-          <button class="btn btn-danger" onclick="deletePackage('${pkg.id}')">Delete</button>
+          <div style="display: flex; gap: 8px;">
+            <button class="btn btn-primary" style="padding: 6px 12px; font-size: 13px;" onclick="editPackage('${pkg.id}', ${JSON.stringify(pkg.services).replace(/"/g, '&quot;')})">Edit Order</button>
+            <button class="btn btn-danger" onclick="deletePackage('${pkg.id}')">Delete</button>
+          </div>
         </div>
       `).join('');
+    }
+
+    // Edit package service order
+    function editPackage(id, services) {
+      const newOrder = prompt(
+        'Edit service order (comma-separated, in order of booking):\\n\\n' +
+        'Current: ' + services.join(', ') + '\\n\\n' +
+        'Enter new order (copy/paste and rearrange):'
+      , services.join(', '));
+
+      if (newOrder && newOrder !== services.join(', ')) {
+        const newServices = newOrder.split(',').map(s => s.trim()).filter(s => s);
+        updatePackageOrder(id, newServices);
+      }
+    }
+
+    async function updatePackageOrder(id, services) {
+      try {
+        const resp = await fetch(`${API_BASE}/api/calendar/packages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ locationId, action: 'update', id, services })
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+          showAlert('Package updated! Services will now book in this order: ' + services.join(' → '), 'success');
+          loadPackages();
+        } else {
+          showAlert(data.error || 'Failed to update package.', 'error');
+        }
+      } catch (err) {
+        showAlert('Failed to update package.', 'error');
+      }
     }
 
     document.getElementById('packageForm').addEventListener('submit', async (e) => {
