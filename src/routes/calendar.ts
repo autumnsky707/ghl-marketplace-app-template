@@ -4698,6 +4698,15 @@ async function findPackageDayAvailability(
         const serviceStaff = serviceStaffMap.get(service) || [];
         let foundSlot = false;
 
+        // FIX: Collect ALL valid slot candidates from all staff, then pick the EARLIEST
+        // Previously, we picked the first staff with any valid slot, which could result in later slots
+        type SlotCandidate = {
+          slotMins: number;
+          staff: typeof serviceStaff[0];
+          endMins: number;
+        };
+        const candidates: SlotCandidate[] = [];
+
         for (const staff of serviceStaff) {
           const staffKey = `${staff.calendar_id}:${staff.user_id || "any"}`;
           const daySlots = staffSlotsMap.get(staffKey)?.get(dateKey) || [];
@@ -4728,7 +4737,7 @@ async function findPackageDayAvailability(
             );
           };
 
-          // Find a slot within the acceptable range that isn't excluded
+          // Find the EARLIEST slot within the acceptable range that isn't excluded
           const matchingSlot = daySlots.find(m => {
             if (m < earliestStart || m > latestStart) return false;
             const slotEnd = m + staff.duration_minutes;
@@ -4742,28 +4751,8 @@ async function findPackageDayAvailability(
 
           if (matchingSlot !== undefined) {
             const endMins = matchingSlot + staff.duration_minutes;
-
-            chain.push({
-              service,
-              startTime: minutesToISO(matchingSlot, dateKey),
-              endTime: minutesToISO(endMins, dateKey),
-              calendar_id: staff.calendar_id,
-              staff_name: staff.staff_name,
-              staff_user_id: staff.user_id,
-            });
-
-            // Mark staff as used
-            if (staff.user_id) {
-              const existing = usedStaffTimes.get(staff.user_id) || [];
-              existing.push({ start: matchingSlot, end: endMins });
-              usedStaffTimes.set(staff.user_id, existing);
-            }
-
-            console.log(`[Package]     ✓ Found: ${staff.staff_name || "any"} at ${formatMins(matchingSlot)}`);
-            previousEndMins = endMins;
-            previousBufferMins = staff.buffer_minutes;  // PHASE 2: Track this service's buffer for next iteration
-            foundSlot = true;
-            break;
+            candidates.push({ slotMins: matchingSlot, staff, endMins });
+            console.log(`[Package]     Candidate: ${staff.staff_name || "any"} at ${formatMins(matchingSlot)}`);
           } else {
             // Find why no slot matched
             const slotsAfter = daySlots.filter(m => m >= earliestStart);
@@ -4775,6 +4764,33 @@ async function findPackageDayAvailability(
               console.log(`[Package]     Staff "${staff.staff_name}" has slot at ${formatMins(firstAvailable)} but gap is ${gapMins}min (max ${MAX_GAP_MINUTES + previousBufferMins})`);
             }
           }
+        }
+
+        // Pick the EARLIEST slot across all staff
+        if (candidates.length > 0) {
+          candidates.sort((a, b) => a.slotMins - b.slotMins);
+          const best = candidates[0];
+
+          chain.push({
+            service,
+            startTime: minutesToISO(best.slotMins, dateKey),
+            endTime: minutesToISO(best.endMins, dateKey),
+            calendar_id: best.staff.calendar_id,
+            staff_name: best.staff.staff_name,
+            staff_user_id: best.staff.user_id,
+          });
+
+          // Mark staff as used
+          if (best.staff.user_id) {
+            const existing = usedStaffTimes.get(best.staff.user_id) || [];
+            existing.push({ start: best.slotMins, end: best.endMins });
+            usedStaffTimes.set(best.staff.user_id, existing);
+          }
+
+          console.log(`[Package]     ✓ Selected EARLIEST: ${best.staff.staff_name || "any"} at ${formatMins(best.slotMins)} (from ${candidates.length} candidates)`);
+          previousEndMins = best.endMins;
+          previousBufferMins = best.staff.buffer_minutes;  // PHASE 2: Track this service's buffer for next iteration
+          foundSlot = true;
         }
 
         if (!foundSlot) {
@@ -5149,6 +5165,14 @@ function findChainOnDate(
       const serviceStaff = filteredServiceStaff.get(service) || [];
       let foundSlot = false;
 
+      // FIX: Collect ALL valid slot candidates from all staff, then pick the EARLIEST
+      type SlotCandidate = {
+        slotMins: number;
+        staff: typeof serviceStaff[0];
+        endMins: number;
+      };
+      const candidates: SlotCandidate[] = [];
+
       for (const staff of serviceStaff) {
         const staffKey = `${staff.calendar_id}:${staff.user_id || "any"}`;
         const daySlots = prefetchedData.staffSlotsMap.get(staffKey)?.get(dateKey) || [];
@@ -5163,7 +5187,7 @@ function findChainOnDate(
           if (wouldOverlap) continue;
         }
 
-        // Find slot in range
+        // Find the EARLIEST slot in range
         const matchingSlot = daySlots.find(m => {
           if (m < earliestStart || m > latestStart) return false;
           if (!staff.user_id) return true;
@@ -5179,26 +5203,33 @@ function findChainOnDate(
 
         if (matchingSlot !== undefined) {
           const endMins = matchingSlot + staff.duration_minutes;
-          chain.push({
-            service,
-            startTime: minutesToISO(matchingSlot, dateKey),
-            endTime: minutesToISO(endMins, dateKey),
-            calendar_id: staff.calendar_id,
-            staff_name: staff.staff_name,
-            staff_user_id: staff.user_id,
-          });
-
-          if (staff.user_id) {
-            const existing = usedStaffTimes.get(staff.user_id) || [];
-            existing.push({ start: matchingSlot, end: endMins });
-            usedStaffTimes.set(staff.user_id, existing);
-          }
-
-          previousEndMins = endMins;
-          previousBufferMins = staff.buffer_minutes;
-          foundSlot = true;
-          break;
+          candidates.push({ slotMins: matchingSlot, staff, endMins });
         }
+      }
+
+      // Pick the EARLIEST slot across all staff
+      if (candidates.length > 0) {
+        candidates.sort((a, b) => a.slotMins - b.slotMins);
+        const best = candidates[0];
+
+        chain.push({
+          service,
+          startTime: minutesToISO(best.slotMins, dateKey),
+          endTime: minutesToISO(best.endMins, dateKey),
+          calendar_id: best.staff.calendar_id,
+          staff_name: best.staff.staff_name,
+          staff_user_id: best.staff.user_id,
+        });
+
+        if (best.staff.user_id) {
+          const existing = usedStaffTimes.get(best.staff.user_id) || [];
+          existing.push({ start: best.slotMins, end: best.endMins });
+          usedStaffTimes.set(best.staff.user_id, existing);
+        }
+
+        previousEndMins = best.endMins;
+        previousBufferMins = best.staff.buffer_minutes;
+        foundSlot = true;
       }
 
       if (!foundSlot) {
