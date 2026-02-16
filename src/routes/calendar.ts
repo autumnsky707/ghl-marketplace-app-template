@@ -4770,7 +4770,7 @@ async function findGroupPackageAvailability(
   error?: string;
 }> {
   console.log(`[GroupPackage] ═══════════════════════════════════════════════════════`);
-  console.log(`[GroupPackage] PHASE 3: Finding availability for ${people.length} people`);
+  console.log(`[GroupPackage] Finding availability for ${people.length} people`);
   console.log(`[GroupPackage] Package services: ${services.join(", ")}`);
   console.log(`[GroupPackage] Time preference: ${timePreference || "(none)"}`);
   console.log(`[GroupPackage] Requested date: ${requestedDate || "(soonest)"}`);
@@ -4780,31 +4780,195 @@ async function findGroupPackageAvailability(
   }
   console.log(`[GroupPackage] ═══════════════════════════════════════════════════════`);
 
+  // Build list of dates to try
+  const DAYS_TO_SEARCH = 30;
+  const datesToTry: string[] = [];
+  if (requestedDate) {
+    datesToTry.push(requestedDate);
+  } else {
+    const nowDt = DateTime.fromJSDate(localNow, { zone: tz });
+    for (let i = 0; i < DAYS_TO_SEARCH; i++) {
+      datesToTry.push(nowDt.plus({ days: i }).toFormat("yyyy-MM-dd"));
+    }
+  }
+
+  console.log(`[GroupPackage] Will try ${datesToTry.length} date(s): ${datesToTry.slice(0, 5).join(", ")}${datesToTry.length > 5 ? "..." : ""}`);
+
+  // Try each date until we find one where ALL people fit
+  for (const candidateDate of datesToTry) {
+    console.log(`[GroupPackage] --- Trying date: ${candidateDate} ---`);
+
+    const groupResults: GroupSlotResult[] = [];
+    const accumulatedExcludedSlots: ExcludedSlot[] = [];
+    let person1StartTime: string | undefined = undefined;
+    let allPeopleFit = true;
+
+    // Try to fit all people on this date
+    for (let i = 0; i < people.length; i++) {
+      const person = people[i];
+      console.log(`[GroupPackage] Finding slots for Person ${i + 1}: ${person.name} on ${candidateDate}`);
+
+      // Determine time to request
+      let effectiveRequestedTime = requestedTime;
+
+      // For Person 2+, try parallel scheduling at Person 1's time
+      if (i > 0 && person1StartTime) {
+        console.log(`[GroupPackage] Attempting PARALLEL at ${person1StartTime}`);
+        effectiveRequestedTime = person1StartTime;
+      }
+
+      // Find availability for this person on this specific date
+      let personResults = await findPackageDayAvailability(
+        locationId,
+        services,
+        timePreference,
+        candidateDate,  // Force this specific date
+        tz,
+        installation,
+        localNow,
+        1,
+        person.therapist_preference,
+        person.strict_gender || false,
+        effectiveRequestedTime,
+        accumulatedExcludedSlots
+      );
+
+      // If no parallel slots for Person 2+, try staggered on same date
+      if (personResults.length === 0 && i > 0) {
+        console.log(`[GroupPackage] No parallel slot, trying STAGGERED on ${candidateDate}`);
+        personResults = await findPackageDayAvailability(
+          locationId,
+          services,
+          timePreference,
+          candidateDate,
+          tz,
+          installation,
+          localNow,
+          1,
+          person.therapist_preference,
+          person.strict_gender || false,
+          undefined,  // No specific time
+          accumulatedExcludedSlots
+        );
+      }
+
+      if (personResults.length === 0) {
+        console.log(`[GroupPackage] Cannot fit ${person.name} on ${candidateDate}, trying next date...`);
+        allPeopleFit = false;
+        break;  // This date doesn't work, try next date
+      }
+
+      // Person fits on this date
+      const personSlots = personResults[0];
+      console.log(`[GroupPackage] ✓ ${person.name} fits on ${candidateDate}`);
+
+      // Store Person 1's start time for parallel scheduling
+      if (i === 0 && personSlots.slots.length > 0) {
+        const firstSlot = personSlots.slots[0];
+        const startDt = DateTime.fromISO(firstSlot.startTime, { zone: tz });
+        person1StartTime = startDt.toFormat("h:mm a");
+        console.log(`[GroupPackage] Person 1 starts at ${person1StartTime}`);
+      }
+
+      // Add to results
+      groupResults.push({
+        person_index: i,
+        person_name: person.name,
+        date: personSlots.date,
+        slots: personSlots.slots,
+      });
+
+      // Add exclusions for next people
+      for (const slot of personSlots.slots) {
+        if (slot.staff_user_id) {
+          const startDt = DateTime.fromISO(slot.startTime, { zone: tz });
+          const endDt = DateTime.fromISO(slot.endTime, { zone: tz });
+          const startMins = startDt.hour * 60 + startDt.minute;
+          const endMins = endDt.hour * 60 + endDt.minute;
+          accumulatedExcludedSlots.push({
+            userId: slot.staff_user_id,
+            date: candidateDate,
+            startMins,
+            endMins,
+          });
+        }
+      }
+    }
+
+    // If all people fit on this date, we're done!
+    if (allPeopleFit && groupResults.length === people.length) {
+      console.log(`[GroupPackage] ═══════════════════════════════════════════════════════`);
+      console.log(`[GroupPackage] SUCCESS: All ${people.length} people fit on ${candidateDate}`);
+      console.log(`[GroupPackage] ═══════════════════════════════════════════════════════`);
+      return {
+        success: true,
+        results: groupResults,
+      };
+    }
+  }
+
+  // No date worked for all people
+  console.log(`[GroupPackage] FAILED: Could not find a date where all people fit`);
+
+  // Build helpful error message
+  const prefsDescription = people
+    .filter(p => p.therapist_preference)
+    .map(p => `${p.name} (${p.therapist_preference})`)
+    .join(", ");
+
+  let errorMsg = `Could not find a date in the next ${datesToTry.length} days where all ${people.length} people can be booked`;
+  if (prefsDescription) {
+    errorMsg += ` with the requested therapist preferences (${prefsDescription})`;
+  }
+
+  return {
+    success: false,
+    results: [],
+    error: errorMsg,
+  };
+}
+
+// Legacy code for tracking exclusions (kept for compatibility)
+interface ExcludedSlot {
+  userId: string;
+  date: string;
+  startMins: number;
+  endMins: number;
+}
+
+async function findGroupPackageAvailability_DEPRECATED(
+  locationId: string,
+  services: string[],
+  timePreference: string,
+  requestedDate: string | null,
+  tz: string,
+  installation: any,
+  localNow: Date,
+  people: PersonPreference[],
+  requestedTime?: string
+): Promise<{
+  success: boolean;
+  results: GroupSlotResult[];
+  error?: string;
+}> {
+  // This function is deprecated - keeping for reference
   const groupResults: GroupSlotResult[] = [];
   const accumulatedExcludedSlots: ExcludedSlot[] = [];
 
-  // Track Person 1's assignment for parallel scheduling of subsequent people
   let person1StartTime: string | undefined = undefined;
   let person1Date: string | undefined = undefined;
 
-  // Process each person in order
   for (let i = 0; i < people.length; i++) {
     const person = people[i];
-    console.log(`[GroupPackage] --- Finding slots for Person ${i + 1}: ${person.name} ---`);
-    console.log(`[GroupPackage] Excluded slots from previous people: ${accumulatedExcludedSlots.length}`);
 
-    // Determine what time and date to request for this person
     let effectiveRequestedTime = requestedTime;
     let effectiveRequestedDate = requestedDate;
 
-    // For Person 2+, try to book at the same time and date as Person 1 (parallel scheduling)
     if (i > 0 && person1StartTime && person1Date) {
-      console.log(`[GroupPackage] Attempting PARALLEL scheduling at ${person1StartTime} on ${person1Date}`);
       effectiveRequestedTime = person1StartTime;
       effectiveRequestedDate = person1Date;
     }
 
-    // Find availability for this person with accumulated exclusions
     let personResults = await findPackageDayAvailability(
       locationId,
       services,
@@ -4813,37 +4977,31 @@ async function findGroupPackageAvailability(
       tz,
       installation,
       localNow,
-      1, // We want just one valid result per person
+      1,
       person.therapist_preference,
       person.strict_gender || false,
       effectiveRequestedTime,
       accumulatedExcludedSlots
     );
 
-    // If no parallel slots found for Person 2+, fall back to staggered scheduling on the same date
     if (personResults.length === 0 && i > 0 && person1Date) {
-      console.log(`[GroupPackage] No parallel slot available, falling back to STAGGERED scheduling on ${person1Date}`);
       personResults = await findPackageDayAvailability(
         locationId,
         services,
         timePreference,
-        person1Date,  // Same date as Person 1
+        person1Date,
         tz,
         installation,
         localNow,
         1,
         person.therapist_preference,
         person.strict_gender || false,
-        undefined,  // No specific time - find earliest available after Person 1's slots are excluded
+        undefined,
         accumulatedExcludedSlots
       );
     }
 
     if (personResults.length === 0) {
-      // Can't fit this person - fail the whole group
-      console.log(`[GroupPackage] FAILED: No availability for ${person.name}`);
-
-      // Build helpful error message
       let errorMsg = `Could not find availability for ${person.name}`;
       if (i > 0) {
         const bookedPeople = people.slice(0, i).map(p => p.name).join(", ");
@@ -4851,31 +5009,24 @@ async function findGroupPackageAvailability(
         if (person.therapist_preference) {
           errorMsg += ` with ${person.therapist_preference} therapist preference`;
         }
-        errorMsg += `. You may need to choose a different date or time.`;
       }
 
       return {
         success: false,
-        results: groupResults, // Return partial results for debugging
+        results: groupResults,
         error: errorMsg,
       };
     }
 
-    // Use the first valid result for this person
     const personSlots = personResults[0];
-    console.log(`[GroupPackage] ✓ Found slots for ${person.name} on ${personSlots.date}`);
 
-    // Store Person 1's start time and date for parallel scheduling of subsequent people
     if (i === 0 && personSlots.slots.length > 0) {
       const firstSlot = personSlots.slots[0];
-      person1Date = personSlots.date;  // e.g., "2026-02-15"
-      // Extract the time portion from the startTime ISO string
+      person1Date = personSlots.date;
       const startDt = DateTime.fromISO(firstSlot.startTime, { zone: tz });
-      person1StartTime = startDt.toFormat("h:mm a");  // e.g., "9:00 AM"
-      console.log(`[GroupPackage] Person 1 scheduled: ${person1Date} at ${person1StartTime} (will attempt parallel for others)`);
+      person1StartTime = startDt.toFormat("h:mm a");
     }
 
-    // Add to group results
     groupResults.push({
       person_index: i,
       person_name: person.name,
@@ -4883,10 +5034,8 @@ async function findGroupPackageAvailability(
       slots: personSlots.slots,
     });
 
-    // Extract this person's slots as exclusions for subsequent people
     for (const slot of personSlots.slots) {
       if (slot.staff_user_id) {
-        // Parse start/end times to minutes
         const startDt = DateTime.fromISO(slot.startTime, { zone: tz });
         const endDt = DateTime.fromISO(slot.endTime, { zone: tz });
         const startMins = startDt.hour * 60 + startDt.minute;
