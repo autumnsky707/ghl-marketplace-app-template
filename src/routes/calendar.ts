@@ -2843,7 +2843,7 @@ router.post("/book", async (req: Request, res: Response) => {
     const selectedDate = body.selected_date;
     // FIX Root Cause 6: Check all possible field names for requested time
     const requestedTime = body.requested_time || body.requestedTime || body.startTime || body.start_time || body.preferred_time;
-    const serviceName = body.service_name || body.serviceType || body.service_type;
+    // serviceName already extracted at top of function
     const occasion = body.occasion;
     const title = body.title;
     const staffUserId = body.staff_user_id || body.staffUserId || body.assigned_user_id || body.assignedUserId;
