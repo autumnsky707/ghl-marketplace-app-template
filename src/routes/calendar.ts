@@ -1855,6 +1855,7 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       date: string;
       time: string;
       label: string;
+      display: string; // Pre-formatted display text for chips: "Tomorrow at 9:00 AM"
       startTime: string;
       staff_name?: string;
       staff_id?: string;
@@ -1904,16 +1905,22 @@ router.post("/check-availability", async (req: Request, res: Response) => {
         }
 
         // Return top slots
-        return allSlots.slice(0, maxSlots).map(({ date, slotInfo }) => ({
-          date,
-          time: formatSlotTime(slotInfo.slot),
-          label: getLabel(date),
-          startTime: slotInfo.slot,
-          ...(slotInfo.staff_name && { staff_name: slotInfo.staff_name }),
-          ...(slotInfo.staff_id && { staff_id: slotInfo.staff_id }),
-          ...(slotInfo.calendar_id && { calendar_id: slotInfo.calendar_id }),
-          ...(slotInfo.calendar_name && { calendar_name: slotInfo.calendar_name })
-        }));
+        return allSlots.slice(0, maxSlots).map(({ date, slotInfo }) => {
+          const time = formatSlotTime(slotInfo.slot);
+          const label = getLabel(date);
+          const displayLabel = toTitleCase(label);
+          return {
+            date,
+            time,
+            label,
+            display: `${displayLabel} at ${time}`, // Pre-formatted for chips
+            startTime: slotInfo.slot,
+            ...(slotInfo.staff_name && { staff_name: slotInfo.staff_name }),
+            ...(slotInfo.staff_id && { staff_id: slotInfo.staff_id }),
+            ...(slotInfo.calendar_id && { calendar_id: slotInfo.calendar_id }),
+            ...(slotInfo.calendar_name && { calendar_name: slotInfo.calendar_name })
+          };
+        });
       }
 
       // Default behavior: 1 slot per day, up to maxSlots days
@@ -1934,10 +1941,14 @@ router.post("/check-availability", async (req: Request, res: Response) => {
 
         // Pick first available slot
         const firstSlot = slots[0];
+        const time = formatSlotTime(firstSlot.slot);
+        const label = getLabel(dateKey);
+        const displayLabel = toTitleCase(label);
         results.push({
           date: dateKey,
-          time: formatSlotTime(firstSlot.slot),
-          label: getLabel(dateKey),
+          time,
+          label,
+          display: `${displayLabel} at ${time}`, // Pre-formatted for chips
           startTime: firstSlot.slot,
           ...(firstSlot.staff_name && { staff_name: firstSlot.staff_name }),
           ...(firstSlot.staff_id && { staff_id: firstSlot.staff_id }),
