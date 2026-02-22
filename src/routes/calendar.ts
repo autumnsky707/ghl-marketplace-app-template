@@ -1249,12 +1249,30 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     console.log(`[Check] service_name field: "${service_name || '(not provided)'}"`);
     console.log(`[Check] service_type field: "${service_type || '(not provided)'}"`);
 
-    // ========== FIX 1.1: PACKAGE_NAME FALLBACK ROUTING ==========
-    // If package_name is provided but type isn't "package", route to package path anyway.
-    // This catches cases where the AI agent forgets to include type: "package".
-    const effectiveType = (package_name && package_name.trim()) ? "package" : type;
-    if (effectiveType === "package" && type !== "package") {
-      console.log(`[Package] Routing via package_name fallback: "${package_name}" (type field was: "${type || "undefined"}")`);
+    // ========== FIX: SERVICE NAME TAKES PRIORITY OVER PACKAGE NAME ==========
+    // If service_name or service_type is provided, ALWAYS route to service path.
+    // This prevents accidental package routing when agent asks for a single service.
+    // Only route to package path if package_name is provided WITHOUT any service name.
+    const hasServiceName = (service_name && service_name.trim()) || (service_type && service_type.trim());
+    const hasPackageName = package_name && package_name.trim();
+
+    let effectiveType: string;
+    if (hasServiceName) {
+      // Service name provided - always use service path (single service booking)
+      effectiveType = "service";
+      if (hasPackageName) {
+        console.log(`[Check] WARNING: Both service_name="${service_name || service_type}" and package_name="${package_name}" provided. Using SERVICE path (service takes priority).`);
+      }
+    } else if (hasPackageName) {
+      // Only package name provided (no service name) - use package path
+      effectiveType = "package";
+      if (type !== "package") {
+        console.log(`[Package] Routing via package_name fallback: "${package_name}" (type field was: "${type || "undefined"}")`);
+      }
+    } else {
+      // Neither service nor package name provided - use type field or default to service
+      effectiveType = type || "service";
+      console.log(`[Check] No service_name or package_name provided. Using type field: "${effectiveType}"`);
     }
 
     // ========== PACKAGE AVAILABILITY ==========
@@ -1991,7 +2009,6 @@ router.post("/book", async (req: Request, res: Response) => {
 
     // Accept both camelCase and snake_case (camelCase takes priority)
     const locationId = body.locationId || body.location_id;
-    const type = body.type || "service"; // default to service
     const customerName = body.customerName || body.customer_name;
     const customerEmail = body.customerEmail || body.customer_email || body.email;
     const customerPhone = body.customerPhone || body.customer_phone || body.phone;
@@ -1999,9 +2016,33 @@ router.post("/book", async (req: Request, res: Response) => {
     const strictGender = body.strictGender || body.strict_gender;  // When true, no gender fallback
     const notes = body.notes;
 
+    // ========== FIX: SERVICE NAME TAKES PRIORITY (same as check-availability) ==========
+    // If service_name is provided, ALWAYS route to service booking path.
+    // This prevents accidental package routing when agent books a single service.
+    const serviceName = body.service_name || body.serviceName || body.service_type;
+    const packageName = body.package_name || body.packageName;
+    const hasServiceName = serviceName && serviceName.trim();
+    const hasPackageName = packageName && packageName.trim();
+
+    let effectiveType: string;
+    if (hasServiceName) {
+      // Service name provided - always use service booking
+      effectiveType = "service";
+      if (hasPackageName) {
+        console.log(`[Book] WARNING: Both service_name="${serviceName}" and package_name="${packageName}" provided. Using SERVICE path.`);
+      }
+    } else if (hasPackageName) {
+      // Only package name - use package booking
+      effectiveType = "package";
+    } else {
+      // Neither - use type field or default to service
+      effectiveType = body.type || "service";
+    }
+    console.log(`[Book] Effective type: "${effectiveType}" (original type field: "${body.type || '(not provided)'}")`);
+
     // ========== PACKAGE BOOKING ==========
-    if (type === "package") {
-      const packageName = body.package_name;
+    if (effectiveType === "package") {
+      // packageName already extracted above with fallback variants
       const selectedDate = body.selected_date;
       const timePreference = body.time_preference;
       // FIX Root Cause 6: Check all possible field names for requested time
