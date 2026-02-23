@@ -1,6 +1,7 @@
 import express, { Express, Request, Response } from "express";
 import dotenv from "dotenv";
 import axios from "axios";
+import cors from "cors";
 import { GHL } from "./ghl";
 import { json } from "body-parser";
 import { updateCalendarInfo, updateInstallationStatus, isInstallationActive } from "./db";
@@ -11,6 +12,20 @@ const path = __dirname + "/ui/dist/";
 
 dotenv.config();
 const app: Express = express();
+
+// Enable CORS for frontend widget to call API
+app.use(cors({
+  origin: [
+    'https://booknexaai.com',
+    'https://www.booknexaai.com',
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'http://127.0.0.1:5500'  // VS Code Live Server
+  ],
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(json({ type: "application/json" }));
 app.use(express.static(path));
 
