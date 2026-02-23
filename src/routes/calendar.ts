@@ -5330,10 +5330,12 @@ async function findGroupPackageAvailability(
   installation: any,
   localNow: Date,
   people: PersonPreference[],
-  requestedTime?: string
+  requestedTime?: string,
+  maxOptions: number = 3  // NEW: Return up to 3 date options
 ): Promise<{
   success: boolean;
   results: GroupSlotResult[];
+  allOptions?: Array<{ date: string; startTime: string; results: GroupSlotResult[] }>;  // NEW: Multiple options
   error?: string;
 }> {
   console.log(`[GroupPackage] ═══════════════════════════════════════════════════════`);
@@ -5380,8 +5382,17 @@ async function findGroupPackageAvailability(
   const todayStr = nowLuxon.toFormat("yyyy-MM-dd");
   const nowMinutes = nowLuxon.hour * 60 + nowLuxon.minute + 15; // 15-min buffer
 
-  // Try each date until we find one where ALL people fit
+  // NEW: Collect multiple date options for user to choose from
+  const collectedOptions: Array<{ date: string; startTime: string; results: GroupSlotResult[] }> = [];
+
+  // Try each date until we find enough options (or run out of dates)
   for (const candidateDate of datesToTry) {
+    // Stop if we have enough options
+    if (collectedOptions.length >= maxOptions) {
+      console.log(`[GroupPackage] Found ${maxOptions} options, stopping search`);
+      break;
+    }
+
     console.log(`[GroupPackage] --- Trying date: ${candidateDate} ---`);
 
     const groupResults: GroupSlotResult[] = [];
@@ -5482,18 +5493,42 @@ async function findGroupPackageAvailability(
       }
     }
 
-    // If all people fit on this date, we're done!
+    // If all people fit on this date, add to options
     if (allPeopleFit && groupResults.length === people.length) {
-      const totalTime = Date.now() - prefetchStart;
-      console.log(`[GroupPackage] ═══════════════════════════════════════════════════════`);
-      console.log(`[GroupPackage] SUCCESS: All ${people.length} people fit on ${candidateDate}`);
-      console.log(`[GroupPackage] Total time: ${totalTime}ms (pre-fetch + in-memory search)`);
-      console.log(`[GroupPackage] ═══════════════════════════════════════════════════════`);
-      return {
-        success: true,
-        results: groupResults,
-      };
+      // Extract start time for this option
+      const firstSlot = groupResults[0]?.slots[0];
+      const startTimeStr = firstSlot
+        ? DateTime.fromISO(firstSlot.startTime, { zone: tz }).toFormat("h:mm a")
+        : "";
+
+      console.log(`[GroupPackage] ✓ Option ${collectedOptions.length + 1}: ${candidateDate} at ${startTimeStr}`);
+
+      collectedOptions.push({
+        date: candidateDate,
+        startTime: startTimeStr,
+        results: JSON.parse(JSON.stringify(groupResults)), // Deep copy
+      });
+
+      // Continue searching for more options (don't return immediately)
     }
+  }
+
+  // Return results based on how many options we found
+  if (collectedOptions.length > 0) {
+    const totalTime = Date.now() - prefetchStart;
+    console.log(`[GroupPackage] ═══════════════════════════════════════════════════════`);
+    console.log(`[GroupPackage] SUCCESS: Found ${collectedOptions.length} date option(s)`);
+    for (const opt of collectedOptions) {
+      console.log(`[GroupPackage]   - ${opt.date} at ${opt.startTime}`);
+    }
+    console.log(`[GroupPackage] Total time: ${totalTime}ms`);
+    console.log(`[GroupPackage] ═══════════════════════════════════════════════════════`);
+
+    return {
+      success: true,
+      results: collectedOptions[0].results, // Primary option (for backward compat)
+      allOptions: collectedOptions, // NEW: All options for agent to present
+    };
   }
 
   // No date worked for all people
@@ -6360,7 +6395,40 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       });
     }
 
-    // Build response
+    // Build response with multiple options
+    const allOptions = groupResult.allOptions || [
+      { date: groupResult.results[0]?.date, startTime: "", results: groupResult.results }
+    ];
+
+    // Format options for display
+    const formattedOptions = allOptions.map(opt => {
+      const dateDt = DateTime.fromISO(opt.date, { zone: tz });
+      const day = dateDt.day;
+      const suffix = day === 1 || day === 21 || day === 31 ? "st"
+                   : day === 2 || day === 22 ? "nd"
+                   : day === 3 || day === 23 ? "rd"
+                   : "th";
+      const dayName = dateDt.toFormat("EEE"); // Mon, Tue, Wed
+      const monthDay = dateDt.toFormat("MMM") + " " + day + suffix; // Feb 24th
+      return {
+        date: opt.date,
+        startTime: opt.startTime,
+        label: `${dayName} ${monthDay} ${opt.startTime}`, // "Mon Feb 24th 10:00 AM"
+        results: opt.results,
+      };
+    });
+
+    // Build message with options as chips
+    let message: string;
+    if (formattedOptions.length === 1) {
+      // Single option - use old format
+      message = buildGroupConfirmationMessage(pkg.package_name, groupResult.results, tz);
+    } else {
+      // Multiple options - present as choices
+      const optionLabels = formattedOptions.map(o => o.label).join(", ");
+      message = `I found ${formattedOptions.length} openings for your group of ${people.length}! Which works best? [chips: ${optionLabels}]`;
+    }
+
     const response = {
       success: true,
       package_name: pkg.package_name,
@@ -6370,7 +6438,8 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       currentTime: localNowLuxon.toFormat("h:mm a"),
       timezone: tz,
       group_slots: groupResult.results,
-      message: buildGroupConfirmationMessage(pkg.package_name, groupResult.results, tz),
+      available_options: formattedOptions, // NEW: All options with labels
+      message,
     };
 
     console.log("[GroupCheck] Success:", JSON.stringify(response, null, 2));
