@@ -4658,9 +4658,14 @@ async function findPackageDayAvailability(
         if (dateKey === todayStr && slotMins < nowMinutes) continue;
 
         // Apply time preference filter ONLY to first service
+        // FIX: When specific time requested (e.g., "10 AM"), find slots AT or AFTER that time
+        // The old logic only accepted slots within 15 mins of requested time, causing 10 AM to fall back to 9 AM
         if (requestedTimeMins !== null) {
-          // Specific time requested - only within 15 minutes of requested time
-          if (slotMins < requestedTimeMins || slotMins > requestedTimeMins + 15) continue;
+          // Accept slots at or after the requested time
+          if (slotMins < requestedTimeMins) continue;
+          // But don't go too far - stay within 2 hours of requested time
+          const maxWindow = requestedTimeMins + 120; // 2 hour window
+          if (slotMins > maxWindow) continue;
         } else if (timePreference === "morning" && slotMins >= 720) {
           continue;
         } else if (timePreference === "afternoon" && slotMins < 720) {
@@ -5148,8 +5153,14 @@ function findChainOnDate(
       if (dateKey === todayStr && slotMins < nowMinutes) continue;
 
       // Apply time preference filter
+      // FIX: When specific time requested (e.g., "10 AM"), find slots AT or AFTER that time
+      // The old logic only accepted slots within 15 mins of requested time, causing 10 AM to fall back to 9 AM
       if (requestedTimeMins !== null) {
-        if (slotMins < requestedTimeMins || slotMins > requestedTimeMins + 15) continue;
+        // Accept slots at or after the requested time, still respecting morning/afternoon boundary
+        if (slotMins < requestedTimeMins) continue;
+        // But don't go too far - stay within 2 hours of requested time OR within same time period
+        const maxWindow = requestedTimeMins + 120; // 2 hour window
+        if (slotMins > maxWindow) continue;
       } else if (timePreference === "morning" && slotMins >= 720) {
         continue;
       } else if (timePreference === "afternoon" && slotMins < 720) {
