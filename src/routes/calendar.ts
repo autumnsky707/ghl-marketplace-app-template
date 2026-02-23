@@ -6842,7 +6842,11 @@ router.post("/book-group", async (req: Request, res: Response) => {
       return res.json({
         success: false,
         error: groupAvailability.error,
-        message: `Unable to find availability for ${people.length} people. ${groupAvailability.error}`,
+        // IMPORTANT: Clear instructions for agent - do NOT switch packages, offer different dates
+        package_name: package_name,  // Include package name so agent knows which package failed
+        retry_same_package: true,    // Flag to tell agent to try same package with different dates
+        message: `I couldn't find availability for the ${package_name} for ${people.length} people at that time. Let me check for other available dates for the same package.`,
+        agent_instructions: "DO NOT suggest a different package. Call check_group_availability again with different dates or time preferences for the SAME package.",
       });
     }
 
@@ -7028,29 +7032,51 @@ router.post("/book-group", async (req: Request, res: Response) => {
               console.error(`[GroupBook]   Error: ${bookResult.error}`);
               console.error(`[GroupBook] ═══════════════════════════════════════════════════════`);
 
+              // ROLLBACK: Cancel all appointments with retry logic for 401 errors
+              // Get a fresh client to ensure we have valid tokens
+              const rollbackClient = await ghl.requests(resolvedLocationId);
+
+              // Helper function to delete with retry
+              const deleteWithRetry = async (appointmentId: string, serviceName: string, personName: string) => {
+                for (let attempt = 1; attempt <= 3; attempt++) {
+                  try {
+                    // Small delay between retries to let token refresh complete
+                    if (attempt > 1) {
+                      await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+                      // Get fresh client on retry
+                      const retryClient = await ghl.requests(resolvedLocationId);
+                      await retryClient.delete(`/calendars/events/appointments/${appointmentId}`, {
+                        headers: { Version: "2021-07-28" },
+                      });
+                    } else {
+                      await rollbackClient.delete(`/calendars/events/appointments/${appointmentId}`, {
+                        headers: { Version: "2021-07-28" },
+                      });
+                    }
+                    console.log(`[GroupBook] ROLLBACK SUCCESS: Cancelled ${serviceName} for ${personName}`);
+                    return true;
+                  } catch (err: any) {
+                    const status = err?.response?.status;
+                    console.error(`[GroupBook] ROLLBACK ATTEMPT ${attempt}/3 FAILED: ${err.message} (status: ${status})`);
+                    if (status !== 401 || attempt === 3) {
+                      console.error(`[GroupBook] ROLLBACK FINAL FAILURE: ${appointmentId} - manual review needed`);
+                      return false;
+                    }
+                    // 401 - token issue, retry with fresh client
+                  }
+                }
+                return false;
+              };
+
               // ROLLBACK: Cancel all appointments for this person
               for (const appt of personAppointments) {
-                try {
-                  await client.delete(`/calendars/events/appointments/${appt.appointmentId}`, {
-                    headers: { Version: "2021-07-28" },
-                  });
-                  console.log(`[GroupBook] BACKGROUND ROLLBACK: Cancelled ${appt.service} for ${person.name}`);
-                } catch (err: any) {
-                  console.error(`[GroupBook] BACKGROUND ROLLBACK FAILED: ${err.message}`);
-                }
+                await deleteWithRetry(appt.appointmentId, appt.service, person.name);
               }
 
               // ROLLBACK: Cancel all appointments for previous people
               for (const prevResult of bookingResults) {
                 for (const appt of prevResult.appointments) {
-                  try {
-                    await client.delete(`/calendars/events/appointments/${appt.appointmentId}`, {
-                      headers: { Version: "2021-07-28" },
-                    });
-                    console.log(`[GroupBook] BACKGROUND ROLLBACK: Cancelled ${appt.service} for ${prevResult.person_name}`);
-                  } catch (err: any) {
-                    console.error(`[GroupBook] BACKGROUND ROLLBACK FAILED: ${err.message}`);
-                  }
+                  await deleteWithRetry(appt.appointmentId, appt.service, prevResult.person_name);
                 }
               }
 
