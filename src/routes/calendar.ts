@@ -6077,6 +6077,7 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       locationId,
       location_id,
       package_name,
+      service_name,  // NEW: Support single service bookings (e.g., "Massage - 90 min")
       group_size,
       // Flat person fields (person_N format)
       person_1_name,
@@ -6119,9 +6120,9 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       console.log("[GroupCheck] VALIDATION FAILED: Missing locationId");
       return res.status(400).json({ success: false, error: "Missing required field: locationId", message: "I need the location ID to check availability." });
     }
-    if (!package_name) {
-      console.log("[GroupCheck] VALIDATION FAILED: Missing package_name");
-      return res.status(400).json({ success: false, error: "Missing required field: package_name", message: "I need to know which package you'd like to book." });
+    if (!package_name && !service_name) {
+      console.log("[GroupCheck] VALIDATION FAILED: Missing package_name and service_name");
+      return res.status(400).json({ success: false, error: "Missing required field: package_name or service_name", message: "I need to know which package or service you'd like to book." });
     }
 
     // Reconstruct people array from flat fields OR use legacy array
@@ -6268,21 +6269,55 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       return res.status(500).json({ success: false, error: "Location timezone not configured", message: "I'm sorry, the location timezone hasn't been configured yet." });
     }
 
-    // Look up the package
-    const pkg = await getPackageByName(resolvedLocationId, package_name);
-    console.log(`[GroupCheck] Package lookup: ${pkg ? pkg.package_name : 'NOT FOUND'}, services: ${pkg?.services?.join(', ') || 'N/A'}`);
-    if (!pkg) {
-      console.log(`[GroupCheck] VALIDATION FAILED: Package "${package_name}" not found`);
-      const allPackages = await getPackages(resolvedLocationId);
-      return res.status(404).json({
-        success: false,
-        error: `Package "${package_name}" not found`,
-        available_packages: allPackages.map(p => p.package_name),
-        message: `I couldn't find a package called "${package_name}". Would you like me to tell you about our available packages?`,
-      });
+    // Look up the package OR service
+    let services: string[] = [];
+    let bookingName: string = "";
+    let isServiceBooking = false;
+
+    if (service_name) {
+      // SERVICE BOOKING: Look up service by name (maps to calendar)
+      console.log(`[GroupCheck] Looking up service: "${service_name}"`);
+      const syncedCals = await getSyncedCalendarsForService(resolvedLocationId, service_name);
+
+      if (syncedCals.length === 0) {
+        // Try to find similar services
+        const allCalendars = await getSyncedCalendars(resolvedLocationId);
+        const availableServices = allCalendars.map(c => c.calendar_name);
+        console.log(`[GroupCheck] VALIDATION FAILED: Service "${service_name}" not found`);
+        return res.status(404).json({
+          success: false,
+          error: `Service "${service_name}" not found`,
+          available_services: availableServices,
+          message: `I couldn't find a service called "${service_name}". Would you like me to tell you about our available services?`,
+        });
+      }
+
+      services = [service_name];
+      bookingName = service_name;
+      isServiceBooking = true;
+      console.log(`[GroupCheck] Service found: ${service_name} (${syncedCals.length} calendars available)`);
+    } else {
+      // PACKAGE BOOKING: Look up package by name
+      const pkg = await getPackageByName(resolvedLocationId, package_name);
+      console.log(`[GroupCheck] Package lookup: ${pkg ? pkg.package_name : 'NOT FOUND'}, services: ${pkg?.services?.join(', ') || 'N/A'}`);
+
+      if (!pkg) {
+        console.log(`[GroupCheck] VALIDATION FAILED: Package "${package_name}" not found`);
+        const allPackages = await getPackages(resolvedLocationId);
+        return res.status(404).json({
+          success: false,
+          error: `Package "${package_name}" not found`,
+          available_packages: allPackages.map(p => p.package_name),
+          message: `I couldn't find a package called "${package_name}". Would you like me to tell you about our available packages?`,
+        });
+      }
+
+      services = pkg.services;
+      bookingName = pkg.package_name;
+      console.log(`[GroupCheck] Package: ${pkg.package_name} with ${pkg.services.length} services`);
     }
 
-    console.log(`[GroupCheck] Package: ${pkg.package_name} with ${pkg.services.length} services`);
+    console.log(`[GroupCheck] Booking: ${bookingName} (${isServiceBooking ? 'service' : 'package'}) with ${services.length} service(s)`);
     console.log(`[GroupCheck] Checking for ${people.length} people`);
 
     // Get local time
@@ -6301,7 +6336,7 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
     console.log("[GroupCheck] ═══════════════════════════════════════════════════════");
     console.log("[GroupCheck] Calling findGroupPackageAvailability with:");
     console.log(`[GroupCheck]   locationId: ${resolvedLocationId}`);
-    console.log(`[GroupCheck]   services: ${pkg.services.join(', ')}`);
+    console.log(`[GroupCheck]   services: ${services.join(', ')}`);
     console.log(`[GroupCheck]   timePreference: ${time_preference || '(none)'}`);
     console.log(`[GroupCheck]   requestedDate: ${parsedDate || '(soonest)'}`);
     console.log(`[GroupCheck]   timezone: ${tz}`);
@@ -6311,7 +6346,7 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
 
     const groupResult = await findGroupPackageAvailability(
       resolvedLocationId,
-      pkg.services,
+      services,
       time_preference || "",
       parsedDate,
       tz,
@@ -6348,7 +6383,7 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
 
         const alternativeResult = await findGroupPackageAvailability(
           resolvedLocationId,
-          pkg.services,
+          services,
           time_preference || "",
           parsedDate,
           tz,
@@ -6391,7 +6426,7 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
         success: false,
         error: groupResult.error,
         partial_results: groupResult.results,
-        message: `I'm sorry, I couldn't find availability for the ${package_name} for ${people.length} people in the next 30 days. Would you like to try a different package or check back later?`,
+        message: `I'm sorry, I couldn't find availability for the ${bookingName} for ${people.length} people in the next 30 days. Would you like to try a different ${isServiceBooking ? 'service' : 'package'} or check back later?`,
       });
     }
 
@@ -6422,7 +6457,7 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
     let message: string;
     if (formattedOptions.length === 1) {
       // Single option - use old format
-      message = buildGroupConfirmationMessage(pkg.package_name, groupResult.results, tz);
+      message = buildGroupConfirmationMessage(bookingName, groupResult.results, tz);
     } else {
       // Multiple options - present as choices
       const optionLabels = formattedOptions.map(o => o.label).join(", ");
@@ -6431,7 +6466,9 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
 
     const response = {
       success: true,
-      package_name: pkg.package_name,
+      package_name: bookingName,  // Works for both packages and services
+      service_name: isServiceBooking ? bookingName : undefined,
+      is_service_booking: isServiceBooking,
       num_people: people.length,
       date: groupResult.results[0]?.date,
       today: todayStr,
@@ -6515,6 +6552,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
       locationId,
       location_id,
       package_name,
+      service_name,  // NEW: Support single service bookings (e.g., "Massage - 90 min")
       group_size,
       // ElevenLabs uses "caller_*" for first person and "guest_N_*" for others
       // Map these to person_N_* format for consistency
@@ -6610,9 +6648,9 @@ router.post("/book-group", async (req: Request, res: Response) => {
       console.log("[GroupBook] VALIDATION FAILED: Missing locationId");
       return res.status(400).json({ success: false, error: "Missing required field: locationId", message: "I need the location ID to complete the booking." });
     }
-    if (!package_name) {
-      console.log("[GroupBook] VALIDATION FAILED: Missing package_name");
-      return res.status(400).json({ success: false, error: "Missing required field: package_name", message: "I need to know which package you'd like to book." });
+    if (!package_name && !service_name) {
+      console.log("[GroupBook] VALIDATION FAILED: Missing package_name and service_name");
+      return res.status(400).json({ success: false, error: "Missing required field: package_name or service_name", message: "I need to know which package or service you'd like to book." });
     }
 
     // Reconstruct people array from flat fields OR use legacy array
@@ -6782,15 +6820,59 @@ router.post("/book-group", async (req: Request, res: Response) => {
       return res.status(500).json({ success: false, error: "Location timezone not configured", message: "I'm sorry, the location timezone hasn't been configured yet." });
     }
 
-    // Look up the package
-    const pkg = await getPackageByName(resolvedLocationId, package_name);
-    console.log(`[GroupBook] Package lookup: ${pkg ? pkg.package_name : 'NOT FOUND'}, services: ${pkg?.services?.join(', ') || 'N/A'}`);
-    if (!pkg) {
-      console.log(`[GroupBook] VALIDATION FAILED: Package "${package_name}" not found`);
-      return res.status(404).json({ success: false, error: `Package "${package_name}" not found`, message: `I couldn't find a package called "${package_name}".` });
+    // Look up the service or package
+    let services: string[] = [];
+    let bookingName: string = "";
+    let isServiceBooking = false;
+
+    if (service_name) {
+      // SERVICE BOOKING: Look up service by name (maps to calendar)
+      console.log(`[GroupBook] Looking up service: "${service_name}"`);
+      const syncedCals = await getSyncedCalendarsForService(resolvedLocationId, service_name);
+
+      if (syncedCals.length === 0) {
+        // Try to find similar services
+        const allCalendars = await getSyncedCalendars(resolvedLocationId);
+        const availableServices = allCalendars.map(c => c.calendar_name);
+        console.log(`[GroupBook] VALIDATION FAILED: Service "${service_name}" not found`);
+        return res.status(404).json({
+          success: false,
+          error: `Service "${service_name}" not found`,
+          available_services: availableServices,
+          message: `I couldn't find a service called "${service_name}". Would you like me to tell you about our available services?`,
+          retry_same_service: false,
+          agent_instructions: "DO NOT improvise. Tell the customer the service was not found and offer to list available services.",
+        });
+      }
+
+      services = [service_name];
+      bookingName = service_name;
+      isServiceBooking = true;
+      console.log(`[GroupBook] Service found: ${service_name} (${syncedCals.length} calendars available)`);
+    } else {
+      // PACKAGE BOOKING: Look up package by name
+      const pkg = await getPackageByName(resolvedLocationId, package_name);
+      console.log(`[GroupBook] Package lookup: ${pkg ? pkg.package_name : 'NOT FOUND'}, services: ${pkg?.services?.join(', ') || 'N/A'}`);
+
+      if (!pkg) {
+        console.log(`[GroupBook] VALIDATION FAILED: Package "${package_name}" not found`);
+        const allPackages = await getPackages(resolvedLocationId);
+        return res.status(404).json({
+          success: false,
+          error: `Package "${package_name}" not found`,
+          available_packages: allPackages.map(p => p.package_name),
+          message: `I couldn't find a package called "${package_name}". Would you like me to tell you about our available packages?`,
+          retry_same_package: false,
+          agent_instructions: "DO NOT improvise or switch packages. Tell the customer the package was not found and offer to list available packages.",
+        });
+      }
+
+      services = pkg.services;
+      bookingName = pkg.package_name;
+      console.log(`[GroupBook] Package: ${pkg.package_name} with ${pkg.services.length} services`);
     }
 
-    console.log(`[GroupBook] Package: ${pkg.package_name} with ${pkg.services.length} services`);
+    console.log(`[GroupBook] Booking: ${bookingName} with ${services.length} service(s) for ${people.length} people`);
     console.log(`[GroupBook] Booking for ${people.length} people`);
 
     // Get local time
@@ -6810,7 +6892,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
     console.log("[GroupBook] ═══════════════════════════════════════════════════════");
     console.log("[GroupBook] Step 1: Calling findGroupPackageAvailability with:");
     console.log(`[GroupBook]   locationId: ${resolvedLocationId}`);
-    console.log(`[GroupBook]   services: ${pkg.services.join(', ')}`);
+    console.log(`[GroupBook]   services: ${services.join(', ')}`);
     console.log(`[GroupBook]   timePreference: ${time_preference || '(none)'}`);
     console.log(`[GroupBook]   selectedDate: ${parsedDate || '(soonest)'}`);
     console.log(`[GroupBook]   timezone: ${tz}`);
@@ -6820,7 +6902,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
 
     const groupAvailability = await findGroupPackageAvailability(
       resolvedLocationId,
-      pkg.services,
+      services,
       time_preference || "",
       parsedDate,
       tz,
@@ -6839,14 +6921,18 @@ router.post("/book-group", async (req: Request, res: Response) => {
     if (!groupAvailability.success) {
       console.log(`[GroupBook] FAILED: ${groupAvailability.error}`);
       console.log(`[GroupBook] Partial results: ${JSON.stringify(groupAvailability.results, null, 2)}`);
+      const bookingType = isServiceBooking ? "service" : "package";
       return res.json({
         success: false,
         error: groupAvailability.error,
-        // IMPORTANT: Clear instructions for agent - do NOT switch packages, offer different dates
-        package_name: package_name,  // Include package name so agent knows which package failed
-        retry_same_package: true,    // Flag to tell agent to try same package with different dates
-        message: `I couldn't find availability for the ${package_name} for ${people.length} people at that time. Let me check for other available dates for the same package.`,
-        agent_instructions: "DO NOT suggest a different package. Call check_group_availability again with different dates or time preferences for the SAME package.",
+        // IMPORTANT: Clear instructions for agent - do NOT switch packages/services, offer different dates
+        package_name: package_name || null,
+        service_name: service_name || null,
+        booking_name: bookingName,
+        is_service_booking: isServiceBooking,
+        retry_same_booking: true,    // Flag to tell agent to try same package/service with different dates
+        message: `I couldn't find availability for the ${bookingName} for ${people.length} people at that time. Let me check for other available dates.`,
+        agent_instructions: `DO NOT suggest a different ${bookingType}. Call check_group_availability again with different dates or time preferences for the SAME ${bookingType}: "${bookingName}".`,
       });
     }
 
@@ -6918,14 +7004,17 @@ router.post("/book-group", async (req: Request, res: Response) => {
       success: true,
       booking_confirmed: true,  // Extra flag for agent clarity
       status: "BOOKED",         // Explicit status string
-      package_name: pkg.package_name,
+      package_name: package_name || null,
+      service_name: service_name || null,
+      booking_name: bookingName,
+      is_service_booking: isServiceBooking,
       num_people: people.length,
       people_booked: allNames,
       date: availDate,
       date_formatted: dateFmt,
       start_time: startTimeFmt,
-      confirmation_message: `BOOKING CONFIRMED: ${pkg.package_name} for ${people.length} people (${namesFormatted}) on ${dateFmt} starting at ${startTimeFmt}.`,
-      message: `Great news! I've successfully booked the ${pkg.package_name} for ${namesFormatted} on ${dateFmt} starting at ${startTimeFmt}. You'll receive a confirmation email shortly at ${people[0].email}.`,
+      confirmation_message: `BOOKING CONFIRMED: ${bookingName} for ${people.length} people (${namesFormatted}) on ${dateFmt} starting at ${startTimeFmt}.`,
+      message: `Great news! I've successfully booked the ${bookingName} for ${namesFormatted} on ${dateFmt} starting at ${startTimeFmt}. You'll receive a confirmation email shortly at ${people[0].email}.`,
     };
 
     console.log("[GroupBook] ═══════════════════════════════════════════════════════");
