@@ -304,6 +304,50 @@ app.post("/api/verify-sso", async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * Direct LocationId Verification endpoint
+ * Allows access to setup page with just a valid, active locationId
+ * This enables customers to return to the management portal anytime
+ */
+app.post("/api/verify-location", async (req: Request, res: Response) => {
+  const { locationId } = req.body || {};
+
+  if (!locationId) {
+    console.log("[Location] Missing locationId in request");
+    return res.status(400).json({
+      success: false,
+      error: "Missing location ID",
+    });
+  }
+
+  try {
+    // Check if installation exists and is active
+    const isActive = await isInstallationActive(locationId);
+    if (!isActive) {
+      console.log(`[Location] Installation inactive or not found for: ${locationId}`);
+      return res.status(403).json({
+        success: false,
+        error: "No active installation found for this location. Please install BookNexa AI from the GHL Marketplace.",
+        isActive: false,
+      });
+    }
+
+    console.log(`[Location] Verified active installation for: ${locationId}`);
+
+    return res.json({
+      success: true,
+      locationId,
+      isActive: true,
+    });
+  } catch (error: any) {
+    console.error("[Location] Verification failed:", error.message);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to verify location",
+    });
+  }
+});
+
 // Legacy webhook handler (kept for compatibility)
 app.post("/example-webhook-handler", async (req: Request, res: Response) => {
   console.log(req.body);

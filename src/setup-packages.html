@@ -433,10 +433,11 @@
     let availableServices = [];
 
     /**
-     * SSO Authentication Flow:
+     * Authentication Flow:
      * 1. If ssoKey present (GHL iframe) → verify via API → get locationId
      * 2. If just completed OAuth (connected=true) → trust locationId param
-     * 3. Otherwise → deny access
+     * 3. If locationId in URL → verify it's an active installation → allow access
+     * 4. Otherwise → deny access
      */
     async function initializeAuth() {
       // Case 1: SSO key from GHL iframe
@@ -477,8 +478,37 @@
         return;
       }
 
-      // Case 3: No authentication - show error
-      showAuthError('Authentication required. Please access this page through your GHL dashboard or complete the OAuth installation.');
+      // Case 3: Direct access with locationId - verify it's an active installation
+      if (urlLocationId) {
+        try {
+          const resp = await fetch(`${API_BASE}/api/verify-location`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ locationId: urlLocationId })
+          });
+          const data = await resp.json();
+
+          if (data.success && data.isActive) {
+            locationId = urlLocationId;
+            console.log('[Setup] Direct access verified, locationId:', locationId);
+            initializePage();
+            return;
+          } else if (data.isActive === false) {
+            showAuthError('No active installation found for this location. Please install BookNexa AI from the GHL Marketplace.');
+            return;
+          } else {
+            showAuthError(data.error || 'Location verification failed.');
+            return;
+          }
+        } catch (err) {
+          console.error('[Setup] Location verification error:', err);
+          showAuthError('Failed to verify location. Please try again.');
+          return;
+        }
+      }
+
+      // Case 4: No authentication - show error
+      showAuthError('Authentication required. Please provide a valid locationId or access this page through your GHL dashboard.');
     }
 
     function showAuthError(message) {
