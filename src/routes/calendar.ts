@@ -2026,6 +2026,7 @@ router.post("/book", async (req: Request, res: Response) => {
     const therapistPreference = body.therapistPreference || body.therapist_preference;
     const strictGender = body.strictGender || body.strict_gender;  // When true, no gender fallback
     const notes = body.notes;
+    const address = body.address || body.room;  // Optional: room/meeting location for GHL
 
     // ========== FIX: SERVICE NAME TAKES PRIORITY (same as check-availability) ==========
     // If service_name is provided, ALWAYS route to service booking path.
@@ -2726,7 +2727,9 @@ router.post("/book", async (req: Request, res: Response) => {
                 bgCustomerPhone,
                 packageBookingNote,  // Use full package note instead of just customer notes
                 bgTherapistPreference,
-                slotInfo.staff_user_id || undefined
+                slotInfo.staff_user_id || undefined,
+                undefined,  // preCreatedContactId - not used here
+                undefined   // address - not used for package bookings yet
               );
 
           console.log(`[Book]   bookServiceAppointment result:`, JSON.stringify(bookingResult));
@@ -3079,22 +3082,29 @@ router.post("/book", async (req: Request, res: Response) => {
     const formattedServiceType = serviceName ? toTitleCase(serviceName) : null;
     const appointmentTitle = formattedServiceType || title || "Appointment";
 
-    // Build notes - ONLY add therapist preference to massage services
-    const noteParts: string[] = [];
-    if (formattedServiceType) noteParts.push(formattedServiceType);
+    // Build clean, scannable appointment description
+    // Keep it short - just essentials staff need to see at a glance
+    // Example: "Massage 90 min, female therapist preferred"
+    const descParts: string[] = [];
+
     // Check if this is a massage service before adding therapist preference
     if (therapistPreference && ["male", "female"].includes(therapistPreference.toLowerCase())) {
       const isMassage = isMassageService(serviceName || "");
       if (isMassage) {
-        noteParts.push(`Therapist preference: ${therapistPreference}`);
+        descParts.push(`${therapistPreference.toLowerCase()} therapist preferred`);
         console.log(`[Book] Added therapist preference to massage service: ${serviceName}`);
       } else {
         console.log(`[Book] Skipping therapist preference for non-massage service: ${serviceName}`);
       }
     }
-    if (occasion) noteParts.push(`Occasion: ${occasion}`);
-    if (notes) noteParts.push(notes);
-    const appointmentNotes = noteParts.join(". ");
+
+    // Add occasion if provided (birthday, anniversary, etc.)
+    if (occasion) descParts.push(occasion);
+
+    // Add any additional notes (special requests) - keep brief
+    if (notes) descParts.push(notes);
+
+    const appointmentNotes = descParts.join(", ");
 
     const appointmentPayload: Record<string, any> = {
       calendarId: resolvedCalendarId,
@@ -3111,6 +3121,12 @@ router.post("/book", async (req: Request, res: Response) => {
     if (staffUserId) {
       appointmentPayload.assignedUserId = staffUserId;
       console.log(`[Book] Assigning appointment to staff userId: ${staffUserId}`);
+    }
+
+    // Add address/room if provided (GHL supports this for meeting location)
+    if (address) {
+      appointmentPayload.address = address;
+      console.log(`[Book] Adding address/room: ${address}`);
     }
 
     console.log("[Book] ===== GHL APPOINTMENT REQUEST =====");
@@ -3813,7 +3829,9 @@ router.post("/book-package", async (req: Request, res: Response) => {
           phone,
           notes,
           therapist_preference,
-          slotInfo.staff_user_id || undefined  // BUG FIX: Assign to specific staff
+          slotInfo.staff_user_id || undefined,  // BUG FIX: Assign to specific staff
+          undefined,  // preCreatedContactId - not used here
+          undefined   // address - not used for package bookings yet
         );
 
         if (!bookingResult.success) {
@@ -5707,7 +5725,8 @@ async function bookServiceAppointment(
   notes?: string,
   therapistPreference?: string,
   staffUserId?: string,  // BUG FIX: Assign to specific staff member
-  preCreatedContactId?: string  // FIX 3: Skip contact creation if provided (prevents name collision)
+  preCreatedContactId?: string,  // FIX 3: Skip contact creation if provided (prevents name collision)
+  address?: string  // Optional: room/meeting location
 ): Promise<{
   success: boolean;
   appointmentId?: string;
@@ -5769,24 +5788,32 @@ async function bookServiceAppointment(
     const bufferEndMs = endTimeMs + slotBuffer * 60 * 1000;
     const bufferEndISO = DateTime.fromMillis(bufferEndMs).toUTC().toISO()!;
 
-    // Build notes - ONLY add therapist preference to MASSAGE services
-    // Other services (body treatment, facial) don't need therapist gender preference
-    let appointmentNotes = notes || "";
+    // Build clean, scannable appointment description
+    // Keep it short - just essentials staff need to see at a glance
+    // Example: "Massage 90 min, female therapist preferred"
+    const descParts: string[] = [];
+
+    // Add therapist preference - ONLY for MASSAGE services
     if (therapistPreference && ["male", "female"].includes(therapistPreference.toLowerCase())) {
-      // Check if this is a massage service using the existing helper
       const calendarName = syncedCalendar?.calendar_name || "";
       const isMassage = isMassageService(serviceName, calendarName);
 
       if (isMassage) {
-        const prefNote = `Therapist preference: ${therapistPreference.toLowerCase()}`;
-        appointmentNotes = appointmentNotes ? `${appointmentNotes} | ${prefNote}` : prefNote;
+        descParts.push(`${therapistPreference.toLowerCase()} therapist preferred`);
         console.log(`[BookService] Added therapist preference to massage service: ${serviceName}`);
       } else {
         console.log(`[BookService] Skipping therapist preference for non-massage service: ${serviceName}`);
       }
     }
 
-    // Build appointment
+    // Add any additional notes (occasion, special requests) - keep brief
+    if (notes) {
+      descParts.push(notes);
+    }
+
+    const appointmentNotes = descParts.join(", ");
+
+    // Build appointment payload
     // Note: serviceName may already include customer name in parentheses like "Facial-60 Min (John Smith)"
     // so we don't apply toTitleCase here - caller is responsible for formatting
     const appointmentPayload: Record<string, any> = {
@@ -5799,6 +5826,12 @@ async function bookServiceAppointment(
       appointmentStatus: "confirmed",
       notes: appointmentNotes || undefined,
     };
+
+    // Add address/room if provided (GHL supports this for meeting location)
+    if (address) {
+      appointmentPayload.address = address;
+      console.log(`[BookService] Adding address/room: ${address}`);
+    }
 
     // BUG FIX: Assign to specific staff member so they show as booked
     // This ensures subsequent bookings use different available staff
@@ -6609,7 +6642,12 @@ router.post("/book-group", async (req: Request, res: Response) => {
       selected_date,
       requested_time,
       notes,
+      address,  // Optional: room/meeting location
+      room,     // Alias for address
     } = req.body;
+
+    // Use address or room (alias)
+    const resolvedAddress = address || room;
 
     // Map caller_*/guest_N_* to person_N_* (ElevenLabs format to internal format)
     // Prefer caller_* over person_1_* if both present
@@ -7032,15 +7070,26 @@ router.post("/book-group", async (req: Request, res: Response) => {
         console.log("[GroupBook] ═══════════════════════════════════════════════════════");
         console.log("[GroupBook] BACKGROUND: Starting appointment bookings...");
 
-        // Build the full group booking note BEFORE booking so it's on every appointment
-        // Format: Group booking (X people): [names] | Package: [name] | Services: [...] | Massage therapist preference: [...]
+        // Build TWO notes:
+        // 1. Clean, scannable description for the appointment (what staff sees at a glance)
+        // 2. Detailed internal note for Notes API (full booking details)
+
         const guestNames = people.slice(1).map((p: any) => p.name);
         const namesStr = `${caller.name}${guestNames.length > 0 ? ' + ' + guestNames.join(' + ') : ''}`;
         const firstPersonSlots = groupAvailability.results[0]?.slots || [];
         const servicesStr = firstPersonSlots.map((slot: any) => slot.service).join(', ');
 
-        // Build therapist preference string with clear wording
-        // Check if anyone requested all-gender preference (strict_gender flag)
+        // Clean appointment description: "Group of 6 — female therapist preferred"
+        // Only include therapist preference if it's a massage service
+        const callerPref = caller.therapist_preference?.toLowerCase();
+        const groupDescParts: string[] = [`Group of ${people.length}`];
+        if (callerPref && ['male', 'female'].includes(callerPref)) {
+          groupDescParts.push(`${callerPref} therapist preferred`);
+        }
+        const groupDescription = groupDescParts.join(' — ');
+        console.log(`[GroupBook] BACKGROUND: Clean description: ${groupDescription}`);
+
+        // Detailed internal note for Notes API
         const prefsStr = people.map((p: any) => {
           const pref = p.therapist_preference?.toLowerCase();
           const isStrict = p.strict_gender === true;
@@ -7058,8 +7107,8 @@ router.post("/book-group", async (req: Request, res: Response) => {
           }
         }).join(', ');
 
-        const groupBookingNote = `Group booking (${people.length} people): ${namesStr} | Package: ${package_name} | Services: ${servicesStr} | Massage therapist preference: ${prefsStr}`;
-        console.log(`[GroupBook] BACKGROUND: Group note for all appointments: ${groupBookingNote}`);
+        const groupInternalNote = `Group booking (${people.length} people): ${namesStr} | Package: ${bookingName} | Services: ${servicesStr} | Massage therapist preference: ${prefsStr}`;
+        console.log(`[GroupBook] BACKGROUND: Internal note: ${groupInternalNote}`);
 
         const bookingResults: PersonBookingResult[] = [];
 
@@ -7100,10 +7149,11 @@ router.post("/book-group", async (req: Request, res: Response) => {
               caller.name,  // Always use caller's name for contact
               caller.email,   // Always use caller's email
               caller.phone,   // Always use caller's phone
-              groupBookingNote,  // Full formatted note for every appointment
+              groupDescription,  // Clean, scannable description for appointment
               person.therapist_preference,
               slot.staff_user_id || undefined,
-              callerContactId  // FIX 3: Pre-created contact prevents name overwriting
+              callerContactId,  // FIX 3: Pre-created contact prevents name overwriting
+              resolvedAddress   // address/room - optional meeting location
             );
 
             console.log(`[GroupBook] BACKGROUND: bookServiceAppointment returned:`);
@@ -7203,7 +7253,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
           console.log(`[GroupBook] BACKGROUND: ✓ Completed booking for ${person.name}: ${personAppointments.length} appointments`);
         }
 
-        // Note: groupBookingNote was already built and passed to each appointment during booking
+        // Note: groupDescription was passed to each appointment for clean display
         // Also write via Notes API as backup (the notes field in appointment payload may not display in all GHL views)
         console.log("[GroupBook] BACKGROUND: Writing group booking notes via Notes API as backup...");
         console.log(`[GroupBook] ───────────────────────────────────────────────────────`);
@@ -7214,7 +7264,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
               console.log(`[GroupBook] BACKGROUND: Writing note to appointment ${appt.appointmentId} (${appt.service} for ${personResult.person_name})`);
               await client.post(
                 `/calendars/appointments/${appt.appointmentId}/notes`,
-                { body: groupBookingNote },
+                { body: groupInternalNote },
                 { headers: { Version: "2021-07-28" } }
               );
               console.log(`[GroupBook] BACKGROUND: ✓ Note written successfully`);
