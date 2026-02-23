@@ -5983,7 +5983,7 @@ function spellOutNumber(n: number): string {
  * Used for couples massages, groups, etc.
  *
  * Accepts FLAT parameters (no arrays) for ElevenLabs compatibility.
- * Supports up to 4 people.
+ * Supports up to 6 people.
  *
  * TWO FORMATS SUPPORTED:
  *
@@ -5998,6 +5998,10 @@ function spellOutNumber(n: number): string {
  *   guest_2_therapist_preference?: "male" | "female",
  *   guest_3_name?: string,           // Optional — defaults to "Guest 3"
  *   guest_3_therapist_preference?: "male" | "female",
+ *   guest_4_name?: string,           // Optional — defaults to "Guest 4"
+ *   guest_4_therapist_preference?: "male" | "female",
+ *   guest_5_name?: string,           // Optional — defaults to "Guest 5"
+ *   guest_5_therapist_preference?: "male" | "female",
  *   time_preference?: "morning" | "afternoon",
  *   requested_date?: string,
  *   requested_time?: string
@@ -6007,7 +6011,7 @@ function spellOutNumber(n: number): string {
  * {
  *   locationId: string,
  *   package_name: string,
- *   group_size: number (2-4),
+ *   group_size: number (2-6),
  *   person_1_name?: string,          // Optional — defaults to "Person 1"
  *   person_1_therapist_preference?: "male" | "female",
  *   person_2_name?: string,          // Optional — defaults to "Person 2"
@@ -6016,6 +6020,10 @@ function spellOutNumber(n: number): string {
  *   person_3_therapist_preference?: "male" | "female",
  *   person_4_name?: string,
  *   person_4_therapist_preference?: "male" | "female",
+ *   person_5_name?: string,
+ *   person_5_therapist_preference?: "male" | "female",
+ *   person_6_name?: string,
+ *   person_6_therapist_preference?: "male" | "female",
  *   time_preference?: "morning" | "afternoon",
  *   requested_date?: string,
  *   requested_time?: string
@@ -6044,6 +6052,10 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       person_3_therapist_preference,
       person_4_name,
       person_4_therapist_preference,
+      person_5_name,
+      person_5_therapist_preference,
+      person_6_name,
+      person_6_therapist_preference,
       // NEW: Caller/Guest format (names optional for availability check)
       caller_therapist_preference,
       guest_1_name,
@@ -6052,6 +6064,10 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       guest_2_therapist_preference,
       guest_3_name,
       guest_3_therapist_preference,
+      guest_4_name,
+      guest_4_therapist_preference,
+      guest_5_name,
+      guest_5_therapist_preference,
       // Legacy array support
       people: legacyPeople,
       time_preference,
@@ -6079,12 +6095,12 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
 
     // Determine target group size (defaults to 2)
     const targetSize = parseInt(group_size) || 2;
-    if (targetSize < 2 || targetSize > 4) {
-      console.log(`[GroupCheck] VALIDATION FAILED: group_size=${group_size} out of range (2-4)`);
+    if (targetSize < 2 || targetSize > 6) {
+      console.log(`[GroupCheck] VALIDATION FAILED: group_size=${group_size} out of range (2-6)`);
       return res.status(400).json({
         success: false,
-        error: "group_size must be between 2 and 4",
-        message: "I can book for 2 to 4 people at a time.",
+        error: "group_size must be between 2 and 6",
+        message: "I can book for 2 to 6 people at a time.",
       });
     }
     console.log(`[GroupCheck] Target group size: ${targetSize}`);
@@ -6113,11 +6129,27 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
         });
       }
 
-      // Guest 3 (add for groups of 4)
+      // Guest 3 (add for groups of 4+)
       if (targetSize >= 4) {
         people.push({
           name: guest_3_name ? toTitleCase(guest_3_name) : "Guest 3",
           therapist_preference: guest_3_therapist_preference
+        });
+      }
+
+      // Guest 4 (add for groups of 5+)
+      if (targetSize >= 5) {
+        people.push({
+          name: guest_4_name ? toTitleCase(guest_4_name) : "Guest 4",
+          therapist_preference: guest_4_therapist_preference
+        });
+      }
+
+      // Guest 5 (add for groups of 6)
+      if (targetSize >= 6) {
+        people.push({
+          name: guest_5_name ? toTitleCase(guest_5_name) : "Guest 5",
+          therapist_preference: guest_5_therapist_preference
         });
       }
 
@@ -6147,11 +6179,27 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
         });
       }
 
-      // Person 4 (add for groups of 4)
+      // Person 4 (add for groups of 4+)
       if (targetSize >= 4) {
         people.push({
           name: person_4_name ? toTitleCase(person_4_name) : "Person 4",
           therapist_preference: person_4_therapist_preference
+        });
+      }
+
+      // Person 5 (add for groups of 5+)
+      if (targetSize >= 5) {
+        people.push({
+          name: person_5_name ? toTitleCase(person_5_name) : "Person 5",
+          therapist_preference: person_5_therapist_preference
+        });
+      }
+
+      // Person 6 (add for groups of 6)
+      if (targetSize >= 6) {
+        people.push({
+          name: person_6_name ? toTitleCase(person_6_name) : "Person 6",
+          therapist_preference: person_6_therapist_preference
         });
       }
 
@@ -6349,13 +6397,13 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
  * Creates appointments for all people with full rollback on failure.
  *
  * Accepts FLAT parameters (no arrays) for ElevenLabs compatibility.
- * Supports up to 4 people.
+ * Supports up to 6 people.
  *
  * Request body:
  * {
  *   locationId: string,
  *   package_name: string,
- *   group_size: number (2-4),
+ *   group_size: number (2-6),
  *   person_1_name: string,
  *   person_1_email: string,
  *   person_1_phone: string,
@@ -6372,6 +6420,14 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
  *   person_4_email?: string,
  *   person_4_phone?: string,
  *   person_4_therapist_preference?: "male" | "female",
+ *   person_5_name?: string,
+ *   person_5_email?: string,
+ *   person_5_phone?: string,
+ *   person_5_therapist_preference?: "male" | "female",
+ *   person_6_name?: string,
+ *   person_6_email?: string,
+ *   person_6_phone?: string,
+ *   person_6_therapist_preference?: "male" | "female",
  *   time_preference?: "morning" | "afternoon",
  *   selected_date?: string,
  *   requested_time?: string
@@ -6409,6 +6465,10 @@ router.post("/book-group", async (req: Request, res: Response) => {
       guest_3_email,
       guest_3_phone,
       guest_3_therapist_preference,
+      guest_4_name,
+      guest_4_therapist_preference,
+      guest_5_name,
+      guest_5_therapist_preference,
       // Also support person_N_* format for backward compatibility
       person_1_name: p1_name,
       person_1_email: p1_email,
@@ -6426,6 +6486,14 @@ router.post("/book-group", async (req: Request, res: Response) => {
       person_4_email: p4_email,
       person_4_phone: p4_phone,
       person_4_therapist_preference: p4_pref,
+      person_5_name: p5_name,
+      person_5_email: p5_email,
+      person_5_phone: p5_phone,
+      person_5_therapist_preference: p5_pref,
+      person_6_name: p6_name,
+      person_6_email: p6_email,
+      person_6_phone: p6_phone,
+      person_6_therapist_preference: p6_pref,
       // Legacy array support
       people: legacyPeople,
       time_preference,
@@ -6453,6 +6521,14 @@ router.post("/book-group", async (req: Request, res: Response) => {
     const person_4_email = guest_3_email || p4_email;
     const person_4_phone = guest_3_phone || p4_phone;
     const person_4_therapist_preference = guest_3_therapist_preference || p4_pref;
+    const person_5_name = (guest_4_name || p5_name) ? toTitleCase(guest_4_name || p5_name) : undefined;
+    const person_5_email = p5_email; // Note: guest_4 doesn't have email in ElevenLabs tool
+    const person_5_phone = p5_phone;
+    const person_5_therapist_preference = guest_4_therapist_preference || p5_pref;
+    const person_6_name = (guest_5_name || p6_name) ? toTitleCase(guest_5_name || p6_name) : undefined;
+    const person_6_email = p6_email; // Note: guest_5 doesn't have email in ElevenLabs tool
+    const person_6_phone = p6_phone;
+    const person_6_therapist_preference = guest_5_therapist_preference || p6_pref;
 
     console.log(`[GroupBook] Mapped fields: person_1_name=${person_1_name}, person_2_name=${person_2_name}`);
 
@@ -6481,12 +6557,12 @@ router.post("/book-group", async (req: Request, res: Response) => {
     } else {
       // Flat parameter format (for ElevenLabs)
       const size = parseInt(group_size) || 2;
-      if (size < 2 || size > 4) {
-        console.log(`[GroupBook] VALIDATION FAILED: group_size=${group_size} out of range (2-4)`);
+      if (size < 2 || size > 6) {
+        console.log(`[GroupBook] VALIDATION FAILED: group_size=${group_size} out of range (2-6)`);
         return res.status(400).json({
           success: false,
-          error: "group_size must be between 2 and 4",
-          message: "I can book for 2 to 4 people at a time.",
+          error: "group_size must be between 2 and 6",
+          message: "I can book for 2 to 6 people at a time.",
         });
       }
       console.log(`[GroupBook] Target group size: ${size}`);
@@ -6539,7 +6615,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
         }
       }
 
-      // Guest 3 (person_4) - required for groups of 4
+      // Guest 3 (person_4) - required for groups of 4+
       if (size >= 4) {
         if (!person_4_name) {
           missingNames.push("guest 3");
@@ -6549,6 +6625,34 @@ router.post("/book-group", async (req: Request, res: Response) => {
             email: person_1_email,
             phone: person_1_phone,
             therapist_preference: person_4_therapist_preference,
+          });
+        }
+      }
+
+      // Guest 4 (person_5) - required for groups of 5+
+      if (size >= 5) {
+        if (!person_5_name) {
+          missingNames.push("guest 4");
+        } else {
+          people.push({
+            name: person_5_name,
+            email: person_1_email,
+            phone: person_1_phone,
+            therapist_preference: person_5_therapist_preference,
+          });
+        }
+      }
+
+      // Guest 5 (person_6) - required for groups of 6
+      if (size >= 6) {
+        if (!person_6_name) {
+          missingNames.push("guest 5");
+        } else {
+          people.push({
+            name: person_6_name,
+            email: person_1_email,
+            phone: person_1_phone,
+            therapist_preference: person_6_therapist_preference,
           });
         }
       }
