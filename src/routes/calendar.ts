@@ -6063,74 +6063,88 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
     }
 
     // Reconstruct people array from flat fields OR use legacy array
+    // FIX: Use group_size to determine how many people, with defaults for missing names
     let people: Array<{ name: string; therapist_preference?: string }> = [];
+
+    // Determine target group size (defaults to 2)
+    const targetSize = parseInt(group_size) || 2;
+    if (targetSize < 2 || targetSize > 4) {
+      console.log(`[GroupCheck] VALIDATION FAILED: group_size=${group_size} out of range (2-4)`);
+      return res.status(400).json({
+        success: false,
+        error: "group_size must be between 2 and 4",
+        message: "I can book for 2 to 4 people at a time.",
+      });
+    }
+    console.log(`[GroupCheck] Target group size: ${targetSize}`);
 
     if (legacyPeople && Array.isArray(legacyPeople) && legacyPeople.length >= 2) {
       // Legacy array format (for backward compatibility)
       people = legacyPeople;
     } else if (caller_therapist_preference !== undefined || guest_1_name || guest_1_therapist_preference) {
       // NEW caller/guest format — names are OPTIONAL for availability check
-      // This allows Sophia to check availability with just therapist preferences,
-      // then collect guest names later before booking
       console.log("[GroupCheck] Using caller/guest format");
 
       // Caller is always person 1
       people.push({ name: "Caller", therapist_preference: caller_therapist_preference });
 
-      // Guest 1 — add if name OR preference provided (name defaults to "Guest 1")
-      if (guest_1_name || guest_1_therapist_preference !== undefined) {
-        people.push({ name: guest_1_name ? toTitleCase(guest_1_name) : "Guest 1", therapist_preference: guest_1_therapist_preference });
-      } else {
-        // At minimum we need 2 people, so add Guest 1 even without preference
-        people.push({ name: "Guest 1", therapist_preference: undefined });
+      // Guest 1 (always add for groups of 2+)
+      people.push({
+        name: guest_1_name ? toTitleCase(guest_1_name) : "Guest 1",
+        therapist_preference: guest_1_therapist_preference
+      });
+
+      // Guest 2 (add for groups of 3+)
+      if (targetSize >= 3) {
+        people.push({
+          name: guest_2_name ? toTitleCase(guest_2_name) : "Guest 2",
+          therapist_preference: guest_2_therapist_preference
+        });
       }
 
-      // Guest 2 — only add if name OR preference provided
-      if (guest_2_name || guest_2_therapist_preference !== undefined) {
-        people.push({ name: guest_2_name ? toTitleCase(guest_2_name) : "Guest 2", therapist_preference: guest_2_therapist_preference });
+      // Guest 3 (add for groups of 4)
+      if (targetSize >= 4) {
+        people.push({
+          name: guest_3_name ? toTitleCase(guest_3_name) : "Guest 3",
+          therapist_preference: guest_3_therapist_preference
+        });
       }
 
-      // Guest 3 — only add if name OR preference provided
-      if (guest_3_name || guest_3_therapist_preference !== undefined) {
-        people.push({ name: guest_3_name ? toTitleCase(guest_3_name) : "Guest 3", therapist_preference: guest_3_therapist_preference });
-      }
-
-      console.log(`[GroupCheck] Caller/guest format: ${people.length} people`);
+      console.log(`[GroupCheck] Caller/guest format: ${people.length} people for group_size=${targetSize}`);
     } else {
       // Flat parameter format (person_N style for ElevenLabs)
-      const size = parseInt(group_size) || 2;
-      if (size < 2 || size > 4) {
-        console.log(`[GroupCheck] VALIDATION FAILED: group_size=${group_size} out of range (2-4)`);
-        return res.status(400).json({
-          success: false,
-          error: "group_size must be between 2 and 4",
-          message: "I can book for 2 to 4 people at a time.",
+      // FIX: Always add people up to targetSize, using defaults for missing names
+      console.log("[GroupCheck] Using person_N format");
+
+      // Person 1 (always add)
+      people.push({
+        name: person_1_name ? toTitleCase(person_1_name) : "Person 1",
+        therapist_preference: person_1_therapist_preference
+      });
+
+      // Person 2 (always add for groups of 2+)
+      people.push({
+        name: person_2_name ? toTitleCase(person_2_name) : "Person 2",
+        therapist_preference: person_2_therapist_preference
+      });
+
+      // Person 3 (add for groups of 3+)
+      if (targetSize >= 3) {
+        people.push({
+          name: person_3_name ? toTitleCase(person_3_name) : "Person 3",
+          therapist_preference: person_3_therapist_preference
         });
       }
 
-      // Build people array from flat fields — allow name OR preference to count as a person
-      if (person_1_name || person_1_therapist_preference !== undefined) {
-        people.push({ name: person_1_name ? toTitleCase(person_1_name) : "Person 1", therapist_preference: person_1_therapist_preference });
-      }
-      if (person_2_name || person_2_therapist_preference !== undefined) {
-        people.push({ name: person_2_name ? toTitleCase(person_2_name) : "Person 2", therapist_preference: person_2_therapist_preference });
-      }
-      if (size >= 3 && (person_3_name || person_3_therapist_preference !== undefined)) {
-        people.push({ name: person_3_name ? toTitleCase(person_3_name) : "Person 3", therapist_preference: person_3_therapist_preference });
-      }
-      if (size >= 4 && (person_4_name || person_4_therapist_preference !== undefined)) {
-        people.push({ name: person_4_name ? toTitleCase(person_4_name) : "Person 4", therapist_preference: person_4_therapist_preference });
-      }
-
-      // Validate we have enough people
-      if (people.length < 2) {
-        console.log(`[GroupCheck] VALIDATION FAILED: people.length=${people.length} < 2`);
-        return res.status(400).json({
-          success: false,
-          error: "Need at least 2 people (provide names or therapist preferences)",
-          message: "I need information for at least two people to check group availability.",
+      // Person 4 (add for groups of 4)
+      if (targetSize >= 4) {
+        people.push({
+          name: person_4_name ? toTitleCase(person_4_name) : "Person 4",
+          therapist_preference: person_4_therapist_preference
         });
       }
+
+      console.log(`[GroupCheck] Person_N format: ${people.length} people for group_size=${targetSize}`);
     }
 
     // Log the reconstructed people array
@@ -6446,7 +6460,8 @@ router.post("/book-group", async (req: Request, res: Response) => {
     }
 
     // Reconstruct people array from flat fields OR use legacy array
-    // FIX 1: Caller needs name, email, phone. Guests only need name (booked under caller's contact).
+    // FIX: Caller needs name, email, phone. Guests only need name (booked under caller's contact).
+    // FIX: Properly validate that we have all required names for group_size
     let people: Array<{ name: string; email: string; phone: string; therapist_preference?: string }> = [];
 
     if (legacyPeople && Array.isArray(legacyPeople) && legacyPeople.length >= 2) {
@@ -6463,6 +6478,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
           message: "I can book for 2 to 4 people at a time.",
         });
       }
+      console.log(`[GroupBook] Target group size: ${size}`);
 
       // CALLER (person_1) must have name, email, and phone
       if (!person_1_name || !person_1_email || !person_1_phone) {
@@ -6482,35 +6498,66 @@ router.post("/book-group", async (req: Request, res: Response) => {
         therapist_preference: person_1_therapist_preference,
       });
 
-      // GUESTS only need a name - they get booked under the caller's contact
-      if (person_2_name) {
+      // FIX: Check if we have names for ALL guests based on group_size
+      // Collect missing names to give a helpful error message
+      const missingNames: string[] = [];
+
+      // Guest 1 (person_2) - required for groups of 2+
+      if (!person_2_name) {
+        missingNames.push("guest 1");
+      } else {
         people.push({
           name: person_2_name,
-          email: person_1_email,  // Use caller's email
-          phone: person_1_phone,  // Use caller's phone
+          email: person_1_email,
+          phone: person_1_phone,
           therapist_preference: person_2_therapist_preference,
         });
       }
-      if (size >= 3 && person_3_name) {
-        people.push({
-          name: person_3_name,
-          email: person_1_email,  // Use caller's email
-          phone: person_1_phone,  // Use caller's phone
-          therapist_preference: person_3_therapist_preference,
-        });
+
+      // Guest 2 (person_3) - required for groups of 3+
+      if (size >= 3) {
+        if (!person_3_name) {
+          missingNames.push("guest 2");
+        } else {
+          people.push({
+            name: person_3_name,
+            email: person_1_email,
+            phone: person_1_phone,
+            therapist_preference: person_3_therapist_preference,
+          });
+        }
       }
-      if (size >= 4 && person_4_name) {
-        people.push({
-          name: person_4_name,
-          email: person_1_email,  // Use caller's email
-          phone: person_1_phone,  // Use caller's phone
-          therapist_preference: person_4_therapist_preference,
+
+      // Guest 3 (person_4) - required for groups of 4
+      if (size >= 4) {
+        if (!person_4_name) {
+          missingNames.push("guest 3");
+        } else {
+          people.push({
+            name: person_4_name,
+            email: person_1_email,
+            phone: person_1_phone,
+            therapist_preference: person_4_therapist_preference,
+          });
+        }
+      }
+
+      // FIX: If any names are missing, return a clear error
+      if (missingNames.length > 0) {
+        console.log(`[GroupBook] VALIDATION FAILED: Missing names for ${missingNames.join(", ")}`);
+        return res.status(400).json({
+          success: false,
+          error: `Missing names for: ${missingNames.join(", ")}`,
+          message: `I need the names of all ${size} people to complete the booking. I'm still missing names for: ${missingNames.join(", ")}.`,
+          missing_names: missingNames,
+          group_size: size,
+          names_received: people.map(p => p.name),
         });
       }
 
-      // Validate we have at least 2 people (caller + at least one guest)
-      if (people.length < 2) {
-        console.log(`[GroupBook] VALIDATION FAILED: people.length=${people.length} < 2`);
+      // Validate we have the right number of people
+      if (people.length !== size) {
+        console.log(`[GroupBook] VALIDATION FAILED: people.length=${people.length} != group_size=${size}`);
         return res.status(400).json({
           success: false,
           error: "At least 2 people required (caller + guest)",
@@ -6671,17 +6718,32 @@ router.post("/book-group", async (req: Request, res: Response) => {
       dateFmt = `${relativePrefix}${fullDate}`;
     }
 
+    // Build list of names for confirmation
+    const allNames = people.map((p: any) => p.name);
+    const namesFormatted = allNames.length <= 2
+      ? allNames.join(" and ")
+      : allNames.slice(0, -1).join(", ") + ", and " + allNames[allNames.length - 1];
+
     // RESPOND IMMEDIATELY — before booking to avoid ElevenLabs timeout
+    // FIX: Make response format very clear for the agent to parse as success
     const immediateResponse = {
       success: true,
+      booking_confirmed: true,  // Extra flag for agent clarity
+      status: "BOOKED",         // Explicit status string
       package_name: pkg.package_name,
       num_people: people.length,
+      people_booked: allNames,
       date: availDate,
-      message: `Your ${pkg.package_name} has been booked for ${people.length} people on ${dateFmt} starting at ${startTimeFmt}. You will receive a confirmation email shortly.`,
+      date_formatted: dateFmt,
+      start_time: startTimeFmt,
+      confirmation_message: `BOOKING CONFIRMED: ${pkg.package_name} for ${people.length} people (${namesFormatted}) on ${dateFmt} starting at ${startTimeFmt}.`,
+      message: `Great news! I've successfully booked the ${pkg.package_name} for ${namesFormatted} on ${dateFmt} starting at ${startTimeFmt}. You'll receive a confirmation email shortly at ${people[0].email}.`,
     };
 
-    console.log("[GroupBook] Responding immediately to avoid timeout");
+    console.log("[GroupBook] ═══════════════════════════════════════════════════════");
+    console.log("[GroupBook] SUCCESS: Responding with booking confirmation");
     console.log("[GroupBook] Response:", JSON.stringify(immediateResponse, null, 2));
+    console.log("[GroupBook] ═══════════════════════════════════════════════════════");
     res.json(immediateResponse);
 
     // BOOK IN BACKGROUND — after response is sent
