@@ -6146,22 +6146,23 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       people = legacyPeople;
     } else if (caller_therapist_preference !== undefined || guest_1_name || guest_1_therapist_preference) {
       // NEW caller/guest format — names are OPTIONAL for availability check
+      // Guests inherit caller's therapist preference if they don't have their own
       console.log("[GroupCheck] Using caller/guest format");
 
       // Caller is always person 1
       people.push({ name: "Caller", therapist_preference: caller_therapist_preference });
 
-      // Guest 1 (always add for groups of 2+)
+      // Guest 1 (always add for groups of 2+) - inherit caller's preference if not specified
       people.push({
         name: guest_1_name ? toTitleCase(guest_1_name) : "Guest 1",
-        therapist_preference: guest_1_therapist_preference
+        therapist_preference: guest_1_therapist_preference || caller_therapist_preference
       });
 
       // Guest 2 (add for groups of 3+)
       if (targetSize >= 3) {
         people.push({
           name: guest_2_name ? toTitleCase(guest_2_name) : "Guest 2",
-          therapist_preference: guest_2_therapist_preference
+          therapist_preference: guest_2_therapist_preference || caller_therapist_preference
         });
       }
 
@@ -6169,7 +6170,7 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       if (targetSize >= 4) {
         people.push({
           name: guest_3_name ? toTitleCase(guest_3_name) : "Guest 3",
-          therapist_preference: guest_3_therapist_preference
+          therapist_preference: guest_3_therapist_preference || caller_therapist_preference
         });
       }
 
@@ -6177,7 +6178,7 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       if (targetSize >= 5) {
         people.push({
           name: guest_4_name ? toTitleCase(guest_4_name) : "Guest 4",
-          therapist_preference: guest_4_therapist_preference
+          therapist_preference: guest_4_therapist_preference || caller_therapist_preference
         });
       }
 
@@ -6185,7 +6186,7 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       if (targetSize >= 6) {
         people.push({
           name: guest_5_name ? toTitleCase(guest_5_name) : "Guest 5",
-          therapist_preference: guest_5_therapist_preference
+          therapist_preference: guest_5_therapist_preference || caller_therapist_preference
         });
       }
 
@@ -6193,6 +6194,7 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
     } else {
       // Flat parameter format (person_N style for ElevenLabs)
       // FIX: Always add people up to targetSize, using defaults for missing names
+      // Guests inherit person_1's therapist preference if they don't have their own
       console.log("[GroupCheck] Using person_N format");
 
       // Person 1 (always add)
@@ -6201,17 +6203,17 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
         therapist_preference: person_1_therapist_preference
       });
 
-      // Person 2 (always add for groups of 2+)
+      // Person 2 (always add for groups of 2+) - inherit person_1's preference if not specified
       people.push({
         name: person_2_name ? toTitleCase(person_2_name) : "Person 2",
-        therapist_preference: person_2_therapist_preference
+        therapist_preference: person_2_therapist_preference || person_1_therapist_preference
       });
 
       // Person 3 (add for groups of 3+)
       if (targetSize >= 3) {
         people.push({
           name: person_3_name ? toTitleCase(person_3_name) : "Person 3",
-          therapist_preference: person_3_therapist_preference
+          therapist_preference: person_3_therapist_preference || person_1_therapist_preference
         });
       }
 
@@ -6219,7 +6221,7 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       if (targetSize >= 4) {
         people.push({
           name: person_4_name ? toTitleCase(person_4_name) : "Person 4",
-          therapist_preference: person_4_therapist_preference
+          therapist_preference: person_4_therapist_preference || person_1_therapist_preference
         });
       }
 
@@ -6227,7 +6229,7 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       if (targetSize >= 5) {
         people.push({
           name: person_5_name ? toTitleCase(person_5_name) : "Person 5",
-          therapist_preference: person_5_therapist_preference
+          therapist_preference: person_5_therapist_preference || person_1_therapist_preference
         });
       }
 
@@ -6235,7 +6237,7 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       if (targetSize >= 6) {
         people.push({
           name: person_6_name ? toTitleCase(person_6_name) : "Person 6",
-          therapist_preference: person_6_therapist_preference
+          therapist_preference: person_6_therapist_preference || person_1_therapist_preference
         });
       }
 
@@ -6697,6 +6699,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
       const missingNames: string[] = [];
 
       // Guest 1 (person_2) - required for groups of 2+
+      // Inherit caller's therapist preference if guest doesn't have their own
       if (!person_2_name) {
         missingNames.push("guest 1");
       } else {
@@ -6704,7 +6707,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
           name: person_2_name,
           email: person_1_email,
           phone: person_1_phone,
-          therapist_preference: person_2_therapist_preference,
+          therapist_preference: person_2_therapist_preference || person_1_therapist_preference,
         });
       }
 
@@ -6717,7 +6720,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
             name: person_3_name,
             email: person_1_email,
             phone: person_1_phone,
-            therapist_preference: person_3_therapist_preference,
+            therapist_preference: person_3_therapist_preference || person_1_therapist_preference,
           });
         }
       }
@@ -6731,7 +6734,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
             name: person_4_name,
             email: person_1_email,
             phone: person_1_phone,
-            therapist_preference: person_4_therapist_preference,
+            therapist_preference: person_4_therapist_preference || person_1_therapist_preference,
           });
         }
       }
@@ -6745,7 +6748,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
             name: person_5_name,
             email: person_1_email,
             phone: person_1_phone,
-            therapist_preference: person_5_therapist_preference,
+            therapist_preference: person_5_therapist_preference || person_1_therapist_preference,
           });
         }
       }
@@ -6759,7 +6762,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
             name: person_6_name,
             email: person_1_email,
             phone: person_1_phone,
-            therapist_preference: person_6_therapist_preference,
+            therapist_preference: person_6_therapist_preference || person_1_therapist_preference,
           });
         }
       }
