@@ -7096,9 +7096,21 @@ router.post("/book-group", async (req: Request, res: Response) => {
         const firstPersonSlots = groupAvailability.results[0]?.slots || [];
         const servicesStr = firstPersonSlots.map((slot: any) => slot.service).join(', ');
 
-        // Clean appointment description: "Group of 6"
-        // The bookServiceAppointment function will add service name, customer name, and therapist preference
-        const groupDescription = `Group of ${people.length}`;
+        // Build group description with preference context
+        // Each appointment shows individual preference, so group description just provides context:
+        // - If everyone has same preference: "Group of 6" (individual pref shows the detail)
+        // - If mixed preferences: "Group of 6 (mixed preferences)" to signal coordination needed
+        const callerPref = caller.therapist_preference?.toLowerCase();
+        const allPrefs = people.map((p: any) => p.therapist_preference?.toLowerCase() || null);
+        const uniquePrefs = [...new Set(allPrefs.filter(p => p))];
+
+        let groupPrefNote = "";
+        // Only add note if there are mixed preferences (different people want different things)
+        if (uniquePrefs.length > 1) {
+          groupPrefNote = " (mixed preferences)";
+        }
+
+        const groupDescription = `Group of ${people.length}${groupPrefNote}`;
         console.log(`[GroupBook] BACKGROUND: Clean description: ${groupDescription}`);
 
         // Detailed internal note for Notes API
@@ -7152,6 +7164,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
             console.log(`[GroupBook]   Therapist preference: ${person.therapist_preference || '(none)'}`);
 
             // FIX 3: Use caller's contact info for ALL bookings to prevent name collision
+            // Pass individual therapist preference so each appointment shows that person's specific preference
             const bookResult = await bookServiceAppointment(
               client,
               resolvedLocationId,
@@ -7161,8 +7174,8 @@ router.post("/book-group", async (req: Request, res: Response) => {
               caller.name,  // Always use caller's name for contact
               caller.email,   // Always use caller's email
               caller.phone,   // Always use caller's phone
-              groupDescription,  // Clean, scannable description for appointment
-              person.therapist_preference,
+              groupDescription,  // Clean description with group preference info
+              person.therapist_preference,  // Individual preference for this person's appointment
               slot.staff_user_id || undefined,
               callerContactId,  // FIX 3: Pre-created contact prevents name overwriting
               resolvedAddress   // address/room - optional meeting location
