@@ -3082,12 +3082,20 @@ router.post("/book", async (req: Request, res: Response) => {
     const formattedServiceType = serviceName ? toTitleCase(serviceName) : null;
     const appointmentTitle = formattedServiceType || title || "Appointment";
 
-    // Build clean, scannable appointment description
-    // Keep it short - just essentials staff need to see at a glance
-    // Example: "Massage 90 min, female therapist preferred"
+    // Build appointment description with useful booking info
+    // Format: "Service - Customer Name - preferences/notes"
+    // Example: "Massage 90 min - Autumn Hancock - female therapist preferred"
     const descParts: string[] = [];
 
-    // Check if this is a massage service before adding therapist preference
+    // Always include service name
+    if (formattedServiceType) {
+      descParts.push(formattedServiceType);
+    }
+
+    // Always include customer name
+    descParts.push(customerName);
+
+    // Add therapist preference for massage services
     if (therapistPreference && ["male", "female"].includes(therapistPreference.toLowerCase())) {
       const isMassage = isMassageService(serviceName || "");
       if (isMassage) {
@@ -3104,7 +3112,7 @@ router.post("/book", async (req: Request, res: Response) => {
     // Add any additional notes (special requests) - keep brief
     if (notes) descParts.push(notes);
 
-    const appointmentNotes = descParts.join(", ");
+    const appointmentNotes = descParts.join(" - ");
 
     const appointmentPayload: Record<string, any> = {
       calendarId: resolvedCalendarId,
@@ -5788,10 +5796,19 @@ async function bookServiceAppointment(
     const bufferEndMs = endTimeMs + slotBuffer * 60 * 1000;
     const bufferEndISO = DateTime.fromMillis(bufferEndMs).toUTC().toISO()!;
 
-    // Build clean, scannable appointment description
-    // Keep it short - just essentials staff need to see at a glance
-    // Example: "Massage 90 min, female therapist preferred"
+    // Build appointment description with useful booking info
+    // Format: "Service - Customer Name - preferences/notes"
+    // Example: "Massage 90 min - John Smith - female therapist preferred"
     const descParts: string[] = [];
+
+    // Always include service name (strip customer name suffix if present)
+    const baseServiceName = serviceName.replace(/\s*\([^)]+\)\s*$/, '').trim();
+    if (baseServiceName) {
+      descParts.push(baseServiceName);
+    }
+
+    // Always include customer name
+    descParts.push(customerName);
 
     // Add therapist preference - ONLY for MASSAGE services
     if (therapistPreference && ["male", "female"].includes(therapistPreference.toLowerCase())) {
@@ -5811,7 +5828,7 @@ async function bookServiceAppointment(
       descParts.push(notes);
     }
 
-    const appointmentNotes = descParts.join(", ");
+    const appointmentNotes = descParts.join(" - ");
 
     // Build appointment payload
     // Note: serviceName may already include customer name in parentheses like "Facial-60 Min (John Smith)"
@@ -7079,14 +7096,9 @@ router.post("/book-group", async (req: Request, res: Response) => {
         const firstPersonSlots = groupAvailability.results[0]?.slots || [];
         const servicesStr = firstPersonSlots.map((slot: any) => slot.service).join(', ');
 
-        // Clean appointment description: "Group of 6 — female therapist preferred"
-        // Only include therapist preference if it's a massage service
-        const callerPref = caller.therapist_preference?.toLowerCase();
-        const groupDescParts: string[] = [`Group of ${people.length}`];
-        if (callerPref && ['male', 'female'].includes(callerPref)) {
-          groupDescParts.push(`${callerPref} therapist preferred`);
-        }
-        const groupDescription = groupDescParts.join(' — ');
+        // Clean appointment description: "Group of 6"
+        // The bookServiceAppointment function will add service name, customer name, and therapist preference
+        const groupDescription = `Group of ${people.length}`;
         console.log(`[GroupBook] BACKGROUND: Clean description: ${groupDescription}`);
 
         // Detailed internal note for Notes API
