@@ -640,10 +640,7 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       try {
         conversation = await Conversation.startSession({
           agentId: AGENT_ID,
-          workletPaths: {
-            'rawAudioProcessor': 'https://booknexaai-oauth.onrender.com/elevenlabs/rawAudioProcessor.js',
-            'audioConcatProcessor': 'https://booknexaai-oauth.onrender.com/elevenlabs/audioConcatProcessor.js',
-          },
+          connectionType: 'webrtc',
           overrides: { agent: { firstMessage: GREETING, language: currentLang } },
           onConnect: () => {
             widget.classList.add('speaking');
@@ -792,10 +789,7 @@ function generateBannerWidget({ t, agentName, elevenLabsId, greeting, langListHT
       try {
         conversation = await Conversation.startSession({
           agentId: AGENT_ID,
-          workletPaths: {
-            'rawAudioProcessor': 'https://booknexaai-oauth.onrender.com/elevenlabs/rawAudioProcessor.js',
-            'audioConcatProcessor': 'https://booknexaai-oauth.onrender.com/elevenlabs/audioConcatProcessor.js',
-          },
+          connectionType: 'webrtc',
           overrides: { agent: { firstMessage: GREETING } },
           onConnect: () => {
             widget.classList.add('speaking');
@@ -918,10 +912,7 @@ function generateClassicWidget({ t, agentName, elevenLabsId, greeting, langListH
       try {
         conversation = await Conversation.startSession({
           agentId: AGENT_ID,
-          workletPaths: {
-            'rawAudioProcessor': 'https://booknexaai-oauth.onrender.com/elevenlabs/rawAudioProcessor.js',
-            'audioConcatProcessor': 'https://booknexaai-oauth.onrender.com/elevenlabs/audioConcatProcessor.js',
-          },
+          connectionType: 'webrtc',
           overrides: { agent: { firstMessage: GREETING } },
           onConnect: () => widget.classList.add('speaking'),
           onDisconnect: () => { widget.classList.remove('speaking'); conversation = null; }
@@ -954,6 +945,6 @@ export async function widgetRenderHandler(req: Request, res: Response): Promise<
   res.setHeader('X-Frame-Options', 'ALLOWALL');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'public, max-age=300');
-  // No CSP header - allows ElevenLabs worklets and audio to work freely
+  res.setHeader('Content-Security-Policy', "connect-src 'self' https://api.elevenlabs.io wss://livekit.rtc.elevenlabs.io https://livekit.rtc.elevenlabs.io;");
   res.send(html);
 }
