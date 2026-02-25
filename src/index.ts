@@ -244,7 +244,7 @@ app.use("/api/calendar", calendarRoutes);
 
 // Widget embed system
 app.get("/widget/render", widgetRenderHandler);
-app.use("/widget", express.static(__dirname + "/widget"));
+app.use("/widget", express.static(__dirname + "/public/widget"));
 
 // SSO decryption (legacy endpoint)
 app.post("/decrypt-sso", async (req: Request, res: Response) => {
