@@ -7,6 +7,7 @@ import { json } from "body-parser";
 import { updateCalendarInfo, updateInstallationStatus, isInstallationActive } from "./db";
 import calendarRoutes from "./routes/calendar";
 import { syncLocation, startPolling } from "./sync";
+import { widgetRenderHandler } from "./widget-render";
 
 const path = __dirname + "/ui/dist/";
 
@@ -240,6 +241,10 @@ app.get("/reconnect", async (req: Request, res: Response) => {
 
 // Mount calendar API routes
 app.use("/api/calendar", calendarRoutes);
+
+// Widget embed system
+app.get("/widget/render", widgetRenderHandler);
+app.use("/widget", express.static(__dirname + "/widget"));
 
 // SSO decryption (legacy endpoint)
 app.post("/decrypt-sso", async (req: Request, res: Response) => {
