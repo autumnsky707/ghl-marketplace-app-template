@@ -53,41 +53,41 @@ const THEMES: Record<string, { name: string; primary: string; dark: string; dark
   }
 };
 
-// All 33 languages
+// All 33 languages - matching live settings page order
 const LANGUAGES = [
   { code: 'en', name: 'English', flag: '🇺🇸' },
-  { code: 'es', name: 'Español', flag: '🇪🇸' },
-  { code: 'fr', name: 'Français', flag: '🇫🇷' },
-  { code: 'de', name: 'Deutsch', flag: '🇩🇪' },
-  { code: 'it', name: 'Italiano', flag: '🇮🇹' },
-  { code: 'pt', name: 'Português', flag: '🇵🇹' },
-  { code: 'zh', name: '中文', flag: '🇨🇳' },
-  { code: 'ja', name: '日本語', flag: '🇯🇵' },
-  { code: 'ko', name: '한국어', flag: '🇰🇷' },
-  { code: 'ar', name: 'العربية', flag: '🇸🇦' },
-  { code: 'ru', name: 'Русский', flag: '🇷🇺' },
-  { code: 'nl', name: 'Nederlands', flag: '🇳🇱' },
-  { code: 'pl', name: 'Polski', flag: '🇵🇱' },
-  { code: 'tr', name: 'Türkçe', flag: '🇹🇷' },
-  { code: 'vi', name: 'Tiếng Việt', flag: '🇻🇳' },
-  { code: 'th', name: 'ไทย', flag: '🇹🇭' },
-  { code: 'id', name: 'Indonesia', flag: '🇮🇩' },
-  { code: 'ms', name: 'Melayu', flag: '🇲🇾' },
+  { code: 'ar', name: 'Arabic', flag: '🇸🇦' },
+  { code: 'bg', name: 'Bulgarian', flag: '🇧🇬' },
+  { code: 'zh', name: 'Chinese', flag: '🇨🇳' },
+  { code: 'hr', name: 'Croatian', flag: '🇭🇷' },
+  { code: 'cs', name: 'Czech', flag: '🇨🇿' },
+  { code: 'da', name: 'Danish', flag: '🇩🇰' },
+  { code: 'nl', name: 'Dutch', flag: '🇳🇱' },
   { code: 'fil', name: 'Filipino', flag: '🇵🇭' },
-  { code: 'hi', name: 'हिन्दी', flag: '🇮🇳' },
-  { code: 'bn', name: 'বাংলা', flag: '🇧🇩' },
-  { code: 'ta', name: 'தமிழ்', flag: '🇮🇳' },
-  { code: 'uk', name: 'Українська', flag: '🇺🇦' },
-  { code: 'cs', name: 'Čeština', flag: '🇨🇿' },
-  { code: 'sk', name: 'Slovenčina', flag: '🇸🇰' },
-  { code: 'hu', name: 'Magyar', flag: '🇭🇺' },
-  { code: 'ro', name: 'Română', flag: '🇷🇴' },
-  { code: 'bg', name: 'Български', flag: '🇧🇬' },
-  { code: 'hr', name: 'Hrvatski', flag: '🇭🇷' },
-  { code: 'sv', name: 'Svenska', flag: '🇸🇪' },
-  { code: 'da', name: 'Dansk', flag: '🇩🇰' },
-  { code: 'no', name: 'Norsk', flag: '🇳🇴' },
-  { code: 'fi', name: 'Suomi', flag: '🇫🇮' }
+  { code: 'fi', name: 'Finnish', flag: '🇫🇮' },
+  { code: 'fr', name: 'French', flag: '🇫🇷' },
+  { code: 'de', name: 'German', flag: '🇩🇪' },
+  { code: 'el', name: 'Greek', flag: '🇬🇷' },
+  { code: 'hi', name: 'Hindi', flag: '🇮🇳' },
+  { code: 'hu', name: 'Hungarian', flag: '🇭🇺' },
+  { code: 'id', name: 'Indonesian', flag: '🇮🇩' },
+  { code: 'it', name: 'Italian', flag: '🇮🇹' },
+  { code: 'ja', name: 'Japanese', flag: '🇯🇵' },
+  { code: 'ko', name: 'Korean', flag: '🇰🇷' },
+  { code: 'ms', name: 'Malay', flag: '🇲🇾' },
+  { code: 'no', name: 'Norwegian', flag: '🇳🇴' },
+  { code: 'pl', name: 'Polish', flag: '🇵🇱' },
+  { code: 'pt', name: 'Portuguese', flag: '🇵🇹' },
+  { code: 'pt-BR', name: 'Portuguese (Brazil)', flag: '🇧🇷' },
+  { code: 'ro', name: 'Romanian', flag: '🇷🇴' },
+  { code: 'ru', name: 'Russian', flag: '🇷🇺' },
+  { code: 'sk', name: 'Slovak', flag: '🇸🇰' },
+  { code: 'es', name: 'Spanish', flag: '🇪🇸' },
+  { code: 'sv', name: 'Swedish', flag: '🇸🇪' },
+  { code: 'ta', name: 'Tamil', flag: '🇮🇳' },
+  { code: 'tr', name: 'Turkish', flag: '🇹🇷' },
+  { code: 'uk', name: 'Ukrainian', flag: '🇺🇦' },
+  { code: 'vi', name: 'Vietnamese', flag: '🇻🇳' }
 ];
 
 interface WidgetOptions {
@@ -420,12 +420,14 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       width: 34px; height: 34px; border-radius: 50%; border: none;
       background: linear-gradient(135deg, var(--c), var(--cd));
       cursor: pointer; display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
     }
     .widget-concierge .send-btn svg { width: 14px; height: 14px; fill: #fff; }
     .widget-concierge .btn-mic {
       width: 34px; height: 34px; border-radius: 50%; border: none;
       background: transparent; cursor: pointer;
       display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
     }
     .widget-concierge .btn-mic svg { width: 18px; height: 18px; fill: #999; }
 
@@ -592,11 +594,15 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       addMessage(text, true);
       chatInput.value = '';
       chips.style.display = 'none';
-      setTyping(true);
-      setTimeout(() => {
+
+      // If no active conversation, start voice session
+      if (!conversation) {
+        setTyping(true);
+        await startVoice();
         setTyping(false);
-        addMessage("Thank you for your message! I'd be happy to help.", false);
-      }, 1500);
+      }
+      // Note: ElevenLabs is voice-based - user's typed message is displayed
+      // but the conversation continues via voice
     }
 
     async function startVoice() {
@@ -911,7 +917,6 @@ export async function widgetRenderHandler(req: Request, res: Response): Promise<
   res.setHeader('X-Frame-Options', 'ALLOWALL');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'public, max-age=300');
-  // CSP: Allow ElevenLabs client library which uses eval
-  res.setHeader('Content-Security-Policy', "default-src 'self' https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://*.elevenlabs.io; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://*.elevenlabs.io wss://*.elevenlabs.io; media-src 'self' blob:; img-src 'self' data: https:");
+  // No CSP - this is our own iframe, let ElevenLabs work freely
   res.send(html);
 }
