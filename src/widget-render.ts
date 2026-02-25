@@ -945,6 +945,5 @@ export async function widgetRenderHandler(req: Request, res: Response): Promise<
   res.setHeader('X-Frame-Options', 'ALLOWALL');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'public, max-age=300');
-  res.setHeader('Content-Security-Policy', "connect-src 'self' https://api.elevenlabs.io wss://livekit.rtc.elevenlabs.io https://livekit.rtc.elevenlabs.io;");
   res.send(html);
 }
