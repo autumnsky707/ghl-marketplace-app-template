@@ -911,5 +911,7 @@ export async function widgetRenderHandler(req: Request, res: Response): Promise<
   res.setHeader('X-Frame-Options', 'ALLOWALL');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'public, max-age=300');
+  // CSP: Allow ElevenLabs client library which uses eval
+  res.setHeader('Content-Security-Policy', "default-src 'self' https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://*.elevenlabs.io; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://*.elevenlabs.io wss://*.elevenlabs.io; media-src 'self' blob:; img-src 'self' data: https:");
   res.send(html);
 }
