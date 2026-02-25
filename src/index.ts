@@ -30,6 +30,14 @@ app.use(cors({
 app.use(json({ type: "application/json" }));
 app.use(express.static(path));
 
+// Serve ElevenLabs worklet files with correct headers (must be before other routes)
+app.use('/elevenlabs', express.static(__dirname + '/public/elevenlabs', {
+  setHeaders: (res) => {
+    res.setHeader('Content-Type', 'application/javascript');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+}));
+
 const ghl = new GHL();
 const port = process.env.PORT;
 

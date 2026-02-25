@@ -341,6 +341,282 @@
       text-align: center;
       padding: 16px;
     }
+
+    /* ========== PAYMENT SETTINGS COLLAPSIBLE ========== */
+    .payment-settings-section {
+      margin-top: 12px;
+      border: 1px solid #e5e5e5;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .payment-settings-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: #f8f9fa;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.15s ease;
+    }
+
+    .payment-settings-header:hover {
+      background: #f0f1f2;
+    }
+
+    .payment-settings-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .payment-settings-badge {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-weight: 500;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+
+    .payment-settings-badge.inherited {
+      background: #e8f4ff;
+      color: #0066cc;
+    }
+
+    .payment-settings-badge.override {
+      background: #fff3e6;
+      color: #cc6600;
+    }
+
+    .payment-settings-badge.no-rules {
+      background: #f5f5f5;
+      color: #888;
+    }
+
+    .payment-settings-arrow {
+      font-size: 10px;
+      color: #888;
+      transition: transform 0.2s ease;
+    }
+
+    .payment-settings-section.expanded .payment-settings-arrow {
+      transform: rotate(180deg);
+    }
+
+    .payment-settings-content {
+      display: none;
+      padding: 14px;
+      border-top: 1px solid #e5e5e5;
+      background: #fff;
+    }
+
+    .payment-settings-section.expanded .payment-settings-content {
+      display: block;
+    }
+
+    .global-rule-status {
+      font-size: 13px;
+      color: #666;
+      padding: 10px 12px;
+      background: #f8f9fa;
+      border-radius: 4px;
+      margin-bottom: 14px;
+      border-left: 3px solid #ddd;
+    }
+
+    .global-rule-status.active {
+      border-left-color: #28a745;
+      background: #f0fdf4;
+    }
+
+    .global-rule-status.inactive {
+      border-left-color: #888;
+    }
+
+    .override-toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 0;
+      border-bottom: 1px solid #eee;
+    }
+
+    .override-toggle-label {
+      font-size: 13px;
+      font-weight: 500;
+      color: #333;
+    }
+
+    .toggle-switch-sm {
+      position: relative;
+      width: 40px;
+      height: 22px;
+      flex-shrink: 0;
+    }
+
+    .toggle-switch-sm input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .toggle-slider-sm {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: #ccc;
+      border-radius: 22px;
+      transition: 0.2s;
+    }
+
+    .toggle-slider-sm:before {
+      position: absolute;
+      content: "";
+      height: 16px;
+      width: 16px;
+      left: 3px;
+      bottom: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: 0.2s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+    }
+
+    .toggle-switch-sm input:checked + .toggle-slider-sm {
+      background: #111;
+    }
+
+    .toggle-switch-sm input:checked + .toggle-slider-sm:before {
+      transform: translateX(18px);
+    }
+
+    .override-settings {
+      display: none;
+      padding-top: 14px;
+    }
+
+    .override-settings.active {
+      display: block;
+    }
+
+    .override-setting-row {
+      margin-bottom: 14px;
+    }
+
+    .override-setting-row:last-child {
+      margin-bottom: 0;
+    }
+
+    .override-setting-label {
+      font-size: 12px;
+      font-weight: 500;
+      color: #555;
+      margin-bottom: 6px;
+      display: block;
+    }
+
+    .radio-group-sm {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .radio-option-sm {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+
+    .radio-option-sm input[type="radio"] {
+      width: 14px;
+      height: 14px;
+      margin: 0;
+      cursor: pointer;
+    }
+
+    .radio-option-sm span {
+      font-size: 13px;
+      color: #444;
+    }
+
+    .input-sm {
+      padding: 8px 10px;
+      font-size: 13px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      width: 100px;
+    }
+
+    .input-sm:focus {
+      outline: none;
+      border-color: #111;
+    }
+
+    .dollar-wrapper {
+      position: relative;
+      display: inline-block;
+    }
+
+    .dollar-wrapper::before {
+      content: "$";
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #666;
+      font-size: 13px;
+    }
+
+    .dollar-wrapper .input-sm {
+      padding-left: 22px;
+    }
+
+    .percent-wrapper {
+      position: relative;
+      display: inline-block;
+    }
+
+    .percent-wrapper::after {
+      content: "%";
+      position: absolute;
+      right: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #666;
+      font-size: 13px;
+    }
+
+    .percent-wrapper .input-sm {
+      padding-right: 26px;
+    }
+
+    .select-sm {
+      padding: 8px 32px 8px 10px;
+      font-size: 13px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'%3E%3Cpath fill='%23666' d='M6 8L1 3h10z'/%3E%3C/svg%3E") no-repeat right 10px center;
+      appearance: none;
+      -webkit-appearance: none;
+      cursor: pointer;
+      width: 100%;
+    }
+
+    .select-sm:focus {
+      outline: none;
+      border-color: #111;
+    }
   </style>
 </head>
 <body>
@@ -436,6 +712,193 @@
     let locationId = null;
     let availableServices = [];
 
+    // ══════════════════════════════════════════════════════
+    // DEPOSIT SETTINGS STATE
+    // ══════════════════════════════════════════════════════
+
+    // Global deposit settings (loaded from Supabase)
+    let globalDepositSettings = {
+      requireDeposits: false,
+      applyTo: 'both',
+      autoThresholdEnabled: false,
+      autoThresholdAmount: 100,
+      defaultType: 'fixed',
+      defaultAmountFixed: 50,
+      defaultAmountPercent: 25,
+      notPaidAction: 'hold_24h'
+    };
+
+    // Per-package deposit overrides (keyed by package ID)
+    let packageDepositOverrides = {};
+
+    // Load global deposit settings from Supabase
+    async function loadGlobalDepositSettings() {
+      if (!locationId) return;
+
+      try {
+        const response = await fetch(`${API_BASE}/api/deposit-settings?locationId=${locationId}`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.settings) {
+            globalDepositSettings = { ...globalDepositSettings, ...data.settings };
+            console.log('[Deposits] Global settings loaded:', globalDepositSettings);
+          }
+        }
+      } catch (error) {
+        console.error('[Deposits] Error loading global settings:', error);
+      }
+    }
+
+    // Load per-package deposit overrides from Supabase
+    async function loadPackageDepositOverrides() {
+      if (!locationId) return;
+
+      try {
+        const response = await fetch(`${API_BASE}/api/deposit-overrides?locationId=${locationId}`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.overrides) {
+            // Convert array to object keyed by package_id
+            packageDepositOverrides = {};
+            data.overrides.forEach(override => {
+              packageDepositOverrides[override.package_id] = override;
+            });
+            console.log('[Deposits] Package overrides loaded:', packageDepositOverrides);
+          }
+        }
+      } catch (error) {
+        console.error('[Deposits] Error loading package overrides:', error);
+      }
+    }
+
+    // Save a single package's deposit override to Supabase
+    async function savePackageDepositOverride(packageId, overrideData) {
+      if (!locationId) return;
+
+      try {
+        const response = await fetch(`${API_BASE}/api/deposit-overrides`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            locationId: locationId,
+            packageId: packageId,
+            override: overrideData
+          })
+        });
+
+        if (response.ok) {
+          console.log('[Deposits] Override saved for package:', packageId);
+        } else {
+          console.error('[Deposits] Failed to save override:', response.statusText);
+        }
+      } catch (error) {
+        console.error('[Deposits] Error saving override:', error);
+      }
+    }
+
+    // Get global rule status message for a specific package
+    function getGlobalRuleStatusForPackage(pkg) {
+      // If global deposits are not required, no rules apply
+      if (!globalDepositSettings.requireDeposits) {
+        return {
+          applies: false,
+          message: 'No global deposit rules configured'
+        };
+      }
+
+      // Check if global rules apply to packages
+      const appliesToPackages = globalDepositSettings.applyTo === 'packages' || globalDepositSettings.applyTo === 'both';
+      if (!appliesToPackages) {
+        return {
+          applies: false,
+          message: 'Global rules set to services only (not packages)'
+        };
+      }
+
+      // Check auto-threshold
+      if (globalDepositSettings.autoThresholdEnabled) {
+        const price = parseFloat(pkg.price) || 0;
+        if (price >= globalDepositSettings.autoThresholdAmount) {
+          const depositAmount = globalDepositSettings.defaultType === 'fixed'
+            ? `$${globalDepositSettings.defaultAmountFixed}`
+            : `${globalDepositSettings.defaultAmountPercent}%`;
+          return {
+            applies: true,
+            message: `Deposit required (global rule: packages above $${globalDepositSettings.autoThresholdAmount}) — ${depositAmount} deposit`
+          };
+        } else {
+          return {
+            applies: false,
+            message: `No deposit required (price $${price.toFixed(2)} is below $${globalDepositSettings.autoThresholdAmount} threshold)`
+          };
+        }
+      }
+
+      // Global deposits required for all packages
+      const depositAmount = globalDepositSettings.defaultType === 'fixed'
+        ? `$${globalDepositSettings.defaultAmountFixed}`
+        : `${globalDepositSettings.defaultAmountPercent}%`;
+      return {
+        applies: true,
+        message: `Deposit required (global rule: all packages) — ${depositAmount} deposit`
+      };
+    }
+
+    // Toggle payment settings collapsible
+    function togglePaymentSettings(packageId) {
+      const section = document.getElementById(`payment-section-${packageId}`);
+      if (section) {
+        section.classList.toggle('expanded');
+      }
+    }
+
+    // Toggle override on/off
+    function toggleOverride(packageId, enabled) {
+      const settingsDiv = document.getElementById(`override-settings-${packageId}`);
+      const badge = document.querySelector(`#payment-section-${packageId} .payment-settings-badge`);
+
+      if (enabled) {
+        settingsDiv.classList.add('active');
+        badge.className = 'payment-settings-badge override';
+        badge.textContent = 'Custom Override';
+      } else {
+        settingsDiv.classList.remove('active');
+        // Revert badge based on global rules
+        const pkg = packagesData.find(p => p.id === packageId);
+        const globalStatus = getGlobalRuleStatusForPackage(pkg);
+        badge.className = `payment-settings-badge ${globalStatus.applies ? 'inherited' : 'no-rules'}`;
+        badge.textContent = globalStatus.applies ? 'Global Rules' : 'No Rules';
+      }
+
+      // Save override state
+      updatePackageOverride(packageId);
+    }
+
+    // Update and save package deposit override
+    function updatePackageOverride(packageId) {
+      const overrideEnabled = document.getElementById(`override-toggle-${packageId}`)?.checked || false;
+      const requireDeposit = document.getElementById(`require-deposit-${packageId}`)?.checked || false;
+      const depositType = document.querySelector(`input[name="deposit-type-${packageId}"]:checked`)?.value || 'fixed';
+      const depositAmountFixed = parseFloat(document.getElementById(`fixed-input-${packageId}`)?.value) || 50;
+      const depositAmountPercent = parseFloat(document.getElementById(`percent-input-${packageId}`)?.value) || 25;
+      const notPaidAction = document.getElementById(`not-paid-action-${packageId}`)?.value || 'hold_24h';
+
+      const overrideData = {
+        override_enabled: overrideEnabled,
+        require_deposit: requireDeposit,
+        deposit_type: depositType,
+        deposit_amount_fixed: depositAmountFixed,
+        deposit_amount_percent: depositAmountPercent,
+        not_paid_action: notPaidAction
+      };
+
+      // Update local state
+      packageDepositOverrides[packageId] = overrideData;
+
+      // Save to Supabase
+      savePackageDepositOverride(packageId, overrideData);
+    }
+
     /**
      * Authentication Flow:
      * 1. If ssoKey present (GHL iframe) → verify via API → get locationId
@@ -527,8 +990,12 @@
       `;
     }
 
-    function initializePage() {
+    async function initializePage() {
       // Page is authenticated, load data
+      // Load deposit settings first so they're available when packages render
+      await loadGlobalDepositSettings();
+      await loadPackageDepositOverrides();
+
       loadServices();
       loadPackages();
       loadStaff();
@@ -704,25 +1171,134 @@
         return;
       }
 
-      container.innerHTML = packages.map(pkg => `
-        <div class="package-item" id="pkg-${pkg.id}">
-          <div class="package-info">
-            <h3>${pkg.package_name}</h3>
-            <div class="services" style="font-size: 13px; color: #333; margin: 4px 0;">
-              <strong>Booking Order:</strong> ${pkg.services.map((s, i) => `<span style="background:#f0f0f0;padding:2px 6px;border-radius:3px;margin:2px;display:inline-block;">${i + 1}. ${s}</span>`).join(' → ')}
+      container.innerHTML = packages.map(pkg => {
+        // Get override data for this package (if any)
+        const override = packageDepositOverrides[pkg.id] || {};
+        const hasOverride = override.override_enabled || false;
+
+        // Determine global rule status for this package
+        const globalStatus = getGlobalRuleStatusForPackage(pkg);
+
+        return `
+        <div class="package-item" id="pkg-${pkg.id}" style="flex-direction: column; align-items: stretch;">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+            <div class="package-info">
+              <h3>${pkg.package_name}</h3>
+              <div class="services" style="font-size: 13px; color: #333; margin: 4px 0;">
+                <strong>Booking Order:</strong> ${pkg.services.map((s, i) => `<span style="background:#f0f0f0;padding:2px 6px;border-radius:3px;margin:2px;display:inline-block;">${i + 1}. ${s}</span>`).join(' → ')}
+              </div>
+              <div class="meta">
+                ${pkg.total_duration_minutes ? pkg.total_duration_minutes + ' min' : ''}
+                ${pkg.price ? ' · $' + parseFloat(pkg.price).toFixed(2) : ''}
+                ${pkg.description ? ' · ' + pkg.description : ''}
+              </div>
             </div>
-            <div class="meta">
-              ${pkg.total_duration_minutes ? pkg.total_duration_minutes + ' min' : ''}
-              ${pkg.price ? ' · $' + parseFloat(pkg.price).toFixed(2) : ''}
-              ${pkg.description ? ' · ' + pkg.description : ''}
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <button class="btn btn-secondary btn-sm" onclick="openEditModal('${pkg.id}')">Edit</button>
+              <button class="btn btn-danger btn-sm" onclick="deletePackage('${pkg.id}')">Delete</button>
             </div>
           </div>
-          <div style="display: flex; gap: 8px; align-items: center;">
-            <button class="btn btn-secondary btn-sm" onclick="openEditModal('${pkg.id}')">Edit</button>
-            <button class="btn btn-danger btn-sm" onclick="deletePackage('${pkg.id}')">Delete</button>
+
+          <!-- Payment Settings Collapsible -->
+          <div class="payment-settings-section" id="payment-section-${pkg.id}">
+            <div class="payment-settings-header" onclick="togglePaymentSettings('${pkg.id}')">
+              <span class="payment-settings-title">
+                Payment Settings
+                <span class="payment-settings-badge ${hasOverride ? 'override' : (globalStatus.applies ? 'inherited' : 'no-rules')}">
+                  ${hasOverride ? 'Custom Override' : (globalStatus.applies ? 'Global Rules' : 'No Rules')}
+                </span>
+              </span>
+              <span class="payment-settings-arrow">▼</span>
+            </div>
+            <div class="payment-settings-content">
+              <!-- Global Rule Status -->
+              <div class="global-rule-status ${globalStatus.applies ? 'active' : 'inactive'}">
+                ${globalStatus.message}
+              </div>
+
+              <!-- Override Toggle -->
+              <div class="override-toggle-row">
+                <span class="override-toggle-label">Override Global Settings</span>
+                <label class="toggle-switch-sm">
+                  <input type="checkbox" id="override-toggle-${pkg.id}" ${hasOverride ? 'checked' : ''} onchange="toggleOverride('${pkg.id}', this.checked)">
+                  <span class="toggle-slider-sm"></span>
+                </label>
+              </div>
+
+              <!-- Override Settings (shown when override is ON) -->
+              <div class="override-settings ${hasOverride ? 'active' : ''}" id="override-settings-${pkg.id}">
+
+                <!-- Require Deposit Toggle -->
+                <div class="override-setting-row">
+                  <div class="override-toggle-row" style="padding: 0; border: none;">
+                    <span class="override-toggle-label">Require Deposit</span>
+                    <label class="toggle-switch-sm">
+                      <input type="checkbox" id="require-deposit-${pkg.id}" ${override.require_deposit ? 'checked' : ''} onchange="updatePackageOverride('${pkg.id}')">
+                      <span class="toggle-slider-sm"></span>
+                    </label>
+                  </div>
+                </div>
+
+                <!-- Deposit Type -->
+                <div class="override-setting-row">
+                  <label class="override-setting-label">Deposit Type</label>
+                  <div class="radio-group-sm">
+                    <label class="radio-option-sm">
+                      <input type="radio" name="deposit-type-${pkg.id}" value="fixed" ${(!override.deposit_type || override.deposit_type === 'fixed') ? 'checked' : ''} onchange="updatePackageOverride('${pkg.id}')">
+                      <span>Fixed Amount</span>
+                    </label>
+                    <label class="radio-option-sm">
+                      <input type="radio" name="deposit-type-${pkg.id}" value="percentage" ${override.deposit_type === 'percentage' ? 'checked' : ''} onchange="updatePackageOverride('${pkg.id}')">
+                      <span>Percentage of Price</span>
+                    </label>
+                  </div>
+                </div>
+
+                <!-- Deposit Amount -->
+                <div class="override-setting-row">
+                  <label class="override-setting-label">Deposit Amount</label>
+                  <div id="amount-wrapper-${pkg.id}">
+                    <div class="dollar-wrapper" id="fixed-amount-${pkg.id}" style="${override.deposit_type === 'percentage' ? 'display:none;' : ''}">
+                      <input type="number" class="input-sm" id="fixed-input-${pkg.id}" value="${override.deposit_amount_fixed || 50}" min="0" step="1" onchange="updatePackageOverride('${pkg.id}')">
+                    </div>
+                    <div class="percent-wrapper" id="percent-amount-${pkg.id}" style="${override.deposit_type === 'percentage' ? '' : 'display:none;'}">
+                      <input type="number" class="input-sm" id="percent-input-${pkg.id}" value="${override.deposit_amount_percent || 25}" min="0" max="100" step="1" onchange="updatePackageOverride('${pkg.id}')">
+                    </div>
+                  </div>
+                </div>
+
+                <!-- If Deposit Not Paid -->
+                <div class="override-setting-row">
+                  <label class="override-setting-label">If deposit is not paid</label>
+                  <select class="select-sm" id="not-paid-action-${pkg.id}" onchange="updatePackageOverride('${pkg.id}')">
+                    <option value="hold_24h" ${(!override.not_paid_action || override.not_paid_action === 'hold_24h') ? 'selected' : ''}>Hold booking for 24 hours then auto-cancel</option>
+                    <option value="keep_unpaid" ${override.not_paid_action === 'keep_unpaid' ? 'selected' : ''}>Keep booking but mark as unpaid</option>
+                    <option value="dont_confirm" ${override.not_paid_action === 'dont_confirm' ? 'selected' : ''}>Don't confirm booking until deposit is paid</option>
+                  </select>
+                </div>
+
+              </div>
+            </div>
           </div>
         </div>
-      `).join('');
+      `}).join('');
+
+      // Attach deposit type change handlers to toggle amount input visibility
+      packages.forEach(pkg => {
+        document.querySelectorAll(`input[name="deposit-type-${pkg.id}"]`).forEach(radio => {
+          radio.addEventListener('change', (e) => {
+            const fixedWrapper = document.getElementById(`fixed-amount-${pkg.id}`);
+            const percentWrapper = document.getElementById(`percent-amount-${pkg.id}`);
+            if (e.target.value === 'fixed') {
+              fixedWrapper.style.display = '';
+              percentWrapper.style.display = 'none';
+            } else {
+              fixedWrapper.style.display = 'none';
+              percentWrapper.style.display = '';
+            }
+          });
+        });
+      });
     }
 
     // Edit modal state

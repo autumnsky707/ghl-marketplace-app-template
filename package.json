@@ -4,7 +4,9 @@
   "description": "A boilerplate for creating GHL marketplace apps",
   "main": "src/index.ts",
   "scripts": {
-    "build": "npx tsc && npm run build-ui && mkdir -p ./dist/ui/dist && cp -r ./src/ui/dist ./dist/ui && cp ./src/*.html ./dist/ 2>/dev/null || true",
+    "copy-worklets": "mkdir -p src/public/elevenlabs && cp node_modules/@elevenlabs/client/worklets/*.js src/public/elevenlabs/ 2>/dev/null || true",
+    "postinstall": "npm run copy-worklets",
+    "build": "npx tsc && npm run build-ui && mkdir -p ./dist/ui/dist && cp -r ./src/ui/dist ./dist/ui && cp ./src/*.html ./dist/ 2>/dev/null || true && mkdir -p ./dist/public/elevenlabs && cp -r ./src/public/elevenlabs ./dist/public/ 2>/dev/null || true",
     "build-ui": "cd src/ui && npm i && npm run build && cd ../../",
     "start": "node dist/index.js",
     "dev": "npm run build-ui && ts-node-dev src/index.ts"
@@ -24,6 +26,7 @@
   },
   "homepage": "https://github.com/GoHighLevel/ghl-marketplace-app-template#readme",
   "dependencies": {
+    "@elevenlabs/client": "^0.15.0",
     "@supabase/supabase-js": "^2.93.2",
     "@types/cors": "^2.8.19",
     "axios": "^1.5.1",

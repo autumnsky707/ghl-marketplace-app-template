@@ -417,14 +417,16 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       padding: 9px 16px; font-size: 12px; outline: none;
     }
     .widget-concierge .send-btn {
-      width: 34px; height: 34px; border-radius: 50%; border: none;
+      width: 34px; height: 34px; min-width: 34px; min-height: 34px;
+      border-radius: 50%; border: none;
       background: linear-gradient(135deg, var(--c), var(--cd));
       cursor: pointer; display: flex; align-items: center; justify-content: center;
       flex-shrink: 0;
     }
     .widget-concierge .send-btn svg { width: 14px; height: 14px; fill: #fff; }
     .widget-concierge .btn-mic {
-      width: 34px; height: 34px; border-radius: 50%; border: none;
+      width: 34px; height: 34px; min-width: 34px; min-height: 34px;
+      border-radius: 50%; border: none;
       background: transparent; cursor: pointer;
       display: flex; align-items: center; justify-content: center;
       flex-shrink: 0;
@@ -559,7 +561,8 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
 
     const AGENT_ID = '${elevenLabsId}';
     const GREETING = ${JSON.stringify(greeting)};
-    let conversation = null;
+    let conversation = null;  // Voice session
+    let chatSession = null;   // Text-only chat session (separate from voice)
     let currentLang = 'en';
 
     const widget = document.getElementById('widget');
@@ -594,15 +597,36 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       addMessage(text, true);
       chatInput.value = '';
       chips.style.display = 'none';
+      setTyping(true);
 
-      // If no active conversation, start voice session
-      if (!conversation) {
-        setTyping(true);
-        await startVoice();
-        setTyping(false);
+      // Use text-only chat session (separate from voice)
+      if (!chatSession) {
+        try {
+          chatSession = await Conversation.startSession({
+            agentId: AGENT_ID,
+            overrides: {
+              conversation: { textOnly: true },
+              agent: { firstMessage: GREETING, language: currentLang }
+            },
+            onMessage: (m) => {
+              if (m.source === 'ai') {
+                setTyping(false);
+                addMessage(m.message, false);
+              }
+            },
+            onError: () => setTyping(false),
+            onDisconnect: () => { chatSession = null; }
+          });
+        } catch (e) {
+          console.error('Chat session error:', e);
+          setTyping(false);
+          return;
+        }
       }
-      // Note: ElevenLabs is voice-based - user's typed message is displayed
-      // but the conversation continues via voice
+      // Send the text message
+      if (chatSession && chatSession.sendUserMessage) {
+        chatSession.sendUserMessage(text);
+      }
     }
 
     async function startVoice() {
@@ -616,6 +640,10 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       try {
         conversation = await Conversation.startSession({
           agentId: AGENT_ID,
+          workletPaths: {
+            'rawAudioProcessor': 'https://booknexaai-oauth.onrender.com/elevenlabs/rawAudioProcessor.js',
+            'audioConcatProcessor': 'https://booknexaai-oauth.onrender.com/elevenlabs/audioConcatProcessor.js',
+          },
           overrides: { agent: { firstMessage: GREETING, language: currentLang } },
           onConnect: () => {
             widget.classList.add('speaking');
@@ -764,6 +792,10 @@ function generateBannerWidget({ t, agentName, elevenLabsId, greeting, langListHT
       try {
         conversation = await Conversation.startSession({
           agentId: AGENT_ID,
+          workletPaths: {
+            'rawAudioProcessor': 'https://booknexaai-oauth.onrender.com/elevenlabs/rawAudioProcessor.js',
+            'audioConcatProcessor': 'https://booknexaai-oauth.onrender.com/elevenlabs/audioConcatProcessor.js',
+          },
           overrides: { agent: { firstMessage: GREETING } },
           onConnect: () => {
             widget.classList.add('speaking');
@@ -886,6 +918,10 @@ function generateClassicWidget({ t, agentName, elevenLabsId, greeting, langListH
       try {
         conversation = await Conversation.startSession({
           agentId: AGENT_ID,
+          workletPaths: {
+            'rawAudioProcessor': 'https://booknexaai-oauth.onrender.com/elevenlabs/rawAudioProcessor.js',
+            'audioConcatProcessor': 'https://booknexaai-oauth.onrender.com/elevenlabs/audioConcatProcessor.js',
+          },
           overrides: { agent: { firstMessage: GREETING } },
           onConnect: () => widget.classList.add('speaking'),
           onDisconnect: () => { widget.classList.remove('speaking'); conversation = null; }
@@ -914,9 +950,10 @@ export async function widgetRenderHandler(req: Request, res: Response): Promise<
   });
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Permissions-Policy', 'microphone=(*), autoplay=(*)');
   res.setHeader('X-Frame-Options', 'ALLOWALL');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'public, max-age=300');
-  // No CSP - this is our own iframe, let ElevenLabs work freely
+  // No CSP header - allows ElevenLabs worklets and audio to work freely
   res.send(html);
 }
