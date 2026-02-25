@@ -557,7 +557,7 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
   </div>
 
   <script type="module">
-    import { Conversation } from 'https://cdn.jsdelivr.net/npm/@elevenlabs/client@0.15.0/+esm';
+    import { Conversation } from 'https://cdn.jsdelivr.net/npm/@elevenlabs/client@0.14.0/+esm';
 
     const AGENT_ID = '${elevenLabsId}';
     const GREETING = ${JSON.stringify(greeting)};
@@ -640,12 +640,14 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       try {
         conversation = await Conversation.startSession({
           agentId: AGENT_ID,
-          connectionType: 'websocket',
-          workletPaths: {
-            'rawAudioProcessor': '/elevenlabs/rawAudioProcessor.js',
-            'audioConcatProcessor': '/elevenlabs/audioConcatProcessor.js',
+          overrides: {
+            agent: { firstMessage: GREETING, language: currentLang }
           },
-          overrides: { dynamicVariables: { locationId: new URLSearchParams(window.location.search).get('locationId') || '' }, agent: { firstMessage: GREETING, language: currentLang } },
+          dynamicVariables: {
+            locationId: new URLSearchParams(window.location.search).get('locationId') || '',
+            conversation_mode: 'voice_call',
+            language: currentLang
+          },
           onConnect: () => {
             widget.classList.add('speaking');
             window.parent.postMessage({ type: 'bnx-speaking', speaking: true }, '*');
@@ -775,7 +777,7 @@ function generateBannerWidget({ t, agentName, elevenLabsId, greeting, langListHT
     </div>
   </div>
   <script type="module">
-    import { Conversation } from 'https://cdn.jsdelivr.net/npm/@elevenlabs/client@0.15.0/+esm';
+    import { Conversation } from 'https://cdn.jsdelivr.net/npm/@elevenlabs/client@0.14.0/+esm';
     const AGENT_ID = '${elevenLabsId}';
     const GREETING = ${JSON.stringify(greeting)};
     let conversation = null;
@@ -793,12 +795,13 @@ function generateBannerWidget({ t, agentName, elevenLabsId, greeting, langListHT
       try {
         conversation = await Conversation.startSession({
           agentId: AGENT_ID,
-          connectionType: 'websocket',
-          workletPaths: {
-            'rawAudioProcessor': '/elevenlabs/rawAudioProcessor.js',
-            'audioConcatProcessor': '/elevenlabs/audioConcatProcessor.js',
+          overrides: {
+            agent: { firstMessage: GREETING }
           },
-          overrides: { dynamicVariables: { locationId: new URLSearchParams(window.location.search).get('locationId') || '' }, agent: { firstMessage: GREETING } },
+          dynamicVariables: {
+            locationId: new URLSearchParams(window.location.search).get('locationId') || '',
+            conversation_mode: 'voice_call'
+          },
           onConnect: () => {
             widget.classList.add('speaking');
             callBtn.querySelector('span').textContent = 'End Call';
@@ -903,7 +906,7 @@ function generateClassicWidget({ t, agentName, elevenLabsId, greeting, langListH
     </div>
   </div>
   <script type="module">
-    import { Conversation } from 'https://cdn.jsdelivr.net/npm/@elevenlabs/client@0.15.0/+esm';
+    import { Conversation } from 'https://cdn.jsdelivr.net/npm/@elevenlabs/client@0.14.0/+esm';
     const AGENT_ID = '${elevenLabsId}';
     const GREETING = ${JSON.stringify(greeting)};
     let conversation = null;
@@ -920,12 +923,13 @@ function generateClassicWidget({ t, agentName, elevenLabsId, greeting, langListH
       try {
         conversation = await Conversation.startSession({
           agentId: AGENT_ID,
-          connectionType: 'websocket',
-          workletPaths: {
-            'rawAudioProcessor': '/elevenlabs/rawAudioProcessor.js',
-            'audioConcatProcessor': '/elevenlabs/audioConcatProcessor.js',
+          overrides: {
+            agent: { firstMessage: GREETING }
           },
-          overrides: { dynamicVariables: { locationId: new URLSearchParams(window.location.search).get('locationId') || '' }, agent: { firstMessage: GREETING } },
+          dynamicVariables: {
+            locationId: new URLSearchParams(window.location.search).get('locationId') || '',
+            conversation_mode: 'voice_call'
+          },
           onConnect: () => widget.classList.add('speaking'),
           onDisconnect: () => { widget.classList.remove('speaking'); conversation = null; }
         });
