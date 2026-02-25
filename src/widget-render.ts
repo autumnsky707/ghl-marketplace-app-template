@@ -640,7 +640,11 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       try {
         conversation = await Conversation.startSession({
           agentId: AGENT_ID,
-          connectionType: 'webrtc',
+          connectionType: 'websocket',
+          workletPaths: {
+            'rawAudioProcessor': '/elevenlabs/rawAudioProcessor.js',
+            'audioConcatProcessor': '/elevenlabs/audioConcatProcessor.js',
+          },
           overrides: { agent: { firstMessage: GREETING, language: currentLang } },
           onConnect: () => {
             widget.classList.add('speaking');
@@ -789,7 +793,11 @@ function generateBannerWidget({ t, agentName, elevenLabsId, greeting, langListHT
       try {
         conversation = await Conversation.startSession({
           agentId: AGENT_ID,
-          connectionType: 'webrtc',
+          connectionType: 'websocket',
+          workletPaths: {
+            'rawAudioProcessor': '/elevenlabs/rawAudioProcessor.js',
+            'audioConcatProcessor': '/elevenlabs/audioConcatProcessor.js',
+          },
           overrides: { agent: { firstMessage: GREETING } },
           onConnect: () => {
             widget.classList.add('speaking');
@@ -912,7 +920,11 @@ function generateClassicWidget({ t, agentName, elevenLabsId, greeting, langListH
       try {
         conversation = await Conversation.startSession({
           agentId: AGENT_ID,
-          connectionType: 'webrtc',
+          connectionType: 'websocket',
+          workletPaths: {
+            'rawAudioProcessor': '/elevenlabs/rawAudioProcessor.js',
+            'audioConcatProcessor': '/elevenlabs/audioConcatProcessor.js',
+          },
           overrides: { agent: { firstMessage: GREETING } },
           onConnect: () => widget.classList.add('speaking'),
           onDisconnect: () => { widget.classList.remove('speaking'); conversation = null; }
