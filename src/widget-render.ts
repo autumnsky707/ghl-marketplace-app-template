@@ -645,8 +645,7 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
             'rawAudioProcessor': '/elevenlabs/rawAudioProcessor.js',
             'audioConcatProcessor': '/elevenlabs/audioConcatProcessor.js',
           },
-          dynamicVariables: { locationId: new URLSearchParams(window.location.search).get('locationId') || '' },
-          overrides: { agent: { firstMessage: GREETING, language: currentLang } },
+          overrides: { dynamicVariables: { locationId: new URLSearchParams(window.location.search).get('locationId') || '' }, agent: { firstMessage: GREETING, language: currentLang } },
           onConnect: () => {
             widget.classList.add('speaking');
             window.parent.postMessage({ type: 'bnx-speaking', speaking: true }, '*');
@@ -799,8 +798,7 @@ function generateBannerWidget({ t, agentName, elevenLabsId, greeting, langListHT
             'rawAudioProcessor': '/elevenlabs/rawAudioProcessor.js',
             'audioConcatProcessor': '/elevenlabs/audioConcatProcessor.js',
           },
-          dynamicVariables: { locationId: new URLSearchParams(window.location.search).get('locationId') || '' },
-          overrides: { agent: { firstMessage: GREETING } },
+          overrides: { dynamicVariables: { locationId: new URLSearchParams(window.location.search).get('locationId') || '' }, agent: { firstMessage: GREETING } },
           onConnect: () => {
             widget.classList.add('speaking');
             callBtn.querySelector('span').textContent = 'End Call';
@@ -927,8 +925,7 @@ function generateClassicWidget({ t, agentName, elevenLabsId, greeting, langListH
             'rawAudioProcessor': '/elevenlabs/rawAudioProcessor.js',
             'audioConcatProcessor': '/elevenlabs/audioConcatProcessor.js',
           },
-          dynamicVariables: { locationId: new URLSearchParams(window.location.search).get('locationId') || '' },
-          overrides: { agent: { firstMessage: GREETING } },
+          overrides: { dynamicVariables: { locationId: new URLSearchParams(window.location.search).get('locationId') || '' }, agent: { firstMessage: GREETING } },
           onConnect: () => widget.classList.add('speaking'),
           onDisconnect: () => { widget.classList.remove('speaking'); conversation = null; }
         });
