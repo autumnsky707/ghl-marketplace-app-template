@@ -242,7 +242,14 @@ app.get("/reconnect", async (req: Request, res: Response) => {
 // Mount calendar API routes
 app.use("/api/calendar", calendarRoutes);
 
-// Widget embed system
+// Widget embed system - CORS headers for cross-origin embedding
+app.get("/widget/embed.js", (req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'application/javascript');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cache-Control', 'public, max-age=300'); // 5 min cache
+  res.sendFile(__dirname + "/public/widget/embed.js");
+});
+
 app.get("/widget/render", widgetRenderHandler);
 app.use("/widget", express.static(__dirname + "/public/widget"));
 
