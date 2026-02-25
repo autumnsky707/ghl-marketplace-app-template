@@ -557,7 +557,7 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
   </div>
 
   <script type="module">
-    import { Conversation } from 'https://cdn.jsdelivr.net/npm/@elevenlabs/client@0.14.0/+esm';
+    import { Conversation } from 'https://cdn.jsdelivr.net/npm/@elevenlabs/client@0.15.0/+esm';
 
     const AGENT_ID = '${elevenLabsId}';
     const GREETING = ${JSON.stringify(greeting)};
@@ -771,7 +771,7 @@ function generateBannerWidget({ t, agentName, elevenLabsId, greeting, langListHT
     </div>
   </div>
   <script type="module">
-    import { Conversation } from 'https://cdn.jsdelivr.net/npm/@elevenlabs/client@0.14.0/+esm';
+    import { Conversation } from 'https://cdn.jsdelivr.net/npm/@elevenlabs/client@0.15.0/+esm';
     const AGENT_ID = '${elevenLabsId}';
     const GREETING = ${JSON.stringify(greeting)};
     let conversation = null;
@@ -895,7 +895,7 @@ function generateClassicWidget({ t, agentName, elevenLabsId, greeting, langListH
     </div>
   </div>
   <script type="module">
-    import { Conversation } from 'https://cdn.jsdelivr.net/npm/@elevenlabs/client@0.14.0/+esm';
+    import { Conversation } from 'https://cdn.jsdelivr.net/npm/@elevenlabs/client@0.15.0/+esm';
     const AGENT_ID = '${elevenLabsId}';
     const GREETING = ${JSON.stringify(greeting)};
     let conversation = null;
