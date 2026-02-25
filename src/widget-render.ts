@@ -954,6 +954,7 @@ export async function widgetRenderHandler(req: Request, res: Response): Promise<
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('Permissions-Policy', 'microphone=(*), autoplay=(*)');
+  res.setHeader('Content-Security-Policy', "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; script-src * 'unsafe-inline' 'unsafe-eval'; worker-src * blob:; connect-src *; media-src * blob: data:; frame-ancestors *;");
   res.setHeader('X-Frame-Options', 'ALLOWALL');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'public, max-age=300');
