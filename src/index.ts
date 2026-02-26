@@ -455,6 +455,11 @@ app.get("/setup/packages", function (req, res) {
   res.sendFile(__dirname + "/setup-packages.html");
 });
 
+// Demo page (sandbox mode with deposit toggle)
+app.get("/demo", function (req, res) {
+  res.sendFile(__dirname + "/demo.html");
+});
+
 app.listen(port, () => {
   console.log(`GHL app listening on port ${port}`);
 

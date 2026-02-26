@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BookNexa AI - Demo</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
+      min-height: 100vh;
+      padding: 40px 20px;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 40px;
+      align-items: start;
+    }
+    @media (max-width: 900px) {
+      .container { grid-template-columns: 1fr; }
+    }
+    .settings-panel {
+      background: #fff;
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    }
+    .settings-panel h2 {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 20px;
+      color: #111;
+    }
+    .setting-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 0;
+      border-bottom: 1px solid #eee;
+    }
+    .setting-row:last-child { border-bottom: none; }
+    .setting-label {
+      font-size: 14px;
+      color: #333;
+    }
+    .setting-label small {
+      display: block;
+      font-size: 12px;
+      color: #888;
+      margin-top: 2px;
+    }
+    .toggle {
+      position: relative;
+      width: 48px;
+      height: 26px;
+    }
+    .toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: #ccc;
+      border-radius: 26px;
+      transition: 0.2s;
+    }
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 20px;
+      width: 20px;
+      left: 3px;
+      bottom: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: 0.2s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+    .toggle input:checked + .toggle-slider {
+      background: #7C9A7C;
+    }
+    .toggle input:checked + .toggle-slider:before {
+      transform: translateX(22px);
+    }
+    .select-row {
+      margin-top: 16px;
+    }
+    .select-row label {
+      display: block;
+      font-size: 13px;
+      color: #555;
+      margin-bottom: 6px;
+    }
+    .select-row select, .select-row input {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      font-size: 14px;
+      color: #333;
+    }
+    .select-row select:focus, .select-row input:focus {
+      outline: none;
+      border-color: #7C9A7C;
+    }
+    .deposit-settings {
+      display: none;
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid #eee;
+    }
+    .deposit-settings.active { display: block; }
+    .amount-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    .amount-row input {
+      width: 100px;
+    }
+    .radio-group {
+      display: flex;
+      gap: 16px;
+      margin: 8px 0;
+    }
+    .radio-group label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: #555;
+      cursor: pointer;
+    }
+    .save-btn {
+      width: 100%;
+      padding: 12px;
+      background: #7C9A7C;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      margin-top: 20px;
+      transition: background 0.2s;
+    }
+    .save-btn:hover { background: #5a7a5a; }
+    .save-btn:disabled { background: #ccc; cursor: not-allowed; }
+    .status {
+      text-align: center;
+      font-size: 13px;
+      margin-top: 10px;
+      min-height: 20px;
+    }
+    .status.success { color: #28a745; }
+    .status.error { color: #dc3545; }
+    .widget-preview {
+      background: #fff;
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    }
+    .widget-preview h2 {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #111;
+    }
+    .widget-preview p {
+      font-size: 13px;
+      color: #666;
+      margin-bottom: 20px;
+    }
+    .widget-frame {
+      width: 100%;
+      height: 600px;
+      border: none;
+      border-radius: 12px;
+    }
+    .test-banner {
+      background: linear-gradient(135deg, #fff3cd 0%, #ffeeba 100%);
+      color: #856404;
+      padding: 12px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .test-banner svg { width: 20px; height: 20px; fill: #856404; flex-shrink: 0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="settings-panel">
+      <h2>Deposit Settings</h2>
+
+      <div class="test-banner">
+        <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+        <span><strong>Sandbox Mode</strong> - Use test card 4242 4242 4242 4242</span>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-label">
+          Require Deposits
+          <small>Collect payment before booking</small>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="paymentsEnabled">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="deposit-settings" id="depositSettings">
+        <div class="select-row">
+          <label>Apply To</label>
+          <select id="applyTo">
+            <option value="both">All Bookings</option>
+            <option value="packages">Packages Only</option>
+            <option value="services">Services Only</option>
+          </select>
+        </div>
+
+        <div class="select-row">
+          <label>Deposit Type</label>
+          <div class="radio-group">
+            <label><input type="radio" name="depositType" value="fixed" checked> Fixed Amount</label>
+            <label><input type="radio" name="depositType" value="percentage"> Percentage</label>
+          </div>
+        </div>
+
+        <div class="select-row">
+          <label>Deposit Amount</label>
+          <div class="amount-row">
+            <span id="amountPrefix">$</span>
+            <input type="number" id="depositAmount" value="50" min="1">
+            <span id="amountSuffix"></span>
+          </div>
+        </div>
+
+        <div class="setting-row" style="margin-top: 16px;">
+          <div class="setting-label">
+            Only Above Threshold
+            <small>Require deposits only for expensive bookings</small>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="autoRequireAbove">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="select-row" id="thresholdRow" style="display: none;">
+          <label>Minimum Price for Deposit</label>
+          <div class="amount-row">
+            <span>$</span>
+            <input type="number" id="thresholdAmount" value="100" min="1">
+          </div>
+        </div>
+      </div>
+
+      <button class="save-btn" id="saveBtn">Save Settings</button>
+      <div class="status" id="status"></div>
+    </div>
+
+    <div class="widget-preview">
+      <h2>Live Preview</h2>
+      <p>Try booking an appointment to see the deposit flow in action. Changes save automatically.</p>
+      <iframe
+        id="widgetFrame"
+        class="widget-frame"
+        src="/widget/render?agentId=demo&theme=sage&widget=concierge&agent=sophia&locationId=NNFCwckEhjBk90UtMRSp"
+      ></iframe>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = window.location.origin;
+    const DEMO_LOCATION_ID = 'NNFCwckEhjBk90UtMRSp';
+
+    // DOM Elements
+    const paymentsEnabled = document.getElementById('paymentsEnabled');
+    const depositSettings = document.getElementById('depositSettings');
+    const applyTo = document.getElementById('applyTo');
+    const depositAmount = document.getElementById('depositAmount');
+    const autoRequireAbove = document.getElementById('autoRequireAbove');
+    const thresholdAmount = document.getElementById('thresholdAmount');
+    const thresholdRow = document.getElementById('thresholdRow');
+    const amountPrefix = document.getElementById('amountPrefix');
+    const amountSuffix = document.getElementById('amountSuffix');
+    const saveBtn = document.getElementById('saveBtn');
+    const status = document.getElementById('status');
+    const widgetFrame = document.getElementById('widgetFrame');
+
+    // Load current settings
+    async function loadSettings() {
+      try {
+        const resp = await fetch(`${API_BASE}/api/payments/settings/${DEMO_LOCATION_ID}`);
+        const data = await resp.json();
+
+        if (data.success && data.settings) {
+          const s = data.settings;
+          paymentsEnabled.checked = s.payments_enabled;
+          applyTo.value = s.apply_to || 'both';
+          autoRequireAbove.checked = s.auto_require_above;
+          thresholdAmount.value = (s.auto_require_amount || 0) / 100;
+
+          // Set deposit type
+          const typeRadio = document.querySelector(`input[name="depositType"][value="${s.deposit_type || 'fixed'}"]`);
+          if (typeRadio) typeRadio.checked = true;
+
+          // Set deposit amount
+          if (s.deposit_type === 'percentage') {
+            depositAmount.value = s.deposit_amount || 25;
+            updateAmountDisplay('percentage');
+          } else {
+            depositAmount.value = (s.deposit_amount || 5000) / 100;
+            updateAmountDisplay('fixed');
+          }
+
+          // Update UI visibility
+          depositSettings.classList.toggle('active', s.payments_enabled);
+          thresholdRow.style.display = s.auto_require_above ? 'block' : 'none';
+        }
+      } catch (e) {
+        console.error('Failed to load settings:', e);
+      }
+    }
+
+    // Save settings
+    async function saveSettings() {
+      saveBtn.disabled = true;
+      status.textContent = 'Saving...';
+      status.className = 'status';
+
+      const depositType = document.querySelector('input[name="depositType"]:checked').value;
+      let amount = parseInt(depositAmount.value) || 50;
+      if (depositType === 'fixed') {
+        amount = amount * 100; // Convert to cents
+      }
+
+      const settings = {
+        locationId: DEMO_LOCATION_ID,
+        payments_enabled: paymentsEnabled.checked,
+        apply_to: applyTo.value,
+        auto_require_above: autoRequireAbove.checked,
+        auto_require_amount: (parseInt(thresholdAmount.value) || 100) * 100,
+        deposit_type: depositType,
+        deposit_amount: amount
+      };
+
+      try {
+        const resp = await fetch(`${API_BASE}/api/payments/settings`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(settings)
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+          status.textContent = 'Settings saved!';
+          status.className = 'status success';
+          // Reload widget to pick up new settings
+          reloadWidget();
+        } else {
+          throw new Error(data.error);
+        }
+      } catch (e) {
+        status.textContent = 'Failed to save: ' + e.message;
+        status.className = 'status error';
+      }
+
+      saveBtn.disabled = false;
+      setTimeout(() => { status.textContent = ''; }, 3000);
+    }
+
+    // Reload widget iframe
+    function reloadWidget() {
+      const src = widgetFrame.src;
+      widgetFrame.src = '';
+      setTimeout(() => { widgetFrame.src = src; }, 100);
+    }
+
+    // Update amount display based on type
+    function updateAmountDisplay(type) {
+      if (type === 'percentage') {
+        amountPrefix.textContent = '';
+        amountSuffix.textContent = '%';
+        depositAmount.max = 100;
+      } else {
+        amountPrefix.textContent = '$';
+        amountSuffix.textContent = '';
+        depositAmount.max = '';
+      }
+    }
+
+    // Event listeners
+    paymentsEnabled.addEventListener('change', () => {
+      depositSettings.classList.toggle('active', paymentsEnabled.checked);
+      saveSettings();
+    });
+
+    applyTo.addEventListener('change', saveSettings);
+
+    document.querySelectorAll('input[name="depositType"]').forEach(radio => {
+      radio.addEventListener('change', (e) => {
+        updateAmountDisplay(e.target.value);
+        saveSettings();
+      });
+    });
+
+    depositAmount.addEventListener('change', saveSettings);
+
+    autoRequireAbove.addEventListener('change', () => {
+      thresholdRow.style.display = autoRequireAbove.checked ? 'block' : 'none';
+      saveSettings();
+    });
+
+    thresholdAmount.addEventListener('change', saveSettings);
+
+    saveBtn.addEventListener('click', saveSettings);
+
+    // Load settings on page load
+    loadSettings();
+  </script>
+</body>
+</html>
