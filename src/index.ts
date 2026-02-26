@@ -450,19 +450,9 @@ app.get("/", function (req, res) {
   res.sendFile(path + "index.html");
 });
 
-// Setup page (packages and staff)
+// Setup page (packages and staff) - also serves as settings page
 app.get("/setup/packages", function (req, res) {
   res.sendFile(__dirname + "/setup-packages.html");
-});
-
-// Demo page (sandbox mode with deposit toggle)
-app.get("/demo", function (req, res) {
-  res.sendFile(__dirname + "/demo.html");
-});
-
-// Settings page (live mode for business owners)
-app.get("/settings", function (req, res) {
-  res.sendFile(__dirname + "/settings.html");
 });
 
 app.listen(port, () => {

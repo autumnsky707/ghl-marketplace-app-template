@@ -648,6 +648,40 @@
     <div class="divider"></div>
 
     <div class="section">
+      <h2>Deposit Settings</h2>
+      <div class="info-box">
+        <p>Configure deposit requirements for bookings. When enabled, customers must pay a deposit to confirm their appointment.</p>
+      </div>
+
+      <div class="form-group">
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #eee;">
+          <div>
+            <label style="margin: 0; font-weight: 500;">Require Deposits</label>
+            <p style="font-size: 12px; color: #666; margin-top: 2px;">Collect payment before confirming bookings</p>
+          </div>
+          <label class="toggle-switch-sm">
+            <input type="checkbox" id="globalDepositToggle" onchange="saveGlobalDepositSettings()">
+            <span class="toggle-slider-sm"></span>
+          </label>
+        </div>
+      </div>
+
+      <div id="depositAmountSection" style="display: none;">
+        <div class="form-group">
+          <label for="globalDepositAmount">Default Deposit Amount</label>
+          <div class="dollar-wrapper">
+            <input type="number" class="input-sm" id="globalDepositAmount" value="50" min="1" step="1" onchange="saveGlobalDepositSettings()" style="width: 120px;">
+          </div>
+          <p style="font-size: 12px; color: #666; margin-top: 4px;">This amount will be collected for all bookings unless overridden per-package below.</p>
+        </div>
+      </div>
+
+      <div id="depositStatus" style="font-size: 13px; color: #666; margin-top: 8px;"></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="section">
       <h2>Add New Package</h2>
       <form id="packageForm">
         <div class="form-group">
@@ -735,16 +769,96 @@
       if (!locationId) return;
 
       try {
-        const response = await fetch(`${API_BASE}/api/payments/deposit-settings?locationId=${locationId}`);
+        const response = await fetch(`${API_BASE}/api/payments/settings/${locationId}`);
         if (response.ok) {
           const data = await response.json();
-          if (data && data.settings) {
-            globalDepositSettings = { ...globalDepositSettings, ...data.settings };
+          if (data && data.success && data.settings) {
+            const s = data.settings;
+            globalDepositSettings.requireDeposits = s.payments_enabled || false;
+            globalDepositSettings.defaultAmountFixed = (s.deposit_amount || 5000) / 100; // Convert cents to dollars
+            globalDepositSettings.defaultType = s.deposit_type || 'fixed';
             console.log('[Deposits] Global settings loaded:', globalDepositSettings);
+
+            // Update UI
+            updateGlobalDepositUI();
           }
         }
       } catch (error) {
         console.error('[Deposits] Error loading global settings:', error);
+      }
+    }
+
+    // Update the global deposit settings UI
+    function updateGlobalDepositUI() {
+      const toggle = document.getElementById('globalDepositToggle');
+      const amountSection = document.getElementById('depositAmountSection');
+      const amountInput = document.getElementById('globalDepositAmount');
+
+      if (toggle) {
+        toggle.checked = globalDepositSettings.requireDeposits;
+      }
+      if (amountInput) {
+        amountInput.value = globalDepositSettings.defaultAmountFixed;
+      }
+      if (amountSection) {
+        amountSection.style.display = globalDepositSettings.requireDeposits ? 'block' : 'none';
+      }
+    }
+
+    // Save global deposit settings to Supabase
+    async function saveGlobalDepositSettings() {
+      if (!locationId) return;
+
+      const toggle = document.getElementById('globalDepositToggle');
+      const amountInput = document.getElementById('globalDepositAmount');
+      const amountSection = document.getElementById('depositAmountSection');
+      const statusEl = document.getElementById('depositStatus');
+
+      const paymentsEnabled = toggle?.checked || false;
+      const depositAmount = parseInt(amountInput?.value) || 50;
+
+      // Show/hide amount section based on toggle
+      if (amountSection) {
+        amountSection.style.display = paymentsEnabled ? 'block' : 'none';
+      }
+
+      // Update local state
+      globalDepositSettings.requireDeposits = paymentsEnabled;
+      globalDepositSettings.defaultAmountFixed = depositAmount;
+
+      try {
+        statusEl.textContent = 'Saving...';
+        statusEl.style.color = '#666';
+
+        const response = await fetch(`${API_BASE}/api/payments/settings`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            locationId: locationId,
+            payments_enabled: paymentsEnabled,
+            deposit_type: 'fixed',
+            deposit_amount: depositAmount * 100, // Convert to cents
+            apply_to: 'both'
+          })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          statusEl.textContent = 'Settings saved!';
+          statusEl.style.color = '#28a745';
+          setTimeout(() => { statusEl.textContent = ''; }, 2000);
+
+          // Refresh package list to update badges
+          loadPackages();
+        } else {
+          statusEl.textContent = 'Failed to save: ' + (data.error || 'Unknown error');
+          statusEl.style.color = '#dc3545';
+        }
+      } catch (error) {
+        console.error('[Deposits] Error saving settings:', error);
+        statusEl.textContent = 'Failed to save settings';
+        statusEl.style.color = '#dc3545';
       }
     }
 
