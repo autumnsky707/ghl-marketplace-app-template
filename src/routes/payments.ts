@@ -3,7 +3,7 @@
  * Handles Stripe Connect OAuth, payment settings, and payment intents
  */
 
-import { Router, Request, Response } from "express";
+import express, { Router, Request, Response } from "express";
 import Stripe from "stripe";
 import { supabase } from "../supabase";
 
@@ -487,8 +487,6 @@ router.post(
   }
 );
 
-// Need to import express for raw body parsing in webhook
-import express from "express";
 
 // ========================================
 // DEPOSIT SETTINGS ENDPOINTS (for setup page)
