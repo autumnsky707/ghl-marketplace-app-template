@@ -15,6 +15,7 @@
       var theme = el.getAttribute('data-theme') || 'sage';
       var widget = el.getAttribute('data-widget') || 'concierge';
       var agent = el.getAttribute('data-agent') || 'sophia';
+      var locationId = el.getAttribute('data-location-id') || '';
 
       if (!agentId) {
         console.error('[BookNexa] Missing data-booknexa-widget value');
@@ -24,7 +25,8 @@
       var src = BASE + '/widget/render?agentId=' + encodeURIComponent(agentId) +
         '&theme=' + encodeURIComponent(theme) +
         '&widget=' + encodeURIComponent(widget) +
-        '&agent=' + encodeURIComponent(agent);
+        '&agent=' + encodeURIComponent(agent) +
+        '&locationId=' + encodeURIComponent(locationId);
 
       var iframe = document.createElement('iframe');
       iframe.src = src;

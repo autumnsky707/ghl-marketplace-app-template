@@ -563,7 +563,7 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
     const GREETING = ${JSON.stringify(greeting)};
     let conversation = null;  // Voice session
     let chatSession = null;   // Text-only chat session (separate from voice)
-    let currentLang = 'en';
+    let currentLang = new URLSearchParams(window.location.search).get('language') || 'en';
 
     const widget = document.getElementById('widget');
     const callBtn = document.getElementById('callBtn');
