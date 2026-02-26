@@ -9,8 +9,11 @@ The widget passes these dynamic variables to the agent:
 - `{{conversation_mode}}` - Either 'voice_call' or 'chat'
 - `{{language}}` - Current language code (e.g., 'en', 'es', 'ja')
 - `{{payments_enabled}}` - 'true' or 'false' whether deposits are required
+- `{{deposit_applies_to}}` - 'packages', 'services', or 'both'
 - `{{deposit_type}}` - Either 'fixed' or 'percentage'
-- `{{deposit_amount}}` - The deposit amount (e.g., '$50' or '20%')
+- `{{deposit_amount}}` - The deposit amount (e.g., '$50' or '25%')
+- `{{deposit_threshold_enabled}}` - 'true' or 'false' if only expensive bookings need deposits
+- `{{deposit_threshold_amount}}` - Threshold amount (e.g., '$100')
 
 ## Prompt Addition for Payment Collection
 
@@ -59,16 +62,34 @@ Agent: "Your deposit has been received and your appointment is confirmed! You'll
 - If the customer explicitly says they want to pay in person
 ```
 
-## Alternative: Explicit Trigger Tags
+## Trigger Formats
 
-For more precise control, you can have the agent use explicit trigger tags:
+### Option 1: Explicit Trigger with Price and Type (Recommended)
+
+For accurate deposit calculation with percentage-based deposits:
 
 ```
-When you're ready to collect the deposit, include [COLLECT_DEPOSIT] in your message.
-The payment form will automatically appear.
-
-Example: "Let me secure your appointment. [COLLECT_DEPOSIT] Please enter your card details in the payment form that just appeared."
+[COLLECT_DEPOSIT:PRICE_IN_CENTS:BOOKING_TYPE]
 ```
+
+Examples:
+- `[COLLECT_DEPOSIT:12000:service]` - $120 service, calculates deposit based on settings
+- `[COLLECT_DEPOSIT:29900:package]` - $299 package, calculates deposit based on settings
+
+The widget will use the `calculateDeposit()` function which respects:
+- `deposit_applies_to` setting (packages, services, or both)
+- `deposit_threshold` settings (only require above certain amount)
+- `deposit_type` (fixed amount or percentage of price)
+
+### Option 2: Simple Trigger Phrases
+
+Use these phrases to trigger the default deposit amount:
+- "I'll need to collect your deposit"
+- "Let me secure your booking"
+- "To confirm your appointment"
+- `[COLLECT_DEPOSIT]` or `[PAYMENT_REQUIRED]`
+
+**Note:** Simple triggers use the default fixed deposit amount and don't calculate percentages.
 
 ## Testing
 

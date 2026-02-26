@@ -724,8 +724,7 @@
       autoThresholdAmount: 100,
       defaultType: 'fixed',
       defaultAmountFixed: 50,
-      defaultAmountPercent: 25,
-      notPaidAction: 'hold_24h'
+      defaultAmountPercent: 25
     };
 
     // Per-package deposit overrides (keyed by package ID)
@@ -881,15 +880,12 @@
       const depositType = document.querySelector(`input[name="deposit-type-${packageId}"]:checked`)?.value || 'fixed';
       const depositAmountFixed = parseFloat(document.getElementById(`fixed-input-${packageId}`)?.value) || 50;
       const depositAmountPercent = parseFloat(document.getElementById(`percent-input-${packageId}`)?.value) || 25;
-      const notPaidAction = document.getElementById(`not-paid-action-${packageId}`)?.value || 'hold_24h';
-
       const overrideData = {
         override_enabled: overrideEnabled,
         require_deposit: requireDeposit,
         deposit_type: depositType,
         deposit_amount_fixed: depositAmountFixed,
-        deposit_amount_percent: depositAmountPercent,
-        not_paid_action: notPaidAction
+        deposit_amount_percent: depositAmountPercent
       };
 
       // Update local state
@@ -1267,15 +1263,6 @@
                   </div>
                 </div>
 
-                <!-- If Deposit Not Paid -->
-                <div class="override-setting-row">
-                  <label class="override-setting-label">If deposit is not paid</label>
-                  <select class="select-sm" id="not-paid-action-${pkg.id}" onchange="updatePackageOverride('${pkg.id}')">
-                    <option value="hold_24h" ${(!override.not_paid_action || override.not_paid_action === 'hold_24h') ? 'selected' : ''}>Hold booking for 24 hours then auto-cancel</option>
-                    <option value="keep_unpaid" ${override.not_paid_action === 'keep_unpaid' ? 'selected' : ''}>Keep booking but mark as unpaid</option>
-                    <option value="dont_confirm" ${override.not_paid_action === 'dont_confirm' ? 'selected' : ''}>Don't confirm booking until deposit is paid</option>
-                  </select>
-                </div>
 
               </div>
             </div>

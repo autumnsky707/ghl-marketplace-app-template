@@ -516,6 +516,22 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       border-radius: 3px;
       font-size: 9px;
     }
+    .widget-concierge .deposit-note {
+      font-size: 12px;
+      color: #666;
+      text-align: center;
+      margin-bottom: 12px;
+      padding: 8px;
+      background: #f8f9fa;
+      border-radius: 6px;
+    }
+    .widget-concierge .card-form {
+      animation: slideDown 0.2s ease;
+    }
+    @keyframes slideDown {
+      from { opacity: 0; transform: translateY(-10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
     .widget-concierge .payment-success {
       text-align: center;
       padding: 20px;
@@ -656,18 +672,22 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
                 <div class="test-title">SANDBOX MODE - No real charges</div>
                 <div>Use test card: <span class="test-card">4242 4242 4242 4242</span></div>
               </div>
-              <h4><svg viewBox="0 0 24 24"><path d="M20 4H4c-1.11 0-1.99.89-1.99 2L2 18c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V6c0-1.11-.89-2-2-2zm0 14H4v-6h16v6zm0-10H4V6h16v2z"/></svg> Secure Payment</h4>
+              <h4><svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg> Secure Your Appointment</h4>
               <div class="payment-amount" id="paymentAmount">$0.00</div>
-              <div class="card-element" id="cardElement"></div>
-              <button class="pay-btn" id="payBtn" disabled>
-                <svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
-                <span id="payBtnText">Pay Deposit</span>
-              </button>
-              <div class="payment-error" id="paymentError"></div>
+              <div class="deposit-note">A deposit is required to secure your appointment.</div>
+              <!-- Card form shown directly -->
+              <div class="card-form" id="cardForm">
+                <div class="card-element" id="cardElement"></div>
+                <button class="pay-btn" id="payBtn" disabled>
+                  <svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
+                  <span id="payBtnText">Pay $0.00</span>
+                </button>
+                <div class="payment-error" id="paymentError"></div>
+              </div>
               <div class="payment-success" id="paymentSuccess" style="display:none;">
                 <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
                 <h4>Payment Successful!</h4>
-                <p>Your deposit has been processed.</p>
+                <p>Your appointment is confirmed!</p>
               </div>
             </div>
             <div class="chips" id="chips">
@@ -822,9 +842,16 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       });
     }
 
-    // Show payment form with amount
+    // Store current booking details for payment
+    let currentBookingDetails = null;
+    let currentPaymentAmount = 0;
+
+    // Show payment form with amount - creates intent immediately
     async function showPaymentForm(amountCents, customerEmail, bookingDetails) {
       if (!paymentSettings?.payments_enabled) return;
+
+      currentBookingDetails = bookingDetails;
+      currentPaymentAmount = amountCents;
 
       const paymentForm = document.getElementById('paymentForm');
       const testBanner = document.getElementById('testModeBanner');
@@ -832,20 +859,30 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       const payBtn = document.getElementById('payBtn');
       const errorEl = document.getElementById('paymentError');
       const successEl = document.getElementById('paymentSuccess');
+      const cardForm = document.getElementById('cardForm');
 
       // Reset form
       payBtn.disabled = true;
       errorEl.textContent = '';
       successEl.style.display = 'none';
-      payBtn.querySelector('span').textContent = 'Pay $' + (amountCents / 100).toFixed(2);
-      amountEl.textContent = '$' + (amountCents / 100).toFixed(2);
+      cardForm.style.display = 'block';
+
+      const formattedAmount = '$' + (amountCents / 100).toFixed(2);
+      payBtn.querySelector('span').textContent = 'Pay ' + formattedAmount;
+      amountEl.textContent = formattedAmount;
 
       // Show test mode banner if applicable
       if (paymentSettings.isTestMode) {
         testBanner.style.display = 'block';
+      } else {
+        testBanner.style.display = 'none';
       }
 
-      // Create payment intent
+      // Show form and open chat panel
+      paymentForm.classList.add('active');
+      widget.classList.add('chat-open');
+
+      // Create payment intent immediately
       try {
         const resp = await fetch(API_BASE + '/api/payments/create-intent', {
           method: 'POST',
@@ -853,8 +890,8 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
           body: JSON.stringify({
             locationId,
             amount: amountCents,
-            customerEmail,
-            bookingDetails
+            customerEmail: customerEmail || bookingDetails?.email,
+            bookingDetails: bookingDetails
           })
         });
         const data = await resp.json();
@@ -862,10 +899,6 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
 
         paymentIntentClientSecret = data.clientSecret;
         await initStripeElements(data.publishableKey);
-
-        // Show form and open chat panel
-        paymentForm.classList.add('active');
-        widget.classList.add('chat-open');
 
       } catch (e) {
         console.error('[Payment] Failed to create intent:', e);
@@ -878,7 +911,10 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       const payBtn = document.getElementById('payBtn');
       const errorEl = document.getElementById('paymentError');
       const successEl = document.getElementById('paymentSuccess');
-      const formContent = document.querySelectorAll('#paymentForm > *:not(.payment-success)');
+      const cardForm = document.getElementById('cardForm');
+      const amountEl = document.getElementById('paymentAmount');
+      const header = document.querySelector('#paymentForm h4');
+      const testBanner = document.getElementById('testModeBanner');
 
       payBtn.disabled = true;
       payBtn.querySelector('span').textContent = 'Processing...';
@@ -895,7 +931,10 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
           payBtn.querySelector('span').textContent = 'Try Again';
         } else if (paymentIntent.status === 'succeeded') {
           // Hide form elements, show success
-          formContent.forEach(el => el.style.display = 'none');
+          cardForm.style.display = 'none';
+          amountEl.style.display = 'none';
+          header.style.display = 'none';
+          if (testBanner) testBanner.style.display = 'none';
           successEl.style.display = 'block';
 
           // Notify parent/conversation that payment succeeded
@@ -935,10 +974,34 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
     }
 
     // Check agent messages for payment trigger phrases
+    // Format: [COLLECT_DEPOSIT:5000:service] or [COLLECT_DEPOSIT:15000:package]
+    // Or simple trigger phrases with default amount
     function checkPaymentTrigger(message) {
       if (!paymentSettings?.payments_enabled) return;
 
-      // Trigger phrases that indicate booking confirmation and need for deposit
+      const lowerMsg = message.toLowerCase();
+
+      // Check for explicit trigger with amount and type: [COLLECT_DEPOSIT:5000:service]
+      const explicitMatch = message.match(/\[COLLECT_DEPOSIT:(\d+):(\w+)\]/i);
+      if (explicitMatch) {
+        const servicePrice = parseInt(explicitMatch[1]);
+        const bookingType = explicitMatch[2].toLowerCase(); // 'service' or 'package'
+
+        // Use calculateDeposit to respect all settings
+        const depositAmount = calculateDeposit(servicePrice, bookingType);
+
+        if (depositAmount > 0) {
+          console.log('[Payment] Agent triggered payment:', { servicePrice, bookingType, depositAmount });
+          showPaymentForm(depositAmount, null, {
+            triggeredBy: 'agent',
+            servicePrice,
+            bookingType
+          });
+        }
+        return;
+      }
+
+      // Fallback: simple trigger phrases with default amount
       const triggerPhrases = [
         'collect your deposit',
         'take your deposit',
@@ -948,21 +1011,18 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
         'secure your booking',
         'secure your appointment',
         'confirm with a deposit',
-        '[COLLECT_DEPOSIT]', // Explicit trigger the agent can use
+        '[COLLECT_DEPOSIT]',
         '[PAYMENT_REQUIRED]'
       ];
 
-      const lowerMsg = message.toLowerCase();
       const shouldTrigger = triggerPhrases.some(phrase => lowerMsg.includes(phrase.toLowerCase()));
 
       if (shouldTrigger) {
-        console.log('[Payment] Agent triggered payment collection');
+        console.log('[Payment] Agent triggered payment (default amount)');
 
-        // Use default deposit amount from settings
-        // The agent should have mentioned the service price, but we use settings default
+        // Use default deposit amount - assume 'both' applies
         const depositAmount = paymentSettings.deposit_amount;
 
-        // Show payment form - opens chat panel for voice users
         showPaymentForm(depositAmount, null, {
           triggeredBy: 'agent',
           message: message
@@ -981,7 +1041,7 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
     // Initialize payment system
     loadPaymentSettings();
 
-    // Pay button click handler
+    // Payment button click handler
     document.getElementById('payBtn').addEventListener('click', submitPayment);
 
     const widget = document.getElementById('widget');
@@ -1033,10 +1093,13 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
               conversation_mode: 'chat',
               language: currentLang,
               payments_enabled: paymentSettings?.payments_enabled ? 'true' : 'false',
+              deposit_applies_to: paymentSettings?.apply_to || 'both',
               deposit_type: paymentSettings?.deposit_type || 'fixed',
               deposit_amount: paymentSettings?.deposit_type === 'percentage'
                 ? (paymentSettings?.deposit_amount || 50) + '%'
-                : '$' + ((paymentSettings?.deposit_amount || 5000) / 100).toFixed(0)
+                : '$' + ((paymentSettings?.deposit_amount || 5000) / 100).toFixed(0),
+              deposit_threshold_enabled: paymentSettings?.auto_require_above ? 'true' : 'false',
+              deposit_threshold_amount: '$' + ((paymentSettings?.auto_require_amount || 0) / 100).toFixed(0)
             },
             onMessage: (m) => {
               if (m.source === 'ai') {
@@ -1082,10 +1145,13 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
             conversation_mode: 'voice_call',
             language: currentLang,
             payments_enabled: paymentSettings?.payments_enabled ? 'true' : 'false',
+            deposit_applies_to: paymentSettings?.apply_to || 'both',
             deposit_type: paymentSettings?.deposit_type || 'fixed',
             deposit_amount: paymentSettings?.deposit_type === 'percentage'
               ? (paymentSettings?.deposit_amount || 50) + '%'
-              : '$' + ((paymentSettings?.deposit_amount || 5000) / 100).toFixed(0)
+              : '$' + ((paymentSettings?.deposit_amount || 5000) / 100).toFixed(0),
+            deposit_threshold_enabled: paymentSettings?.auto_require_above ? 'true' : 'false',
+            deposit_threshold_amount: '$' + ((paymentSettings?.auto_require_amount || 0) / 100).toFixed(0)
           },
           onConnect: () => {
             widget.classList.add('speaking');
