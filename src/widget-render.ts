@@ -150,15 +150,16 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       height: 100%;
       font-family: 'Inter', -apple-system, sans-serif;
       background: transparent;
-      overflow: hidden;
+      overflow-x: hidden;
+      overflow-y: auto;
     }
     .widget-container {
       width: 100%;
-      height: 100%;
+      min-height: 100%;
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: center;
-      padding: 10px;
+      padding: 15px 10px;
     }
 
     /* ═══ CONCIERGE CARD ═══ */
@@ -596,9 +597,45 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       return FIRST_MESSAGES[lang] || FIRST_MESSAGES['en'];
     }
 
+    // Translated UI text
+    const UI_TEXT = {
+      en: { role: 'Your AI Spa Concierge', tapToSpeak: 'Tap to speak with', chatWith: 'Chat with', online: 'Online now', greeting: "Hi! I'm {agent}, your AI spa concierge. How can I help you today?", placeholder: 'Type a message...', footer: 'Confidential consultations with licensed providers', or: 'or', chips: [{label: 'Book Appt', msg: "I'd like to book an appointment"}, {label: 'Services', msg: 'What services do you offer?'}, {label: 'Packages', msg: 'Tell me about your packages'}, {label: 'Pricing', msg: 'What are your prices?'}], services: ['Scheduling appointments', 'Spa treatment questions', 'Pricing & packages', 'Treatment options', 'Membership info', 'Hours & availability'] },
+      es: { role: 'Tu Concierge de Spa IA', tapToSpeak: 'Toca para hablar con', chatWith: 'Chatea con', online: 'En línea', greeting: "¡Hola! Soy {agent}, tu concierge de spa IA. ¿Cómo puedo ayudarte hoy?", placeholder: 'Escribe un mensaje...', footer: 'Consultas confidenciales con proveedores licenciados', or: 'o', chips: [{label: 'Reservar', msg: 'Me gustaría reservar una cita'}, {label: 'Servicios', msg: '¿Qué servicios ofrecen?'}, {label: 'Paquetes', msg: 'Cuéntame sobre sus paquetes'}, {label: 'Precios', msg: '¿Cuáles son sus precios?'}], services: ['Programar citas', 'Preguntas sobre tratamientos', 'Precios y paquetes', 'Opciones de tratamiento', 'Info de membresía', 'Horarios y disponibilidad'] },
+      ja: { role: 'AIスパコンシェルジュ', tapToSpeak: 'タップして話す', chatWith: 'チャット', online: 'オンライン', greeting: "こんにちは！{agent}です。AIスパコンシェルジュです。今日はどのようにお手伝いできますか？", placeholder: 'メッセージを入力...', footer: '資格を持つプロバイダーとの機密相談', or: 'または', chips: [{label: '予約', msg: '予約をしたいです'}, {label: 'サービス', msg: 'どんなサービスがありますか？'}, {label: 'パッケージ', msg: 'パッケージについて教えてください'}, {label: '料金', msg: '料金はいくらですか？'}], services: ['予約のスケジュール', 'スパトリートメントの質問', '料金とパッケージ', 'トリートメントオプション', '会員情報', '営業時間と空き状況'] },
+      zh: { role: '您的AI水疗礼宾', tapToSpeak: '点击与之交谈', chatWith: '与之聊天', online: '在线', greeting: "您好！我是{agent}，您的AI水疗礼宾。今天我能为您做些什么？", placeholder: '输入消息...', footer: '与持证提供者进行保密咨询', or: '或', chips: [{label: '预约', msg: '我想预约'}, {label: '服务', msg: '你们提供什么服务？'}, {label: '套餐', msg: '介绍一下你们的套餐'}, {label: '价格', msg: '价格是多少？'}], services: ['预约安排', '水疗护理问题', '价格和套餐', '护理选项', '会员信息', '营业时间'] },
+      fr: { role: 'Votre Concierge Spa IA', tapToSpeak: 'Appuyez pour parler à', chatWith: 'Discuter avec', online: 'En ligne', greeting: "Bonjour ! Je suis {agent}, votre concierge spa IA. Comment puis-je vous aider aujourd'hui ?", placeholder: 'Tapez un message...', footer: 'Consultations confidentielles avec des prestataires agréés', or: 'ou', chips: [{label: 'Réserver', msg: 'Je voudrais prendre rendez-vous'}, {label: 'Services', msg: 'Quels services proposez-vous ?'}, {label: 'Forfaits', msg: 'Parlez-moi de vos forfaits'}, {label: 'Tarifs', msg: 'Quels sont vos tarifs ?'}], services: ['Prise de rendez-vous', 'Questions sur les soins', 'Tarifs et forfaits', 'Options de soins', 'Info adhésion', 'Horaires et disponibilité'] },
+      de: { role: 'Ihr KI-Spa-Concierge', tapToSpeak: 'Tippen um zu sprechen mit', chatWith: 'Chatten mit', online: 'Online', greeting: "Hallo! Ich bin {agent}, Ihr KI-Spa-Concierge. Wie kann ich Ihnen heute helfen?", placeholder: 'Nachricht eingeben...', footer: 'Vertrauliche Beratungen mit lizenzierten Anbietern', or: 'oder', chips: [{label: 'Buchen', msg: 'Ich möchte einen Termin buchen'}, {label: 'Services', msg: 'Welche Services bieten Sie an?'}, {label: 'Pakete', msg: 'Erzählen Sie mir von Ihren Paketen'}, {label: 'Preise', msg: 'Was sind Ihre Preise?'}], services: ['Terminplanung', 'Spa-Behandlungsfragen', 'Preise & Pakete', 'Behandlungsoptionen', 'Mitgliedschaftsinfo', 'Öffnungszeiten'] },
+      ko: { role: 'AI 스파 컨시어지', tapToSpeak: '탭하여 대화하기', chatWith: '채팅하기', online: '온라인', greeting: "안녕하세요! 저는 {agent}, AI 스파 컨시어지입니다. 오늘 어떻게 도와드릴까요?", placeholder: '메시지 입력...', footer: '면허를 가진 전문가와의 기밀 상담', or: '또는', chips: [{label: '예약', msg: '예약하고 싶습니다'}, {label: '서비스', msg: '어떤 서비스가 있나요?'}, {label: '패키지', msg: '패키지에 대해 알려주세요'}, {label: '가격', msg: '가격이 어떻게 되나요?'}], services: ['예약 일정', '스파 트리트먼트 질문', '가격 및 패키지', '트리트먼트 옵션', '멤버십 정보', '영업시간 및 예약가능'] },
+      'pt-BR': { role: 'Seu Concierge de Spa IA', tapToSpeak: 'Toque para falar com', chatWith: 'Conversar com', online: 'Online', greeting: "Olá! Sou {agent}, seu concierge de spa IA. Como posso ajudá-lo hoje?", placeholder: 'Digite uma mensagem...', footer: 'Consultas confidenciais com profissionais licenciados', or: 'ou', chips: [{label: 'Agendar', msg: 'Gostaria de agendar um horário'}, {label: 'Serviços', msg: 'Quais serviços vocês oferecem?'}, {label: 'Pacotes', msg: 'Fale sobre seus pacotes'}, {label: 'Preços', msg: 'Quais são os preços?'}], services: ['Agendamento', 'Dúvidas sobre tratamentos', 'Preços e pacotes', 'Opções de tratamento', 'Info de associação', 'Horários e disponibilidade'] }
+    };
+
+    function getUI(lang) { return UI_TEXT[lang] || UI_TEXT['en']; }
+
+    function updateWidgetLanguage(lang) {
+      const ui = getUI(lang);
+      const agent = '${agentName}';
+      document.querySelector('.v10-role').textContent = ui.role;
+      document.querySelector('.call-label').innerHTML = ui.tapToSpeak + ' <span>' + agent + '</span>';
+      document.getElementById('chatToggle').innerHTML = '<svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg> ' + ui.chatWith + ' <span>' + agent + '</span>';
+      document.querySelector('.ch-st').innerHTML = '<span class="dot-on"></span> ' + ui.online;
+      document.getElementById('greetingMsg').textContent = ui.greeting.replace('{agent}', agent);
+      document.getElementById('chatInput').placeholder = ui.placeholder;
+      document.querySelector('.v10-foot p').textContent = ui.footer;
+      document.querySelector('.sep-t').textContent = ui.or;
+      // Update chips
+      const chipBtns = document.querySelectorAll('.chip');
+      ui.chips.forEach((c, i) => { if (chipBtns[i]) { chipBtns[i].textContent = c.label; chipBtns[i].dataset.msg = c.msg; } });
+      // Update services list
+      const svcItems = document.querySelectorAll('.svc li');
+      ui.services.forEach((s, i) => { if (svcItems[i]) { svcItems[i].innerHTML = '<span class="ck"><svg viewBox="0 0 24 24"><polyline points="4 12 9 17 20 6"/></svg></span> ' + s; } });
+    }
+
     let conversation = null;  // Voice session
     let chatSession = null;   // Text-only chat session (separate from voice)
     let currentLang = new URLSearchParams(window.location.search).get('language') || 'en';
+
+    // Initialize UI with current language
+    updateWidgetLanguage(currentLang);
 
     const widget = document.getElementById('widget');
     const callBtn = document.getElementById('callBtn');
@@ -734,6 +771,8 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
         langList.querySelectorAll('button').forEach(btn => {
           btn.style.display = btn.dataset.default === 'true' ? 'flex' : 'none';
         });
+        // Update widget UI to selected language
+        updateWidgetLanguage(currentLang);
       }
     });
     document.addEventListener('click', e => {
