@@ -568,7 +568,34 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
     import { Conversation } from 'https://cdn.jsdelivr.net/npm/@elevenlabs/client@0.14.0/+esm';
 
     const AGENT_ID = '${elevenLabsId}';
-    const GREETING = ${JSON.stringify(greeting)};
+    const GREETING_EN = ${JSON.stringify(greeting)};
+
+    // Translated first messages for each language
+    const FIRST_MESSAGES = {
+      en: GREETING_EN,
+      es: "¡Hola! Soy tu coordinadora de spa y estética con inteligencia artificial de BookNexa AI. ¡Es un placer conocerte! Puedo ayudarte a programar consultas, responder preguntas sobre nuestros tratamientos o conectarte con un especialista licenciado. ¿Te gustaría reservar una cita o saber más sobre nuestros servicios hoy?",
+      ja: "こんにちは！BookNexa AIのAIスパ＆エステティックコーディネーターです。お会いできて光栄です！ご相談のご予約、トリートメントに関するご質問へのお答え、または資格を持つスペシャリストへのおつなぎをいたします。本日、ご予約をご希望ですか、それともサービスについてもっとお知りになりたいですか？",
+      zh: "您好！我是BookNexa AI的AI水疗和美容协调员。很高兴认识您！我可以帮您安排咨询预约、解答有关我们护理项目的问题，或为您联系持证专家。您今天想预约还是想了解更多关于我们服务的信息？",
+      fr: "Bonjour ! Je suis votre coordinatrice IA Spa et Esthétique de BookNexa AI. Ravie de vous rencontrer ! Je peux vous aider à planifier des consultations, répondre à vos questions sur nos soins ou vous mettre en contact avec un spécialiste agréé. Souhaitez-vous prendre rendez-vous ou en savoir plus sur nos services aujourd'hui ?",
+      de: "Hallo! Ich bin Ihre KI-Spa- und Ästhetik-Koordinatorin von BookNexa AI. Schön, Sie kennenzulernen! Ich kann Ihnen helfen, Beratungstermine zu vereinbaren, Fragen zu unseren Behandlungen zu beantworten oder Sie mit einem lizenzierten Spezialisten zu verbinden. Möchten Sie heute einen Termin buchen oder mehr über unsere Dienstleistungen erfahren?",
+      ko: "안녕하세요! BookNexa AI의 AI 스파 및 에스테틱 코디네이터입니다. 만나서 반갑습니다! 상담 예약, 트리트먼트에 관한 질문 답변, 또는 면허를 가진 전문가와 연결해 드릴 수 있습니다. 오늘 예약을 원하시나요, 아니면 저희 서비스에 대해 더 알고 싶으신가요?",
+      'pt-BR': "Olá! Sou sua coordenadora de spa e estética com IA da BookNexa AI. É um prazer conhecê-lo! Posso ajudar a agendar consultas, responder perguntas sobre nossos tratamentos ou conectá-lo com um especialista licenciado. Gostaria de marcar um horário ou saber mais sobre nossos serviços hoje?",
+      it: "Ciao! Sono la tua coordinatrice AI per spa ed estetica di BookNexa AI. Piacere di conoscerti! Posso aiutarti a prenotare consulenze, rispondere a domande sui nostri trattamenti o metterti in contatto con uno specialista autorizzato. Vorresti prenotare un appuntamento o saperne di più sui nostri servizi oggi?",
+      pt: "Olá! Sou a sua coordenadora de spa e estética com IA da BookNexa AI. É um prazer conhecê-lo! Posso ajudar a agendar consultas, responder a perguntas sobre os nossos tratamentos ou ligá-lo a um especialista licenciado. Gostaria de marcar uma consulta ou saber mais sobre os nossos serviços hoje?",
+      ru: "Здравствуйте! Я ваш ИИ-координатор спа и эстетических услуг от BookNexa AI. Рада познакомиться! Я могу помочь записаться на консультацию, ответить на вопросы о наших процедурах или связать вас с лицензированным специалистом. Хотите записаться на прием или узнать больше о наших услугах сегодня?",
+      ar: "مرحباً! أنا منسقة السبا والتجميل بالذكاء الاصطناعي من BookNexa AI. سعيدة بلقائك! يمكنني مساعدتك في جدولة الاستشارات، والإجابة على أسئلتك حول علاجاتنا، أو توصيلك بأخصائي مرخص. هل تود حجز موعد أو معرفة المزيد عن خدماتنا اليوم؟",
+      hi: "नमस्ते! मैं BookNexa AI की AI स्पा और एस्थेटिक्स कोऑर्डिनेटर हूं। आपसे मिलकर खुशी हुई! मैं परामर्श शेड्यूल करने, हमारे उपचारों के बारे में सवालों के जवाब देने, या आपको लाइसेंस प्राप्त विशेषज्ञ से जोड़ने में मदद कर सकती हूं। क्या आप आज अपॉइंटमेंट बुक करना चाहेंगे या हमारी सेवाओं के बारे में और जानना चाहेंगे?",
+      nl: "Hallo! Ik ben je AI Spa en Esthetiek Coördinator van BookNexa AI. Leuk je te ontmoeten! Ik kan je helpen met het plannen van consulten, vragen beantwoorden over onze behandelingen, of je in contact brengen met een gediplomeerde specialist. Wil je vandaag een afspraak maken of meer weten over onze diensten?",
+      pl: "Cześć! Jestem Twoją koordynatorką AI ds. spa i estetyki z BookNexa AI. Miło Cię poznać! Mogę pomóc w umawianiu konsultacji, odpowiadać na pytania dotyczące naszych zabiegów lub połączyć Cię z licencjonowanym specjalistą. Czy chciałbyś dziś umówić się na wizytę lub dowiedzieć się więcej o naszych usługach?",
+      sv: "Hej! Jag är din AI Spa- och Estetikkoordinator från BookNexa AI. Trevligt att träffas! Jag kan hjälpa dig att boka konsultationer, svara på frågor om våra behandlingar eller koppla dig till en licensierad specialist. Vill du boka en tid eller veta mer om våra tjänster idag?",
+      tr: "Merhaba! Ben BookNexa AI'dan AI Spa ve Estetik Koordinatörünüzüm. Tanıştığımıza memnun oldum! Danışma randevusu ayarlamanıza, tedavilerimiz hakkındaki sorularınızı yanıtlamama veya sizi lisanslı bir uzmanla buluşturmama yardımcı olabilirim. Bugün randevu almak mı yoksa hizmetlerimiz hakkında daha fazla bilgi edinmek mi istersiniz?",
+      vi: "Xin chào! Tôi là Điều phối viên AI Spa và Thẩm mỹ của BookNexa AI. Rất vui được gặp bạn! Tôi có thể giúp bạn đặt lịch tư vấn, trả lời câu hỏi về các liệu trình của chúng tôi, hoặc kết nối bạn với chuyên gia được cấp phép. Bạn muốn đặt lịch hẹn hay tìm hiểu thêm về dịch vụ của chúng tôi hôm nay?"
+    };
+
+    function getFirstMessage(lang) {
+      return FIRST_MESSAGES[lang] || FIRST_MESSAGES['en'];
+    }
+
     let conversation = null;  // Voice session
     let chatSession = null;   // Text-only chat session (separate from voice)
     let currentLang = new URLSearchParams(window.location.search).get('language') || 'en';
@@ -610,11 +637,12 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       // Use text-only chat session (separate from voice)
       if (!chatSession) {
         try {
+          const firstMsg = getFirstMessage(currentLang);
           chatSession = await Conversation.startSession({
             agentId: AGENT_ID,
             overrides: {
               conversation: { textOnly: true },
-              agent: { firstMessage: GREETING, language: currentLang }
+              agent: { firstMessage: firstMsg, language: currentLang }
             },
             onMessage: (m) => {
               if (m.source === 'ai') {
@@ -647,10 +675,11 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       }
       try {
         console.log('Starting voice with language:', currentLang);
+        const firstMsg = getFirstMessage(currentLang);
         conversation = await Conversation.startSession({
           agentId: AGENT_ID,
           overrides: {
-            agent: { language: currentLang, firstMessage: GREETING }
+            agent: { language: currentLang, firstMessage: firstMsg }
           },
           dynamicVariables: {
             locationId: new URLSearchParams(window.location.search).get('locationId') || '',
@@ -813,7 +842,18 @@ function generateBannerWidget({ t, agentName, elevenLabsId, greeting, langListHT
   <script type="module">
     import { Conversation } from 'https://cdn.jsdelivr.net/npm/@elevenlabs/client@0.14.0/+esm';
     const AGENT_ID = '${elevenLabsId}';
-    const GREETING = ${JSON.stringify(greeting)};
+    const GREETING_EN = ${JSON.stringify(greeting)};
+    const FIRST_MESSAGES = {
+      en: GREETING_EN,
+      es: "¡Hola! Soy tu coordinadora de spa y estética con inteligencia artificial de BookNexa AI. ¡Es un placer conocerte! Puedo ayudarte a programar consultas, responder preguntas sobre nuestros tratamientos o conectarte con un especialista licenciado. ¿Te gustaría reservar una cita o saber más sobre nuestros servicios hoy?",
+      ja: "こんにちは！BookNexa AIのAIスパ＆エステティックコーディネーターです。お会いできて光栄です！",
+      zh: "您好！我是BookNexa AI的AI水疗和美容协调员。很高兴认识您！",
+      fr: "Bonjour ! Je suis votre coordinatrice IA Spa et Esthétique de BookNexa AI. Ravie de vous rencontrer !",
+      de: "Hallo! Ich bin Ihre KI-Spa- und Ästhetik-Koordinatorin von BookNexa AI. Schön, Sie kennenzulernen!",
+      ko: "안녕하세요! BookNexa AI의 AI 스파 및 에스테틱 코디네이터입니다. 만나서 반갑습니다!",
+      'pt-BR': "Olá! Sou sua coordenadora de spa e estética com IA da BookNexa AI. É um prazer conhecê-lo!"
+    };
+    function getFirstMessage(lang) { return FIRST_MESSAGES[lang] || FIRST_MESSAGES['en']; }
     let conversation = null;
     let currentLang = new URLSearchParams(window.location.search).get('language') || 'en';
     const widget = document.getElementById('widget');
@@ -828,10 +868,11 @@ function generateBannerWidget({ t, agentName, elevenLabsId, greeting, langListHT
         return;
       }
       try {
+        const firstMsg = getFirstMessage(currentLang);
         conversation = await Conversation.startSession({
           agentId: AGENT_ID,
           overrides: {
-            agent: { firstMessage: GREETING, language: currentLang }
+            agent: { language: currentLang, firstMessage: firstMsg }
           },
           dynamicVariables: {
             locationId: new URLSearchParams(window.location.search).get('locationId') || '',
@@ -944,7 +985,18 @@ function generateClassicWidget({ t, agentName, elevenLabsId, greeting, langListH
   <script type="module">
     import { Conversation } from 'https://cdn.jsdelivr.net/npm/@elevenlabs/client@0.14.0/+esm';
     const AGENT_ID = '${elevenLabsId}';
-    const GREETING = ${JSON.stringify(greeting)};
+    const GREETING_EN = ${JSON.stringify(greeting)};
+    const FIRST_MESSAGES = {
+      en: GREETING_EN,
+      es: "¡Hola! Soy tu coordinadora de spa y estética con inteligencia artificial de BookNexa AI. ¡Es un placer conocerte!",
+      ja: "こんにちは！BookNexa AIのAIスパ＆エステティックコーディネーターです。お会いできて光栄です！",
+      zh: "您好！我是BookNexa AI的AI水疗和美容协调员。很高兴认识您！",
+      fr: "Bonjour ! Je suis votre coordinatrice IA Spa et Esthétique de BookNexa AI. Ravie de vous rencontrer !",
+      de: "Hallo! Ich bin Ihre KI-Spa- und Ästhetik-Koordinatorin von BookNexa AI. Schön, Sie kennenzulernen!",
+      ko: "안녕하세요! BookNexa AI의 AI 스파 및 에스테틱 코디네이터입니다. 만나서 반갑습니다!",
+      'pt-BR': "Olá! Sou sua coordenadora de spa e estética com IA da BookNexa AI. É um prazer conhecê-lo!"
+    };
+    function getFirstMessage(lang) { return FIRST_MESSAGES[lang] || FIRST_MESSAGES['en']; }
     let conversation = null;
     let currentLang = new URLSearchParams(window.location.search).get('language') || 'en';
     const widget = document.getElementById('widget');
@@ -958,10 +1010,11 @@ function generateClassicWidget({ t, agentName, elevenLabsId, greeting, langListH
         return;
       }
       try {
+        const firstMsg = getFirstMessage(currentLang);
         conversation = await Conversation.startSession({
           agentId: AGENT_ID,
           overrides: {
-            agent: { firstMessage: GREETING, language: currentLang }
+            agent: { language: currentLang, firstMessage: firstMsg }
           },
           dynamicVariables: {
             locationId: new URLSearchParams(window.location.search).get('locationId') || '',
