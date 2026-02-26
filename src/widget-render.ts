@@ -90,6 +90,9 @@ const LANGUAGES = [
   { code: 'vi', name: 'Vietnamese', flag: '🇻🇳' }
 ];
 
+// 8 default languages shown without searching (matches demo/settings pages)
+const DEFAULT_LANG_CODES = ['en', 'es', 'ja', 'zh', 'fr', 'de', 'ko', 'pt-BR'];
+
 interface WidgetOptions {
   agentId: string;
   theme?: string;
@@ -113,9 +116,10 @@ function generateWidgetHTML(options: WidgetOptions): string {
   const elevenLabsId = ELEVENLABS_AGENTS[agentKey] || ELEVENLABS_AGENTS.sophia;
   const greeting = AGENT_GREETINGS[agentKey] || AGENT_GREETINGS.sophia;
 
-  const langListHTML = LANGUAGES.map(l =>
-    `<button data-code="${l.code}"><span class="lang-flag">${l.flag}</span> ${l.name}</button>`
-  ).join('');
+  const langListHTML = LANGUAGES.map(l => {
+    const isDefault = DEFAULT_LANG_CODES.includes(l.code);
+    return `<button data-code="${l.code}" data-default="${isDefault}"${!isDefault ? ' style="display:none"' : ''}><span class="lang-flag">${l.flag}</span> ${l.name}</button>`;
+  }).join('');
 
   // Generate different widgets based on type
   if (widgetType === 'banner') {
@@ -676,13 +680,38 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
     langBtn.addEventListener('click', e => { e.stopPropagation(); langDropdown.classList.toggle('open'); });
     langSearch.addEventListener('input', e => {
       const f = e.target.value.toLowerCase();
-      langList.querySelectorAll('button').forEach(b => b.style.display = b.textContent.toLowerCase().includes(f) ? 'flex' : 'none');
+      langList.querySelectorAll('button').forEach(b => {
+        if (f === '') {
+          // Show only default languages when search is empty
+          b.style.display = b.dataset.default === 'true' ? 'flex' : 'none';
+        } else {
+          // Show all matching languages when searching
+          b.style.display = b.textContent.toLowerCase().includes(f) ? 'flex' : 'none';
+        }
+      });
     });
     langList.addEventListener('click', e => {
       const b = e.target.closest('button');
-      if (b) { currentLang = b.dataset.code; langDropdown.classList.remove('open'); }
+      if (b) {
+        currentLang = b.dataset.code;
+        langDropdown.classList.remove('open');
+        langSearch.value = '';
+        // Reset to show only defaults
+        langList.querySelectorAll('button').forEach(btn => {
+          btn.style.display = btn.dataset.default === 'true' ? 'flex' : 'none';
+        });
+      }
     });
-    document.addEventListener('click', e => { if (!langDropdown.contains(e.target) && e.target !== langBtn) langDropdown.classList.remove('open'); });
+    document.addEventListener('click', e => {
+      if (!langDropdown.contains(e.target) && e.target !== langBtn) {
+        langDropdown.classList.remove('open');
+        langSearch.value = '';
+        // Reset to show only defaults
+        langList.querySelectorAll('button').forEach(btn => {
+          btn.style.display = btn.dataset.default === 'true' ? 'flex' : 'none';
+        });
+      }
+    });
 
     window.addEventListener('message', e => { if (e.data?.type === 'bnx-close' && conversation) conversation.endSession(); });
   </script>
@@ -781,6 +810,7 @@ function generateBannerWidget({ t, agentName, elevenLabsId, greeting, langListHT
     const AGENT_ID = '${elevenLabsId}';
     const GREETING = ${JSON.stringify(greeting)};
     let conversation = null;
+    let currentLang = new URLSearchParams(window.location.search).get('language') || 'en';
     const widget = document.getElementById('widget');
     const callBtn = document.getElementById('callBtn');
 
@@ -796,11 +826,12 @@ function generateBannerWidget({ t, agentName, elevenLabsId, greeting, langListHT
         conversation = await Conversation.startSession({
           agentId: AGENT_ID,
           overrides: {
-            agent: { firstMessage: GREETING }
+            agent: { firstMessage: GREETING, language: currentLang }
           },
           dynamicVariables: {
             locationId: new URLSearchParams(window.location.search).get('locationId') || '',
-            conversation_mode: 'voice_call'
+            conversation_mode: 'voice_call',
+            language: currentLang
           },
           onConnect: () => {
             widget.classList.add('speaking');
@@ -910,6 +941,7 @@ function generateClassicWidget({ t, agentName, elevenLabsId, greeting, langListH
     const AGENT_ID = '${elevenLabsId}';
     const GREETING = ${JSON.stringify(greeting)};
     let conversation = null;
+    let currentLang = new URLSearchParams(window.location.search).get('language') || 'en';
     const widget = document.getElementById('widget');
     const callBtn = document.getElementById('callBtn');
 
@@ -924,11 +956,12 @@ function generateClassicWidget({ t, agentName, elevenLabsId, greeting, langListH
         conversation = await Conversation.startSession({
           agentId: AGENT_ID,
           overrides: {
-            agent: { firstMessage: GREETING }
+            agent: { firstMessage: GREETING, language: currentLang }
           },
           dynamicVariables: {
             locationId: new URLSearchParams(window.location.search).get('locationId') || '',
-            conversation_mode: 'voice_call'
+            conversation_mode: 'voice_call',
+            language: currentLang
           },
           onConnect: () => widget.classList.add('speaking'),
           onDisconnect: () => { widget.classList.remove('speaking'); conversation = null; }
