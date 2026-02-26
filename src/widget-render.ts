@@ -495,14 +495,26 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       text-align: center;
     }
     .widget-concierge .test-mode-banner {
-      background: #fff3cd;
+      background: linear-gradient(135deg, #fff3cd 0%, #ffeeba 100%);
       color: #856404;
-      padding: 6px 10px;
+      padding: 8px 10px;
       border-radius: 6px;
       font-size: 10px;
       text-align: center;
       margin-bottom: 10px;
       font-weight: 500;
+      border: 1px solid #ffc107;
+    }
+    .widget-concierge .test-mode-banner .test-title {
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .widget-concierge .test-mode-banner .test-card {
+      font-family: monospace;
+      background: rgba(255,255,255,0.5);
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 9px;
     }
     .widget-concierge .payment-success {
       text-align: center;
@@ -640,7 +652,10 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
             </div>
             <!-- Payment Form (hidden by default) -->
             <div class="payment-form" id="paymentForm">
-              <div class="test-mode-banner" id="testModeBanner" style="display:none;">TEST MODE - No real charges</div>
+              <div class="test-mode-banner" id="testModeBanner" style="display:none;">
+                <div class="test-title">SANDBOX MODE - No real charges</div>
+                <div>Use test card: <span class="test-card">4242 4242 4242 4242</span></div>
+              </div>
               <h4><svg viewBox="0 0 24 24"><path d="M20 4H4c-1.11 0-1.99.89-1.99 2L2 18c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V6c0-1.11-.89-2-2-2zm0 14H4v-6h16v6zm0-10H4V6h16v2z"/></svg> Secure Payment</h4>
               <div class="payment-amount" id="paymentAmount">$0.00</div>
               <div class="card-element" id="cardElement"></div>
@@ -919,6 +934,42 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       return paymentSettings.deposit_amount;
     }
 
+    // Check agent messages for payment trigger phrases
+    function checkPaymentTrigger(message) {
+      if (!paymentSettings?.payments_enabled) return;
+
+      // Trigger phrases that indicate booking confirmation and need for deposit
+      const triggerPhrases = [
+        'collect your deposit',
+        'take your deposit',
+        'process your deposit',
+        'need a deposit',
+        'require a deposit',
+        'secure your booking',
+        'secure your appointment',
+        'confirm with a deposit',
+        '[COLLECT_DEPOSIT]', // Explicit trigger the agent can use
+        '[PAYMENT_REQUIRED]'
+      ];
+
+      const lowerMsg = message.toLowerCase();
+      const shouldTrigger = triggerPhrases.some(phrase => lowerMsg.includes(phrase.toLowerCase()));
+
+      if (shouldTrigger) {
+        console.log('[Payment] Agent triggered payment collection');
+
+        // Use default deposit amount from settings
+        // The agent should have mentioned the service price, but we use settings default
+        const depositAmount = paymentSettings.deposit_amount;
+
+        // Show payment form - opens chat panel for voice users
+        showPaymentForm(depositAmount, null, {
+          triggeredBy: 'agent',
+          message: message
+        });
+      }
+    }
+
     // Listen for payment trigger from conversation/agent
     window.addEventListener('message', (e) => {
       if (e.data?.type === 'bnx-collect-payment') {
@@ -977,10 +1028,22 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
               conversation: { textOnly: true },
               agent: { firstMessage: firstMsg, language: currentLang }
             },
+            dynamicVariables: {
+              locationId: new URLSearchParams(window.location.search).get('locationId') || '',
+              conversation_mode: 'chat',
+              language: currentLang,
+              payments_enabled: paymentSettings?.payments_enabled ? 'true' : 'false',
+              deposit_type: paymentSettings?.deposit_type || 'fixed',
+              deposit_amount: paymentSettings?.deposit_type === 'percentage'
+                ? (paymentSettings?.deposit_amount || 50) + '%'
+                : '$' + ((paymentSettings?.deposit_amount || 5000) / 100).toFixed(0)
+            },
             onMessage: (m) => {
               if (m.source === 'ai') {
                 setTyping(false);
                 addMessage(m.message, false);
+                // Check for payment trigger in agent message
+                checkPaymentTrigger(m.message);
               }
             },
             onError: () => setTyping(false),
@@ -1017,7 +1080,12 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
           dynamicVariables: {
             locationId: new URLSearchParams(window.location.search).get('locationId') || '',
             conversation_mode: 'voice_call',
-            language: currentLang
+            language: currentLang,
+            payments_enabled: paymentSettings?.payments_enabled ? 'true' : 'false',
+            deposit_type: paymentSettings?.deposit_type || 'fixed',
+            deposit_amount: paymentSettings?.deposit_type === 'percentage'
+              ? (paymentSettings?.deposit_amount || 50) + '%'
+              : '$' + ((paymentSettings?.deposit_amount || 5000) / 100).toFixed(0)
           },
           onConnect: () => {
             widget.classList.add('speaking');
@@ -1029,7 +1097,11 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
             conversation = null;
           },
           onMessage: (m) => {
-            if (m.source === 'ai') { setTyping(false); addMessage(m.message, false); }
+            if (m.source === 'ai') {
+              setTyping(false);
+              addMessage(m.message, false);
+              checkPaymentTrigger(m.message);
+            }
             else if (m.source === 'user') { addMessage(m.message, true); setTyping(true); }
           },
           onError: () => { widget.classList.remove('speaking'); }
