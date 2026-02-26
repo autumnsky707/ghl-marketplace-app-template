@@ -40,3 +40,30 @@ COMMENT ON COLUMN payment_settings.auto_require_amount IS 'Threshold amount in c
 COMMENT ON COLUMN payment_settings.deposit_type IS 'fixed = flat amount, percentage = % of service price';
 COMMENT ON COLUMN payment_settings.deposit_amount IS 'Deposit amount: cents if fixed, whole number if percentage';
 COMMENT ON COLUMN payment_settings.unpaid_policy IS 'What happens if deposit not paid: hold_24h, keep_unpaid, dont_confirm';
+
+-- ========================================
+-- Per-Package Deposit Overrides Table
+-- ========================================
+CREATE TABLE IF NOT EXISTS package_deposit_overrides (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  location_id TEXT NOT NULL,
+  package_id TEXT NOT NULL,
+  override_enabled BOOLEAN DEFAULT FALSE,
+  require_deposit BOOLEAN DEFAULT TRUE,
+  deposit_type TEXT DEFAULT 'fixed' CHECK (deposit_type IN ('fixed', 'percentage')),
+  deposit_amount_fixed INTEGER DEFAULT 5000,
+  deposit_amount_percent INTEGER DEFAULT 25,
+  not_paid_action TEXT DEFAULT 'hold_24h' CHECK (not_paid_action IN ('hold_24h', 'keep_unpaid', 'dont_confirm')),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  UNIQUE(location_id, package_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_package_overrides_location ON package_deposit_overrides(location_id);
+
+ALTER TABLE package_deposit_overrides ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role has full access to package_deposit_overrides"
+  ON package_deposit_overrides FOR ALL USING (true) WITH CHECK (true);
+
+COMMENT ON TABLE package_deposit_overrides IS 'Per-package deposit settings that override global settings';

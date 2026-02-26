@@ -32,6 +32,9 @@ function getStripeConfig(locationId: string) {
     secretKey: isDemo
       ? process.env.STRIPE_TEST_SECRET_KEY
       : process.env.STRIPE_LIVE_SECRET_KEY,
+    clientId: isDemo
+      ? process.env.STRIPE_TEST_CLIENT_ID
+      : process.env.STRIPE_LIVE_CLIENT_ID,
     webhookSecret: isDemo
       ? process.env.STRIPE_TEST_WEBHOOK_SECRET
       : process.env.STRIPE_LIVE_WEBHOOK_SECRET,
@@ -193,9 +196,10 @@ router.get("/stripe/connect", async (req: Request, res: Response) => {
     return res.status(400).send("Missing locationId");
   }
 
-  const clientId = process.env.STRIPE_CLIENT_ID;
+  // Get the correct client ID based on location (test vs live)
+  const { clientId, isTestMode } = getStripeConfig(locationId as string);
   if (!clientId) {
-    console.error("[Stripe] Missing STRIPE_CLIENT_ID");
+    console.error("[Stripe] Missing STRIPE_TEST_CLIENT_ID or STRIPE_LIVE_CLIENT_ID");
     return res.status(500).send("Stripe Connect not configured");
   }
 
@@ -212,7 +216,7 @@ router.get("/stripe/connect", async (req: Request, res: Response) => {
 
   const connectUrl = `https://connect.stripe.com/oauth/authorize?${params.toString()}`;
 
-  console.log(`[Stripe] Initiating Connect OAuth for location: ${locationId}`);
+  console.log(`[Stripe] Initiating Connect OAuth for location: ${locationId} (${isTestMode ? 'TEST' : 'LIVE'} mode)`);
   res.redirect(connectUrl);
 });
 
@@ -485,5 +489,128 @@ router.post(
 
 // Need to import express for raw body parsing in webhook
 import express from "express";
+
+// ========================================
+// DEPOSIT SETTINGS ENDPOINTS (for setup page)
+// ========================================
+
+/**
+ * GET /api/payments/deposit-settings
+ * Get global deposit settings (formatted for setup page)
+ */
+router.get("/deposit-settings", async (req: Request, res: Response) => {
+  const { locationId } = req.query;
+
+  if (!locationId) {
+    return res.status(400).json({ success: false, error: "Missing locationId" });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("payment_settings")
+      .select("*")
+      .eq("location_id", locationId)
+      .single();
+
+    if (error && error.code !== "PGRST116") {
+      console.error("[Deposits] Error fetching settings:", error);
+      return res.status(500).json({ success: false, error: "Database error" });
+    }
+
+    // Map to format expected by setup page
+    const settings = data ? {
+      requireDeposits: data.payments_enabled,
+      applyTo: data.apply_to,
+      autoThresholdEnabled: data.auto_require_above,
+      autoThresholdAmount: (data.auto_require_amount || 0) / 100, // Convert cents to dollars
+      defaultType: data.deposit_type,
+      defaultAmountFixed: data.deposit_type === 'fixed' ? (data.deposit_amount || 5000) / 100 : 50,
+      defaultAmountPercent: data.deposit_type === 'percentage' ? data.deposit_amount : 25,
+      notPaidAction: data.unpaid_policy
+    } : {
+      requireDeposits: false,
+      applyTo: 'both',
+      autoThresholdEnabled: false,
+      autoThresholdAmount: 100,
+      defaultType: 'fixed',
+      defaultAmountFixed: 50,
+      defaultAmountPercent: 25,
+      notPaidAction: 'hold_24h'
+    };
+
+    return res.json({ success: true, settings });
+  } catch (error: any) {
+    console.error("[Deposits] Error:", error.message);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/payments/deposit-overrides
+ * Get per-package deposit overrides
+ */
+router.get("/deposit-overrides", async (req: Request, res: Response) => {
+  const { locationId } = req.query;
+
+  if (!locationId) {
+    return res.status(400).json({ success: false, error: "Missing locationId" });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("package_deposit_overrides")
+      .select("*")
+      .eq("location_id", locationId);
+
+    if (error) {
+      console.error("[Deposits] Error fetching overrides:", error);
+      return res.status(500).json({ success: false, error: "Database error" });
+    }
+
+    return res.json({ success: true, overrides: data || [] });
+  } catch (error: any) {
+    console.error("[Deposits] Error:", error.message);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/payments/deposit-overrides
+ * Save per-package deposit override
+ */
+router.post("/deposit-overrides", async (req: Request, res: Response) => {
+  const { locationId, packageId, override } = req.body;
+
+  if (!locationId || !packageId) {
+    return res.status(400).json({ success: false, error: "Missing locationId or packageId" });
+  }
+
+  try {
+    const { error } = await supabase
+      .from("package_deposit_overrides")
+      .upsert({
+        location_id: locationId,
+        package_id: packageId,
+        override_enabled: override?.override_enabled ?? false,
+        require_deposit: override?.require_deposit ?? true,
+        deposit_type: override?.deposit_type ?? 'fixed',
+        deposit_amount_fixed: Math.round((override?.deposit_amount_fixed || 50) * 100), // Convert to cents
+        deposit_amount_percent: override?.deposit_amount_percent ?? 25,
+        not_paid_action: override?.not_paid_action ?? 'hold_24h',
+        updated_at: new Date().toISOString()
+      }, { onConflict: "location_id,package_id" });
+
+    if (error) {
+      console.error("[Deposits] Error saving override:", error);
+      return res.status(500).json({ success: false, error: "Database error" });
+    }
+
+    console.log(`[Deposits] Override saved for package: ${packageId}`);
+    return res.json({ success: true });
+  } catch (error: any) {
+    console.error("[Deposits] Error:", error.message);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 export default router;

@@ -736,7 +736,7 @@
       if (!locationId) return;
 
       try {
-        const response = await fetch(`${API_BASE}/api/deposit-settings?locationId=${locationId}`);
+        const response = await fetch(`${API_BASE}/api/payments/deposit-settings?locationId=${locationId}`);
         if (response.ok) {
           const data = await response.json();
           if (data && data.settings) {
@@ -754,7 +754,7 @@
       if (!locationId) return;
 
       try {
-        const response = await fetch(`${API_BASE}/api/deposit-overrides?locationId=${locationId}`);
+        const response = await fetch(`${API_BASE}/api/payments/deposit-overrides?locationId=${locationId}`);
         if (response.ok) {
           const data = await response.json();
           if (data && data.overrides) {
@@ -776,7 +776,7 @@
       if (!locationId) return;
 
       try {
-        const response = await fetch(`${API_BASE}/api/deposit-overrides`, {
+        const response = await fetch(`${API_BASE}/api/payments/deposit-overrides`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
