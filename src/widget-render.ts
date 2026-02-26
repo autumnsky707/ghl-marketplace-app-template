@@ -116,10 +116,14 @@ function generateWidgetHTML(options: WidgetOptions): string {
   const elevenLabsId = ELEVENLABS_AGENTS[agentKey] || ELEVENLABS_AGENTS.sophia;
   const greeting = AGENT_GREETINGS[agentKey] || AGENT_GREETINGS.sophia;
 
-  const langListHTML = LANGUAGES.map(l => {
-    const isDefault = DEFAULT_LANG_CODES.includes(l.code);
-    return `<button data-code="${l.code}" data-default="${isDefault}"${!isDefault ? ' style="display:none"' : ''}><span class="lang-flag">${l.flag}</span> ${l.name}</button>`;
-  }).join('');
+  // Generate language list with 8 defaults FIRST in correct order, then rest hidden
+  const defaultLangs = DEFAULT_LANG_CODES.map(code => LANGUAGES.find(l => l.code === code)!);
+  const otherLangs = LANGUAGES.filter(l => !DEFAULT_LANG_CODES.includes(l.code));
+
+  const langListHTML = [
+    ...defaultLangs.map(l => `<button data-code="${l.code}" data-default="true"><span class="lang-flag">${l.flag}</span> ${l.name}</button>`),
+    ...otherLangs.map(l => `<button data-code="${l.code}" data-default="false" style="display:none"><span class="lang-flag">${l.flag}</span> ${l.name}</button>`)
+  ].join('');
 
   // Generate different widgets based on type
   if (widgetType === 'banner') {
@@ -642,10 +646,11 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
         return;
       }
       try {
+        console.log('Starting voice with language:', currentLang);
         conversation = await Conversation.startSession({
           agentId: AGENT_ID,
           overrides: {
-            agent: { firstMessage: GREETING, language: currentLang }
+            agent: { language: currentLang, firstMessage: GREETING }
           },
           dynamicVariables: {
             locationId: new URLSearchParams(window.location.search).get('locationId') || '',
