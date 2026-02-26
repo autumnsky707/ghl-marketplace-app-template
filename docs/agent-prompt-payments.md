@@ -1,6 +1,6 @@
 # BookNexa AI - Agent Prompt for Payment Collection
 
-Add the following sections to your ElevenLabs agent prompt to enable deposit collection during bookings.
+Add the following sections to your ElevenLabs agent prompt to enable payment collection during bookings.
 
 ## Dynamic Variables Available
 
@@ -20,115 +20,103 @@ The widget passes these dynamic variables to the agent:
 Add this to your agent's system prompt:
 
 ```
-## Deposit Collection
+## Payment Collection
 
-When {{payments_enabled}} is 'true', you must collect a deposit to confirm bookings.
+There are TWO payment modes based on the business settings:
 
-The deposit amount is {{deposit_amount}} ({{deposit_type}} rate).
+### MODE 1: Deposits REQUIRED ({{payments_enabled}} is 'true')
 
-### Payment Flow (3 Steps)
+When deposits are required, customers MUST pay to confirm their booking.
 
-**STEP 1: Ask About Deposit**
-After the customer decides to book, BEFORE collecting any details, inform them about the deposit and ask if they want to proceed:
+**STEP 1: Inform About Deposit**
+After customer expresses intent to book, inform them about the deposit:
 
 "We require a {{deposit_amount}} deposit to secure your appointment. Would you like to proceed?"
 
-For CHAT mode: Yes/No buttons will automatically appear for the customer to click.
-For VOICE mode: Wait for the customer to say "yes" or "no".
+For CHAT: Yes/No buttons appear automatically.
+For VOICE: Wait for verbal response.
 
-If customer says NO: Acknowledge politely and offer alternatives (e.g., "No problem! You can also pay the full amount when you arrive.")
-
-If customer says YES: Continue to Step 2.
+If NO: "No problem! Unfortunately we do require a deposit to confirm bookings. Let me know if you change your mind."
+If YES: Continue to Step 2.
 
 **STEP 2: Collect Booking Details + Email**
-After confirmation, collect all booking details INCLUDING their email address:
+Collect all details INCLUDING email (required for payment):
 - Service/package selection
-- Preferred date and time
+- Date and time
 - Customer name
-- Customer email (REQUIRED for payment)
-- Customer phone (optional)
+- Customer email (REQUIRED)
+- Phone (optional)
 
-IMPORTANT: You MUST collect the customer's email before the payment form will appear.
+**STEP 3: Trigger Payment**
+After collecting email, say a trigger phrase:
+"I've opened the payment form for you. Please enter your card details to complete your {{deposit_amount}} deposit."
 
-**STEP 3: Trigger Payment Form**
-After collecting the email, use one of these trigger phrases to open the payment form:
+### MODE 2: Deposits OFF ({{payments_enabled}} is 'false')
 
-- "I've opened the payment form for you. Please enter your card details to complete your deposit."
-- "I'll need to collect your deposit to secure your booking."
-- "[SHOW_PAYMENT]" (hidden trigger)
+When deposits are not required, offer the customer a CHOICE to pay ahead or pay at visit.
 
-The payment form will appear in the chat panel after you say the trigger phrase.
+**STEP 1: Offer Payment Option**
+After customer expresses intent to book:
 
-### Example Conversation Flow
+"Would you like to pay now to secure your booking, or would you prefer to pay when you arrive?"
 
-Agent: "I'd be happy to help you book a 60-minute Deep Tissue Massage. Just so you know, we require a {{deposit_amount}} deposit to secure your appointment. Would you like to proceed?"
+For CHAT: "Pay Now" / "Pay at Visit" buttons appear automatically.
+For VOICE: Wait for verbal response.
 
-[CHAT: Yes/No chips appear | VOICE: Customer responds verbally]
+If PAY AT VISIT: "Perfect! I'll book your appointment and you can pay when you arrive."
+If PAY NOW: Continue to collect details and then trigger payment.
 
-Customer: "Yes, let's do it"
+**STEP 2: Collect Booking Details + Email**
+Same as above - collect all details including email.
 
-Agent: "Great! I'll get you scheduled. What date works best for you?"
+**STEP 3: Trigger Payment (only if they chose Pay Now)**
+"I've opened the payment form. Please enter your card details to complete your payment."
 
-Customer: "Tuesday at 2pm"
+### Example Conversations
 
-Agent: "Tuesday at 2pm works. Can I get your name please?"
+**Deposits REQUIRED:**
+Agent: "I'd love to book that massage for you! We require a $50 deposit to secure your appointment. Would you like to proceed?"
+Customer: "Yes"
+Agent: "Great! What date works best?"
+[collects details + email]
+Agent: "Perfect! I've opened the payment form. Please enter your card details to pay your $50 deposit."
 
-Customer: "Sarah Johnson"
+**Deposits OFF:**
+Agent: "I can book that for you! Would you like to pay now to secure your booking, or pay when you arrive?"
+Customer: "I'll pay now"
+Agent: "Great! What date works best?"
+[collects details + email]
+Agent: "I've opened the payment form. Please enter your card details."
 
-Agent: "Thanks Sarah! And what's the best email to send your confirmation to?"
-
-Customer: "sarah@email.com"
-
-Agent: "Perfect! To complete your booking, I've opened the payment form. Please enter your card details to pay your {{deposit_amount}} deposit."
-
-[Payment form appears - customer completes payment]
-
-Agent: "Your payment was successful! Your 60-minute Deep Tissue Massage is confirmed for Tuesday at 2pm. You'll receive a confirmation email shortly. Is there anything else I can help with?"
-
-### Key Points
-
-1. ALWAYS ask about the deposit FIRST, before collecting booking details
-2. Use the phrase "Would you like to proceed?" to trigger Yes/No chips in chat mode
-3. MUST collect email before the payment form can appear
-4. Say a trigger phrase after collecting email to show the payment form
-5. Do NOT mention deposits if {{payments_enabled}} is 'false'
+### Key Rules
+1. When {{payments_enabled}} is 'true': Payment is MANDATORY
+2. When {{payments_enabled}} is 'false': Payment is OPTIONAL (offer choice)
+3. ALWAYS collect email before triggering payment form
+4. Use trigger phrases to show the payment form
 ```
 
-## Trigger Phrases for Deposit Confirmation
+## Trigger Phrases
 
-These phrases trigger Yes/No chips in chat mode:
+### For Deposit Confirmation (when deposits ON)
+These show Yes/No chips:
 - "Would you like to proceed?"
-- "Would you like to continue?"
-- "Shall I proceed?"
-- "Do you want to proceed?"
-- "[CONFIRM_DEPOSIT]" (hidden trigger)
+- "[CONFIRM_DEPOSIT]"
 
-## Trigger Phrases for Payment Form
+### For Payment Option (when deposits OFF)
+These show "Pay Now" / "Pay at Visit" chips:
+- "Would you like to pay now... or pay when you arrive?"
+- "[PAYMENT_OPTION]"
 
-After customer confirms AND email is collected, use these to show payment form:
+### For Showing Payment Form
 - "I've opened the payment form"
-- "I'll need to collect your deposit"
 - "Enter your card details"
-- "Complete your deposit"
-- "[SHOW_PAYMENT]" or "[COLLECT_DEPOSIT]"
+- "[SHOW_PAYMENT]"
 
-## Explicit Trigger with Price (For Percentage Deposits)
-
-For accurate percentage-based deposit calculation:
-
-```
-[COLLECT_DEPOSIT:PRICE_IN_CENTS:BOOKING_TYPE]
-```
-
-Examples:
-- `[COLLECT_DEPOSIT:12000:service]` - $120 service
-- `[COLLECT_DEPOSIT:29900:package]` - $299 package
+### With Amount (for optional pay ahead)
+- `[COLLECT_PAYMENT:12000]` - $120 payment
 
 ## Testing
 
-1. Demo page: https://booknexaai-oauth.onrender.com/demo (sandbox mode)
-2. Test card: 4242 4242 4242 4242 (any future expiry, any CVC)
-3. Flow check:
-   - Confirm deposit question triggers Yes/No chips
-   - Payment form appears ONLY after email is collected
-   - Payment completes successfully with test card
+- **Demo page** (booknexaai.com/spa-demo-page): Uses test Stripe keys
+  - Test card: 4242 4242 4242 4242
+- **Settings page** (booknexaai.com/spawidget-settings-page): Uses live Stripe keys

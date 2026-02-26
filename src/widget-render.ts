@@ -789,6 +789,7 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
     let customerEmail = null;
     let pendingDepositAmount = null;
     let pendingBookingDetails = null;
+    let customerWantsToPayAhead = false; // For when deposits are OFF but customer chooses to pay
 
     // Initialize UI with current language
     updateWidgetLanguage(currentLang);
@@ -1032,6 +1033,59 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       });
     }
 
+    // Show "Pay Now" / "Pay at Visit" chips when deposits are OFF
+    // This gives customer the OPTION to pay ahead or pay later
+    function showPaymentOptionChips() {
+      const chipsEl = document.getElementById('chips');
+
+      chipsEl.innerHTML = \`
+        <button class="chip payment-option-chip" data-action="pay-now" style="background: linear-gradient(135deg, var(--c), var(--cd)); color: #fff; border: none;">Pay Now</button>
+        <button class="chip payment-option-chip" data-action="pay-later" style="border-color: var(--c); color: var(--cd);">Pay at Visit</button>
+      \`;
+      chipsEl.style.display = 'flex';
+
+      // Add click handlers
+      chipsEl.querySelectorAll('.payment-option-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+          const action = chip.dataset.action;
+          if (action === 'pay-now') {
+            customerWantsToPayAhead = true;
+            sendMessage("I'd like to pay now to secure my booking");
+            console.log('[Payment] Customer chose to pay ahead');
+          } else {
+            customerWantsToPayAhead = false;
+            sendMessage("I'll pay when I arrive");
+            console.log('[Payment] Customer chose to pay at visit');
+          }
+          resetDefaultChips();
+        });
+      });
+    }
+
+    // Check for payment preference question when deposits are OFF
+    function checkPaymentPreference(message) {
+      // Only applies when deposits are OFF
+      if (paymentSettings?.payments_enabled) return false;
+
+      const lowerMsg = message.toLowerCase();
+
+      // Detect payment preference question
+      const asksAboutPayment = lowerMsg.includes('would you like to pay') ||
+                               lowerMsg.includes('pay now') && lowerMsg.includes('pay later') ||
+                               lowerMsg.includes('pay ahead') ||
+                               lowerMsg.includes('secure your booking') ||
+                               lowerMsg.includes('payment preference') ||
+                               lowerMsg.includes('[PAYMENT_OPTION]');
+
+      if (asksAboutPayment) {
+        console.log('[Payment] Payment preference question detected, showing Pay Now / Pay at Visit chips');
+        showPaymentOptionChips();
+        return true;
+      }
+
+      return false;
+    }
+
     // Check if message contains email and extract it
     function checkForEmail(message) {
       const emailMatch = message.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
@@ -1039,9 +1093,17 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
         customerEmail = emailMatch[0];
         console.log('[Payment] Email detected:', customerEmail);
 
-        // If deposit was confirmed and we now have email, show payment form
+        // If deposit was confirmed (required deposits ON) and we have email, show payment form
         if (depositConfirmed && pendingDepositAmount) {
-          console.log('[Payment] Email collected, showing payment form');
+          console.log('[Payment] Email collected, showing payment form (deposit required)');
+          showPaymentForm(pendingDepositAmount, customerEmail, pendingBookingDetails);
+          pendingDepositAmount = null;
+          pendingBookingDetails = null;
+        }
+
+        // If customer wants to pay ahead (deposits OFF) and we have email, show payment form
+        if (customerWantsToPayAhead && pendingDepositAmount) {
+          console.log('[Payment] Email collected, showing payment form (pay ahead)');
           showPaymentForm(pendingDepositAmount, customerEmail, pendingBookingDetails);
           pendingDepositAmount = null;
           pendingBookingDetails = null;
@@ -1138,15 +1200,66 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       }
     }
 
+    // Check for optional payment trigger when deposits are OFF but customer wants to pay ahead
+    function checkOptionalPaymentTrigger(message) {
+      // Only trigger if customer chose to pay ahead
+      if (!customerWantsToPayAhead) return;
+
+      const lowerMsg = message.toLowerCase();
+
+      // Trigger phrases for optional payment
+      const triggerPhrases = [
+        'collect your payment',
+        'take your payment',
+        'process your payment',
+        'opened the payment form',
+        'enter your card',
+        'complete your payment',
+        'pay now',
+        '[COLLECT_PAYMENT]',
+        '[SHOW_PAYMENT]'
+      ];
+
+      const shouldTrigger = triggerPhrases.some(phrase => lowerMsg.includes(phrase.toLowerCase()));
+
+      if (shouldTrigger) {
+        console.log('[Payment] Agent triggered optional payment');
+        // Use a default amount for optional payments (e.g., service price or fixed amount)
+        // This should ideally be passed from the agent with service price
+        const defaultPaymentAmount = 5000; // $50 default, can be overridden
+
+        // Check for explicit amount: [COLLECT_PAYMENT:12000]
+        const amountMatch = message.match(/\[COLLECT_PAYMENT:(\d+)\]/i);
+        const paymentAmount = amountMatch ? parseInt(amountMatch[1]) : defaultPaymentAmount;
+
+        if (customerEmail) {
+          showPaymentForm(paymentAmount, customerEmail, { triggeredBy: 'agent', payAhead: true });
+        } else {
+          pendingDepositAmount = paymentAmount;
+          pendingBookingDetails = { triggeredBy: 'agent', payAhead: true };
+          console.log('[Payment] Waiting for email before showing payment form (pay ahead)');
+        }
+      }
+    }
+
     // Process all agent message triggers
     function processAgentMessage(message) {
-      // Check for deposit confirmation prompt first
-      if (!depositConfirmed) {
-        checkDepositConfirmation(message);
+      // Different flows based on whether deposits are required
+      if (paymentSettings?.payments_enabled) {
+        // DEPOSITS ON: Must confirm deposit, then payment is required
+        if (!depositConfirmed) {
+          checkDepositConfirmation(message);
+        }
+        // Check for payment trigger (only works if deposit already confirmed)
+        checkPaymentTrigger(message);
+      } else {
+        // DEPOSITS OFF: Offer optional payment ahead
+        if (!customerWantsToPayAhead) {
+          checkPaymentPreference(message);
+        }
+        // Check for payment trigger (only works if customer chose to pay ahead)
+        checkOptionalPaymentTrigger(message);
       }
-
-      // Then check for payment trigger (only works if deposit already confirmed)
-      checkPaymentTrigger(message);
     }
 
     // Process user messages to detect email
