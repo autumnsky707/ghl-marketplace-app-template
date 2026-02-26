@@ -6,6 +6,7 @@ import { GHL } from "./ghl";
 import { json } from "body-parser";
 import { updateCalendarInfo, updateInstallationStatus, isInstallationActive } from "./db";
 import calendarRoutes from "./routes/calendar";
+import paymentRoutes from "./routes/payments";
 import { syncLocation, startPolling } from "./sync";
 import { widgetRenderHandler } from "./widget-render";
 
@@ -249,6 +250,9 @@ app.get("/reconnect", async (req: Request, res: Response) => {
 
 // Mount calendar API routes
 app.use("/api/calendar", calendarRoutes);
+
+// Mount payment API routes (Stripe Connect, payment settings, payment intents)
+app.use("/api/payments", paymentRoutes);
 
 // Widget embed system - CORS headers for cross-origin embedding
 app.get("/widget/embed.js", (req: Request, res: Response) => {

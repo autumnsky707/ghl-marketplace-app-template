@@ -433,6 +433,97 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       flex-shrink: 0;
     }
     .widget-concierge .send-btn svg { width: 14px; height: 14px; fill: #fff; }
+
+    /* Payment Form Styles */
+    .widget-concierge .payment-form {
+      display: none;
+      padding: 14px;
+      background: #fff;
+      border-radius: 12px;
+      margin: 8px 14px;
+      border: 1px solid #e8e0d2;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+    .widget-concierge .payment-form.active { display: block; }
+    .widget-concierge .payment-form h4 {
+      font-size: 13px;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .widget-concierge .payment-form h4 svg { width: 18px; height: 18px; fill: var(--c); }
+    .widget-concierge .payment-amount {
+      font-size: 24px;
+      font-weight: 600;
+      color: var(--cd);
+      text-align: center;
+      margin-bottom: 14px;
+    }
+    .widget-concierge .card-element {
+      padding: 12px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      background: #fafafa;
+      margin-bottom: 12px;
+    }
+    .widget-concierge .pay-btn {
+      width: 100%;
+      padding: 12px 20px;
+      background: linear-gradient(135deg, var(--c), var(--cd));
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .widget-concierge .pay-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px var(--glow); }
+    .widget-concierge .pay-btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+    .widget-concierge .pay-btn svg { width: 16px; height: 16px; fill: currentColor; }
+    .widget-concierge .payment-error {
+      color: #dc3545;
+      font-size: 12px;
+      margin-top: 8px;
+      text-align: center;
+    }
+    .widget-concierge .test-mode-banner {
+      background: #fff3cd;
+      color: #856404;
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 10px;
+      text-align: center;
+      margin-bottom: 10px;
+      font-weight: 500;
+    }
+    .widget-concierge .payment-success {
+      text-align: center;
+      padding: 20px;
+    }
+    .widget-concierge .payment-success svg {
+      width: 48px;
+      height: 48px;
+      fill: #28a745;
+      margin-bottom: 12px;
+    }
+    .widget-concierge .payment-success h4 {
+      color: #28a745;
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+    .widget-concierge .payment-success p {
+      color: #666;
+      font-size: 12px;
+    }
+
     .widget-concierge .btn-mic {
       width: 34px; height: 34px; min-width: 34px; min-height: 34px;
       border-radius: 50%; border: none;
@@ -547,6 +638,23 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
               <div class="msg a" id="greetingMsg">Hi! I'm ${agentName}, your AI spa concierge. How can I help you today?</div>
               <div class="typing" id="typing"><div class="td"></div><div class="td"></div><div class="td"></div></div>
             </div>
+            <!-- Payment Form (hidden by default) -->
+            <div class="payment-form" id="paymentForm">
+              <div class="test-mode-banner" id="testModeBanner" style="display:none;">TEST MODE - No real charges</div>
+              <h4><svg viewBox="0 0 24 24"><path d="M20 4H4c-1.11 0-1.99.89-1.99 2L2 18c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V6c0-1.11-.89-2-2-2zm0 14H4v-6h16v6zm0-10H4V6h16v2z"/></svg> Secure Payment</h4>
+              <div class="payment-amount" id="paymentAmount">$0.00</div>
+              <div class="card-element" id="cardElement"></div>
+              <button class="pay-btn" id="payBtn" disabled>
+                <svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
+                <span id="payBtnText">Pay Deposit</span>
+              </button>
+              <div class="payment-error" id="paymentError"></div>
+              <div class="payment-success" id="paymentSuccess" style="display:none;">
+                <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+                <h4>Payment Successful!</h4>
+                <p>Your deposit has been processed.</p>
+              </div>
+            </div>
             <div class="chips" id="chips">
               <button class="chip" data-msg="I'd like to book an appointment">Book Appt</button>
               <button class="chip" data-msg="What services do you offer?">Services</button>
@@ -633,9 +741,197 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
     let conversation = null;  // Voice session
     let chatSession = null;   // Text-only chat session (separate from voice)
     let currentLang = new URLSearchParams(window.location.search).get('language') || 'en';
+    const locationId = new URLSearchParams(window.location.search).get('locationId') || '';
+
+    // Payment state
+    let paymentSettings = null;
+    let stripe = null;
+    let cardElement = null;
+    let paymentIntentClientSecret = null;
 
     // Initialize UI with current language
     updateWidgetLanguage(currentLang);
+
+    // ========== PAYMENT SYSTEM ==========
+    const API_BASE = 'https://booknexaai-oauth.onrender.com';
+
+    // Fetch payment settings on load
+    async function loadPaymentSettings() {
+      if (!locationId) return;
+      try {
+        const resp = await fetch(API_BASE + '/api/payments/settings/' + locationId);
+        const data = await resp.json();
+        if (data.success) {
+          paymentSettings = data.settings;
+          console.log('[Payment] Settings loaded:', paymentSettings);
+          if (paymentSettings.payments_enabled) {
+            await loadStripeJs();
+          }
+        }
+      } catch (e) {
+        console.error('[Payment] Failed to load settings:', e);
+      }
+    }
+
+    // Load Stripe.js dynamically
+    async function loadStripeJs() {
+      if (window.Stripe) return;
+      return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://js.stripe.com/v3/';
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+      });
+    }
+
+    // Initialize Stripe Elements
+    async function initStripeElements(publishableKey) {
+      if (!window.Stripe) await loadStripeJs();
+      stripe = window.Stripe(publishableKey);
+      const elements = stripe.elements();
+      cardElement = elements.create('card', {
+        style: {
+          base: {
+            fontSize: '14px',
+            color: '#333',
+            fontFamily: 'Inter, -apple-system, sans-serif',
+            '::placeholder': { color: '#999' }
+          }
+        }
+      });
+      cardElement.mount('#cardElement');
+      cardElement.on('change', (e) => {
+        document.getElementById('payBtn').disabled = !e.complete;
+        document.getElementById('paymentError').textContent = e.error ? e.error.message : '';
+      });
+    }
+
+    // Show payment form with amount
+    async function showPaymentForm(amountCents, customerEmail, bookingDetails) {
+      if (!paymentSettings?.payments_enabled) return;
+
+      const paymentForm = document.getElementById('paymentForm');
+      const testBanner = document.getElementById('testModeBanner');
+      const amountEl = document.getElementById('paymentAmount');
+      const payBtn = document.getElementById('payBtn');
+      const errorEl = document.getElementById('paymentError');
+      const successEl = document.getElementById('paymentSuccess');
+
+      // Reset form
+      payBtn.disabled = true;
+      errorEl.textContent = '';
+      successEl.style.display = 'none';
+      payBtn.querySelector('span').textContent = 'Pay $' + (amountCents / 100).toFixed(2);
+      amountEl.textContent = '$' + (amountCents / 100).toFixed(2);
+
+      // Show test mode banner if applicable
+      if (paymentSettings.isTestMode) {
+        testBanner.style.display = 'block';
+      }
+
+      // Create payment intent
+      try {
+        const resp = await fetch(API_BASE + '/api/payments/create-intent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            locationId,
+            amount: amountCents,
+            customerEmail,
+            bookingDetails
+          })
+        });
+        const data = await resp.json();
+        if (!data.success) throw new Error(data.error);
+
+        paymentIntentClientSecret = data.clientSecret;
+        await initStripeElements(data.publishableKey);
+
+        // Show form and open chat panel
+        paymentForm.classList.add('active');
+        widget.classList.add('chat-open');
+
+      } catch (e) {
+        console.error('[Payment] Failed to create intent:', e);
+        errorEl.textContent = 'Failed to initialize payment. Please try again.';
+      }
+    }
+
+    // Handle payment submission
+    async function submitPayment() {
+      const payBtn = document.getElementById('payBtn');
+      const errorEl = document.getElementById('paymentError');
+      const successEl = document.getElementById('paymentSuccess');
+      const formContent = document.querySelectorAll('#paymentForm > *:not(.payment-success)');
+
+      payBtn.disabled = true;
+      payBtn.querySelector('span').textContent = 'Processing...';
+      errorEl.textContent = '';
+
+      try {
+        const { error, paymentIntent } = await stripe.confirmCardPayment(paymentIntentClientSecret, {
+          payment_method: { card: cardElement }
+        });
+
+        if (error) {
+          errorEl.textContent = error.message;
+          payBtn.disabled = false;
+          payBtn.querySelector('span').textContent = 'Try Again';
+        } else if (paymentIntent.status === 'succeeded') {
+          // Hide form elements, show success
+          formContent.forEach(el => el.style.display = 'none');
+          successEl.style.display = 'block';
+
+          // Notify parent/conversation that payment succeeded
+          window.postMessage({ type: 'bnx-payment-success', paymentIntentId: paymentIntent.id }, '*');
+
+          // Auto-hide form after 3 seconds
+          setTimeout(() => {
+            document.getElementById('paymentForm').classList.remove('active');
+          }, 3000);
+        }
+      } catch (e) {
+        console.error('[Payment] Error:', e);
+        errorEl.textContent = 'Payment failed. Please try again.';
+        payBtn.disabled = false;
+        payBtn.querySelector('span').textContent = 'Try Again';
+      }
+    }
+
+    // Calculate deposit amount based on settings
+    function calculateDeposit(servicePrice, bookingType) {
+      if (!paymentSettings?.payments_enabled) return 0;
+
+      // Check apply_to setting
+      if (paymentSettings.apply_to === 'packages' && bookingType !== 'package') return 0;
+      if (paymentSettings.apply_to === 'services' && bookingType !== 'service') return 0;
+
+      // Check auto-require threshold
+      if (paymentSettings.auto_require_above && servicePrice < paymentSettings.auto_require_amount) {
+        return 0;
+      }
+
+      // Calculate amount
+      if (paymentSettings.deposit_type === 'percentage') {
+        return Math.round(servicePrice * (paymentSettings.deposit_amount / 100));
+      }
+      return paymentSettings.deposit_amount;
+    }
+
+    // Listen for payment trigger from conversation/agent
+    window.addEventListener('message', (e) => {
+      if (e.data?.type === 'bnx-collect-payment') {
+        const { amount, email, bookingDetails } = e.data;
+        showPaymentForm(amount, email, bookingDetails);
+      }
+    });
+
+    // Initialize payment system
+    loadPaymentSettings();
+
+    // Pay button click handler
+    document.getElementById('payBtn').addEventListener('click', submitPayment);
 
     const widget = document.getElementById('widget');
     const callBtn = document.getElementById('callBtn');
