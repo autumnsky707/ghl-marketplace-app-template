@@ -784,6 +784,12 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
     let cardElement = null;
     let paymentIntentClientSecret = null;
 
+    // Deposit flow state
+    let depositConfirmed = false;
+    let customerEmail = null;
+    let pendingDepositAmount = null;
+    let pendingBookingDetails = null;
+
     // Initialize UI with current language
     updateWidgetLanguage(currentLang);
 
@@ -973,11 +979,111 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       return paymentSettings.deposit_amount;
     }
 
+    // Format deposit amount for display
+    function formatDepositAmount() {
+      if (!paymentSettings) return '';
+      if (paymentSettings.deposit_type === 'percentage') {
+        return paymentSettings.deposit_amount + '% deposit';
+      }
+      return '$' + (paymentSettings.deposit_amount / 100).toFixed(0) + ' deposit';
+    }
+
+    // Show Yes/No confirmation chips for deposit
+    function showDepositConfirmChips() {
+      const chipsEl = document.getElementById('chips');
+      const depositDisplay = formatDepositAmount();
+
+      chipsEl.innerHTML = \`
+        <button class="chip deposit-chip" data-action="yes" style="background: linear-gradient(135deg, var(--c), var(--cd)); color: #fff; border: none;">Yes, proceed</button>
+        <button class="chip deposit-chip" data-action="no" style="border-color: #dc3545; color: #dc3545;">No thanks</button>
+      \`;
+      chipsEl.style.display = 'flex';
+
+      // Add click handlers
+      chipsEl.querySelectorAll('.deposit-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+          const action = chip.dataset.action;
+          if (action === 'yes') {
+            depositConfirmed = true;
+            sendMessage("Yes, I'd like to proceed with the deposit");
+            console.log('[Payment] Customer confirmed deposit');
+          } else {
+            sendMessage("No, I'll pay in person instead");
+            console.log('[Payment] Customer declined deposit');
+          }
+          // Reset chips to default after selection
+          resetDefaultChips();
+        });
+      });
+    }
+
+    // Reset chips to default booking options
+    function resetDefaultChips() {
+      const chipsEl = document.getElementById('chips');
+      const ui = getUI(currentLang);
+      chipsEl.innerHTML = ui.chips.map(c =>
+        \`<button class="chip" data-msg="\${c.msg}">\${c.label}</button>\`
+      ).join('');
+      chipsEl.style.display = 'none';
+
+      // Re-attach click handlers
+      chipsEl.querySelectorAll('.chip').forEach(c => {
+        c.addEventListener('click', () => sendMessage(c.dataset.msg));
+      });
+    }
+
+    // Check if message contains email and extract it
+    function checkForEmail(message) {
+      const emailMatch = message.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+      if (emailMatch) {
+        customerEmail = emailMatch[0];
+        console.log('[Payment] Email detected:', customerEmail);
+
+        // If deposit was confirmed and we now have email, show payment form
+        if (depositConfirmed && pendingDepositAmount) {
+          console.log('[Payment] Email collected, showing payment form');
+          showPaymentForm(pendingDepositAmount, customerEmail, pendingBookingDetails);
+          pendingDepositAmount = null;
+          pendingBookingDetails = null;
+        }
+      }
+    }
+
+    // Check agent messages for deposit confirmation prompt
+    // When agent asks about deposit requirement, show Yes/No chips
+    function checkDepositConfirmation(message) {
+      if (!paymentSettings?.payments_enabled) return false;
+
+      const lowerMsg = message.toLowerCase();
+
+      // Detect deposit confirmation question - agent mentions deposit AND asks to proceed
+      const mentionsDeposit = lowerMsg.includes('deposit') ||
+                              lowerMsg.includes('payment required') ||
+                              lowerMsg.includes('require a') && lowerMsg.includes('%');
+
+      const asksToConfirm = lowerMsg.includes('would you like to proceed') ||
+                            lowerMsg.includes('would you like to continue') ||
+                            lowerMsg.includes('shall i proceed') ||
+                            lowerMsg.includes('do you want to proceed') ||
+                            lowerMsg.includes('ready to proceed') ||
+                            lowerMsg.includes('like to book') ||
+                            lowerMsg.includes('[CONFIRM_DEPOSIT]');
+
+      if (mentionsDeposit && asksToConfirm) {
+        console.log('[Payment] Deposit confirmation detected, showing Yes/No chips');
+        showDepositConfirmChips();
+        return true;
+      }
+
+      return false;
+    }
+
     // Check agent messages for payment trigger phrases
     // Format: [COLLECT_DEPOSIT:5000:service] or [COLLECT_DEPOSIT:15000:package]
-    // Or simple trigger phrases with default amount
+    // Payment form only shows AFTER email is collected
     function checkPaymentTrigger(message) {
       if (!paymentSettings?.payments_enabled) return;
+      if (!depositConfirmed) return; // Must confirm deposit first
 
       const lowerMsg = message.toLowerCase();
 
@@ -985,49 +1091,67 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       const explicitMatch = message.match(/\[COLLECT_DEPOSIT:(\d+):(\w+)\]/i);
       if (explicitMatch) {
         const servicePrice = parseInt(explicitMatch[1]);
-        const bookingType = explicitMatch[2].toLowerCase(); // 'service' or 'package'
-
-        // Use calculateDeposit to respect all settings
+        const bookingType = explicitMatch[2].toLowerCase();
         const depositAmount = calculateDeposit(servicePrice, bookingType);
 
         if (depositAmount > 0) {
           console.log('[Payment] Agent triggered payment:', { servicePrice, bookingType, depositAmount });
-          showPaymentForm(depositAmount, null, {
-            triggeredBy: 'agent',
-            servicePrice,
-            bookingType
-          });
+
+          // If we have email, show form immediately. Otherwise store and wait for email.
+          if (customerEmail) {
+            showPaymentForm(depositAmount, customerEmail, { triggeredBy: 'agent', servicePrice, bookingType });
+          } else {
+            pendingDepositAmount = depositAmount;
+            pendingBookingDetails = { triggeredBy: 'agent', servicePrice, bookingType };
+            console.log('[Payment] Waiting for email before showing payment form');
+          }
         }
         return;
       }
 
-      // Fallback: simple trigger phrases with default amount
+      // Fallback: simple trigger phrases
       const triggerPhrases = [
         'collect your deposit',
         'take your deposit',
         'process your deposit',
-        'need a deposit',
-        'require a deposit',
-        'secure your booking',
-        'secure your appointment',
-        'confirm with a deposit',
+        'opened the payment form',
+        'enter your card',
+        'complete the deposit',
         '[COLLECT_DEPOSIT]',
-        '[PAYMENT_REQUIRED]'
+        '[PAYMENT_REQUIRED]',
+        '[SHOW_PAYMENT]'
       ];
 
       const shouldTrigger = triggerPhrases.some(phrase => lowerMsg.includes(phrase.toLowerCase()));
 
       if (shouldTrigger) {
         console.log('[Payment] Agent triggered payment (default amount)');
-
-        // Use default deposit amount - assume 'both' applies
         const depositAmount = paymentSettings.deposit_amount;
 
-        showPaymentForm(depositAmount, null, {
-          triggeredBy: 'agent',
-          message: message
-        });
+        if (customerEmail) {
+          showPaymentForm(depositAmount, customerEmail, { triggeredBy: 'agent', message });
+        } else {
+          pendingDepositAmount = depositAmount;
+          pendingBookingDetails = { triggeredBy: 'agent', message };
+          console.log('[Payment] Waiting for email before showing payment form');
+        }
       }
+    }
+
+    // Process all agent message triggers
+    function processAgentMessage(message) {
+      // Check for deposit confirmation prompt first
+      if (!depositConfirmed) {
+        checkDepositConfirmation(message);
+      }
+
+      // Then check for payment trigger (only works if deposit already confirmed)
+      checkPaymentTrigger(message);
+    }
+
+    // Process user messages to detect email
+    function processUserMessage(message) {
+      checkForEmail(message);
     }
 
     // Listen for payment trigger from conversation/agent
@@ -1078,6 +1202,9 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       chips.style.display = 'none';
       setTyping(true);
 
+      // Check for email in user's typed message
+      processUserMessage(text);
+
       // Use text-only chat session (separate from voice)
       if (!chatSession) {
         try {
@@ -1105,8 +1232,11 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
               if (m.source === 'ai') {
                 setTyping(false);
                 addMessage(m.message, false);
-                // Check for payment trigger in agent message
-                checkPaymentTrigger(m.message);
+                // Process agent message for deposit confirmation and payment triggers
+                processAgentMessage(m.message);
+              } else if (m.source === 'user') {
+                // Track user messages for email detection
+                processUserMessage(m.message);
               }
             },
             onError: () => setTyping(false),
@@ -1166,9 +1296,15 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
             if (m.source === 'ai') {
               setTyping(false);
               addMessage(m.message, false);
-              checkPaymentTrigger(m.message);
+              // Process agent message for deposit confirmation and payment triggers
+              processAgentMessage(m.message);
             }
-            else if (m.source === 'user') { addMessage(m.message, true); setTyping(true); }
+            else if (m.source === 'user') {
+              addMessage(m.message, true);
+              setTyping(true);
+              // Track user messages for email detection
+              processUserMessage(m.message);
+            }
           },
           onError: () => { widget.classList.remove('speaking'); }
         });
