@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BookNexa AI - Payment Settings</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: #f8f9fa;
+      min-height: 100vh;
+      padding: 40px 20px;
+    }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+    .header h1 {
+      font-size: 24px;
+      font-weight: 600;
+      color: #111;
+      margin-bottom: 8px;
+    }
+    .header p {
+      font-size: 14px;
+      color: #666;
+    }
+    .settings-panel {
+      background: #fff;
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    }
+    .settings-panel h2 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 20px;
+      color: #111;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #eee;
+    }
+    .setting-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 0;
+      border-bottom: 1px solid #eee;
+    }
+    .setting-row:last-child { border-bottom: none; }
+    .setting-label {
+      font-size: 14px;
+      color: #333;
+    }
+    .setting-label small {
+      display: block;
+      font-size: 12px;
+      color: #888;
+      margin-top: 2px;
+    }
+    .toggle {
+      position: relative;
+      width: 48px;
+      height: 26px;
+    }
+    .toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: #ccc;
+      border-radius: 26px;
+      transition: 0.2s;
+    }
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 20px;
+      width: 20px;
+      left: 3px;
+      bottom: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: 0.2s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+    .toggle input:checked + .toggle-slider {
+      background: #7C9A7C;
+    }
+    .toggle input:checked + .toggle-slider:before {
+      transform: translateX(22px);
+    }
+    .select-row {
+      margin-top: 16px;
+    }
+    .select-row label {
+      display: block;
+      font-size: 13px;
+      color: #555;
+      margin-bottom: 6px;
+    }
+    .select-row select, .select-row input {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      font-size: 14px;
+      color: #333;
+    }
+    .select-row select:focus, .select-row input:focus {
+      outline: none;
+      border-color: #7C9A7C;
+    }
+    .deposit-settings {
+      display: none;
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid #eee;
+    }
+    .deposit-settings.active { display: block; }
+    .amount-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    .amount-row input {
+      width: 100px;
+    }
+    .radio-group {
+      display: flex;
+      gap: 16px;
+      margin: 8px 0;
+    }
+    .radio-group label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: #555;
+      cursor: pointer;
+    }
+    .save-btn {
+      width: 100%;
+      padding: 12px;
+      background: #7C9A7C;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      margin-top: 20px;
+      transition: background 0.2s;
+    }
+    .save-btn:hover { background: #5a7a5a; }
+    .save-btn:disabled { background: #ccc; cursor: not-allowed; }
+    .status {
+      text-align: center;
+      font-size: 13px;
+      margin-top: 10px;
+      min-height: 20px;
+    }
+    .status.success { color: #28a745; }
+    .status.error { color: #dc3545; }
+    .stripe-section {
+      margin-top: 24px;
+      padding-top: 24px;
+      border-top: 1px solid #eee;
+    }
+    .stripe-status {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px;
+      background: #f8f9fa;
+      border-radius: 8px;
+      margin-bottom: 16px;
+    }
+    .stripe-status.connected {
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+    }
+    .stripe-status .status-text {
+      font-size: 14px;
+      color: #333;
+    }
+    .stripe-status .status-text small {
+      display: block;
+      font-size: 12px;
+      color: #666;
+      margin-top: 2px;
+    }
+    .stripe-btn {
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.2s;
+    }
+    .stripe-btn.connect {
+      background: #635bff;
+      color: #fff;
+      border: none;
+    }
+    .stripe-btn.connect:hover { background: #4b44c7; }
+    .stripe-btn.disconnect {
+      background: #fff;
+      color: #dc3545;
+      border: 1px solid #dc3545;
+    }
+    .stripe-btn.disconnect:hover { background: #fef2f2; }
+    .stripe-btn svg { width: 18px; height: 18px; fill: currentColor; }
+    .error-page {
+      text-align: center;
+      padding: 60px 20px;
+    }
+    .error-page h1 {
+      font-size: 20px;
+      color: #dc3545;
+      margin-bottom: 12px;
+    }
+    .error-page p {
+      font-size: 14px;
+      color: #666;
+    }
+    .loading {
+      text-align: center;
+      padding: 60px 20px;
+      color: #666;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Payment Settings</h1>
+      <p>Configure deposit requirements for your bookings</p>
+    </div>
+
+    <div id="loading" class="loading">Loading settings...</div>
+
+    <div id="errorPage" class="error-page" style="display: none;">
+      <h1>Access Denied</h1>
+      <p id="errorMessage">Please provide a valid location ID.</p>
+    </div>
+
+    <div id="settingsPanel" class="settings-panel" style="display: none;">
+      <h2>Deposit Requirements</h2>
+
+      <div class="setting-row">
+        <div class="setting-label">
+          Require Deposits
+          <small>Collect payment before confirming bookings</small>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="paymentsEnabled">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="deposit-settings" id="depositSettings">
+        <div class="select-row">
+          <label>Apply To</label>
+          <select id="applyTo">
+            <option value="both">All Bookings</option>
+            <option value="packages">Packages Only</option>
+            <option value="services">Services Only</option>
+          </select>
+        </div>
+
+        <div class="select-row">
+          <label>Deposit Type</label>
+          <div class="radio-group">
+            <label><input type="radio" name="depositType" value="fixed" checked> Fixed Amount</label>
+            <label><input type="radio" name="depositType" value="percentage"> Percentage</label>
+          </div>
+        </div>
+
+        <div class="select-row">
+          <label>Deposit Amount</label>
+          <div class="amount-row">
+            <span id="amountPrefix">$</span>
+            <input type="number" id="depositAmount" value="50" min="1">
+            <span id="amountSuffix"></span>
+          </div>
+        </div>
+
+        <div class="setting-row" style="margin-top: 16px;">
+          <div class="setting-label">
+            Only Above Threshold
+            <small>Require deposits only for bookings above a certain price</small>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="autoRequireAbove">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="select-row" id="thresholdRow" style="display: none;">
+          <label>Minimum Price for Deposit</label>
+          <div class="amount-row">
+            <span>$</span>
+            <input type="number" id="thresholdAmount" value="100" min="1">
+          </div>
+        </div>
+      </div>
+
+      <button class="save-btn" id="saveBtn">Save Settings</button>
+      <div class="status" id="status"></div>
+
+      <!-- Stripe Connect Section -->
+      <div class="stripe-section">
+        <h2>Payment Processing</h2>
+        <div class="stripe-status" id="stripeStatus">
+          <div class="status-text">
+            <span id="stripeStatusText">Checking Stripe connection...</span>
+            <small id="stripeAccountName"></small>
+          </div>
+          <button class="stripe-btn connect" id="stripeBtn" style="display: none;">
+            <svg viewBox="0 0 24 24"><path d="M20 4H4c-1.11 0-1.99.89-1.99 2L2 18c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V6c0-1.11-.89-2-2-2zm0 14H4v-6h16v6zm0-10H4V6h16v2z"/></svg>
+            <span>Connect Stripe</span>
+          </button>
+        </div>
+        <p style="font-size: 12px; color: #888; margin-top: 8px;">
+          Connect your Stripe account to receive deposit payments directly to your bank account.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = window.location.origin;
+    const urlParams = new URLSearchParams(window.location.search);
+    const locationId = urlParams.get('locationId');
+
+    // DOM Elements
+    const loading = document.getElementById('loading');
+    const errorPage = document.getElementById('errorPage');
+    const errorMessage = document.getElementById('errorMessage');
+    const settingsPanel = document.getElementById('settingsPanel');
+    const paymentsEnabled = document.getElementById('paymentsEnabled');
+    const depositSettings = document.getElementById('depositSettings');
+    const applyTo = document.getElementById('applyTo');
+    const depositAmount = document.getElementById('depositAmount');
+    const autoRequireAbove = document.getElementById('autoRequireAbove');
+    const thresholdAmount = document.getElementById('thresholdAmount');
+    const thresholdRow = document.getElementById('thresholdRow');
+    const amountPrefix = document.getElementById('amountPrefix');
+    const amountSuffix = document.getElementById('amountSuffix');
+    const saveBtn = document.getElementById('saveBtn');
+    const status = document.getElementById('status');
+    const stripeStatus = document.getElementById('stripeStatus');
+    const stripeStatusText = document.getElementById('stripeStatusText');
+    const stripeAccountName = document.getElementById('stripeAccountName');
+    const stripeBtn = document.getElementById('stripeBtn');
+
+    // Check for locationId
+    if (!locationId) {
+      showError('Missing location ID. Please access this page from your dashboard.');
+    } else {
+      initPage();
+    }
+
+    async function initPage() {
+      // Verify location is valid
+      try {
+        const resp = await fetch(`${API_BASE}/api/verify-location`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ locationId })
+        });
+        const data = await resp.json();
+
+        if (!data.success || !data.isActive) {
+          showError(data.error || 'Invalid or inactive location. Please reinstall the app from GHL Marketplace.');
+          return;
+        }
+
+        // Location is valid, load settings
+        loading.style.display = 'none';
+        settingsPanel.style.display = 'block';
+        await loadSettings();
+        await loadStripeStatus();
+
+      } catch (e) {
+        showError('Failed to verify location: ' + e.message);
+      }
+    }
+
+    function showError(message) {
+      loading.style.display = 'none';
+      errorMessage.textContent = message;
+      errorPage.style.display = 'block';
+    }
+
+    async function loadSettings() {
+      try {
+        const resp = await fetch(`${API_BASE}/api/payments/settings/${locationId}`);
+        const data = await resp.json();
+
+        if (data.success && data.settings) {
+          const s = data.settings;
+          paymentsEnabled.checked = s.payments_enabled;
+          applyTo.value = s.apply_to || 'both';
+          autoRequireAbove.checked = s.auto_require_above;
+          thresholdAmount.value = (s.auto_require_amount || 0) / 100;
+
+          const typeRadio = document.querySelector(`input[name="depositType"][value="${s.deposit_type || 'fixed'}"]`);
+          if (typeRadio) typeRadio.checked = true;
+
+          if (s.deposit_type === 'percentage') {
+            depositAmount.value = s.deposit_amount || 25;
+            updateAmountDisplay('percentage');
+          } else {
+            depositAmount.value = (s.deposit_amount || 5000) / 100;
+            updateAmountDisplay('fixed');
+          }
+
+          depositSettings.classList.toggle('active', s.payments_enabled);
+          thresholdRow.style.display = s.auto_require_above ? 'block' : 'none';
+        }
+      } catch (e) {
+        console.error('Failed to load settings:', e);
+      }
+    }
+
+    async function loadStripeStatus() {
+      try {
+        const resp = await fetch(`${API_BASE}/api/payments/connect-status/${locationId}`);
+        const data = await resp.json();
+
+        if (data.success) {
+          if (data.isConnected) {
+            stripeStatus.classList.add('connected');
+            stripeStatusText.textContent = 'Stripe Connected';
+            stripeAccountName.textContent = data.accountName || 'Account connected';
+            stripeBtn.className = 'stripe-btn disconnect';
+            stripeBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg><span>Disconnect</span>';
+          } else {
+            stripeStatus.classList.remove('connected');
+            stripeStatusText.textContent = 'Stripe Not Connected';
+            stripeAccountName.textContent = 'Connect to receive payments';
+            stripeBtn.className = 'stripe-btn connect';
+            stripeBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M20 4H4c-1.11 0-1.99.89-1.99 2L2 18c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V6c0-1.11-.89-2-2-2zm0 14H4v-6h16v6zm0-10H4V6h16v2z"/></svg><span>Connect Stripe</span>';
+          }
+          stripeBtn.style.display = 'flex';
+        }
+      } catch (e) {
+        console.error('Failed to load Stripe status:', e);
+      }
+    }
+
+    async function saveSettings() {
+      saveBtn.disabled = true;
+      status.textContent = 'Saving...';
+      status.className = 'status';
+
+      const depositType = document.querySelector('input[name="depositType"]:checked').value;
+      let amount = parseInt(depositAmount.value) || 50;
+      if (depositType === 'fixed') {
+        amount = amount * 100;
+      }
+
+      const settings = {
+        locationId: locationId,
+        payments_enabled: paymentsEnabled.checked,
+        apply_to: applyTo.value,
+        auto_require_above: autoRequireAbove.checked,
+        auto_require_amount: (parseInt(thresholdAmount.value) || 100) * 100,
+        deposit_type: depositType,
+        deposit_amount: amount
+      };
+
+      try {
+        const resp = await fetch(`${API_BASE}/api/payments/settings`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(settings)
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+          status.textContent = 'Settings saved!';
+          status.className = 'status success';
+        } else {
+          throw new Error(data.error);
+        }
+      } catch (e) {
+        status.textContent = 'Failed to save: ' + e.message;
+        status.className = 'status error';
+      }
+
+      saveBtn.disabled = false;
+      setTimeout(() => { status.textContent = ''; }, 3000);
+    }
+
+    function updateAmountDisplay(type) {
+      if (type === 'percentage') {
+        amountPrefix.textContent = '';
+        amountSuffix.textContent = '%';
+        depositAmount.max = 100;
+      } else {
+        amountPrefix.textContent = '$';
+        amountSuffix.textContent = '';
+        depositAmount.max = '';
+      }
+    }
+
+    function handleStripeClick() {
+      if (stripeBtn.classList.contains('disconnect')) {
+        if (confirm('Disconnect your Stripe account? You will no longer receive deposit payments.')) {
+          disconnectStripe();
+        }
+      } else {
+        // Redirect to Stripe Connect OAuth
+        window.location.href = `${API_BASE}/api/payments/stripe/connect?locationId=${encodeURIComponent(locationId)}`;
+      }
+    }
+
+    async function disconnectStripe() {
+      try {
+        const resp = await fetch(`${API_BASE}/api/payments/stripe/disconnect`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ locationId })
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+          loadStripeStatus();
+        }
+      } catch (e) {
+        console.error('Failed to disconnect Stripe:', e);
+      }
+    }
+
+    // Event listeners
+    paymentsEnabled.addEventListener('change', () => {
+      depositSettings.classList.toggle('active', paymentsEnabled.checked);
+      saveSettings();
+    });
+
+    applyTo.addEventListener('change', saveSettings);
+
+    document.querySelectorAll('input[name="depositType"]').forEach(radio => {
+      radio.addEventListener('change', (e) => {
+        updateAmountDisplay(e.target.value);
+        saveSettings();
+      });
+    });
+
+    depositAmount.addEventListener('change', saveSettings);
+
+    autoRequireAbove.addEventListener('change', () => {
+      thresholdRow.style.display = autoRequireAbove.checked ? 'block' : 'none';
+      saveSettings();
+    });
+
+    thresholdAmount.addEventListener('change', saveSettings);
+    saveBtn.addEventListener('click', saveSettings);
+    stripeBtn.addEventListener('click', handleStripeClick);
+
+    // Check for Stripe callback
+    if (urlParams.get('stripe_connected') === 'true') {
+      loadStripeStatus();
+      window.history.replaceState({}, document.title, window.location.pathname + '?locationId=' + locationId);
+    }
+    if (urlParams.get('stripe_error')) {
+      alert('Stripe connection failed: ' + urlParams.get('stripe_error'));
+      window.history.replaceState({}, document.title, window.location.pathname + '?locationId=' + locationId);
+    }
+  </script>
+</body>
+</html>

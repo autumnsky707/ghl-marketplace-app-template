@@ -460,6 +460,11 @@ app.get("/demo", function (req, res) {
   res.sendFile(__dirname + "/demo.html");
 });
 
+// Settings page (live mode for business owners)
+app.get("/settings", function (req, res) {
+  res.sendFile(__dirname + "/settings.html");
+});
+
 app.listen(port, () => {
   console.log(`GHL app listening on port ${port}`);
 
