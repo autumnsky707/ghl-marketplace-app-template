@@ -106,6 +106,7 @@ router.post("/settings", async (req: Request, res: Response) => {
     deposit_type,
     deposit_amount,
     unpaid_policy,
+    pay_ahead_enabled,
   } = req.body;
 
   if (!locationId) {
@@ -123,6 +124,7 @@ router.post("/settings", async (req: Request, res: Response) => {
         deposit_type: deposit_type ?? "fixed",
         deposit_amount: deposit_amount ?? 5000,
         unpaid_policy: unpaid_policy ?? "hold_24h",
+        pay_ahead_enabled: pay_ahead_enabled ?? false,
         updated_at: new Date().toISOString(),
       },
       { onConflict: "location_id" }

@@ -1252,14 +1252,15 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
         }
         // Check for payment trigger (only works if deposit already confirmed)
         checkPaymentTrigger(message);
-      } else {
-        // DEPOSITS OFF: Offer optional payment ahead
+      } else if (paymentSettings?.pay_ahead_enabled) {
+        // DEPOSITS OFF but PAY AHEAD enabled: Offer optional payment
         if (!customerWantsToPayAhead) {
           checkPaymentPreference(message);
         }
         // Check for payment trigger (only works if customer chose to pay ahead)
         checkOptionalPaymentTrigger(message);
       }
+      // If deposits OFF and pay_ahead OFF: No payment flow at all
     }
 
     // Process user messages to detect email
@@ -1333,6 +1334,7 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
               conversation_mode: 'chat',
               language: currentLang,
               payments_enabled: paymentSettings?.payments_enabled ? 'true' : 'false',
+              pay_ahead_enabled: paymentSettings?.pay_ahead_enabled ? 'true' : 'false',
               deposit_applies_to: paymentSettings?.apply_to || 'both',
               deposit_type: paymentSettings?.deposit_type || 'fixed',
               deposit_amount: paymentSettings?.deposit_type === 'percentage'
@@ -1388,6 +1390,7 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
             conversation_mode: 'voice_call',
             language: currentLang,
             payments_enabled: paymentSettings?.payments_enabled ? 'true' : 'false',
+            pay_ahead_enabled: paymentSettings?.pay_ahead_enabled ? 'true' : 'false',
             deposit_applies_to: paymentSettings?.apply_to || 'both',
             deposit_type: paymentSettings?.deposit_type || 'fixed',
             deposit_amount: paymentSettings?.deposit_type === 'percentage'

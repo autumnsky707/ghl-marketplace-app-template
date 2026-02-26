@@ -676,6 +676,21 @@
         </div>
       </div>
 
+      <div id="payAheadSection" style="display: none;">
+        <div class="form-group">
+          <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #eee;">
+            <div>
+              <label style="margin: 0; font-weight: 500;">Allow Pay Ahead</label>
+              <p style="font-size: 12px; color: #666; margin-top: 2px;">Let customers choose to pay in advance (requires Stripe setup)</p>
+            </div>
+            <label class="toggle-switch-sm">
+              <input type="checkbox" id="payAheadToggle" onchange="saveGlobalDepositSettings()">
+              <span class="toggle-slider-sm"></span>
+            </label>
+          </div>
+        </div>
+      </div>
+
       <div id="depositStatus" style="font-size: 13px; color: #666; margin-top: 8px;"></div>
     </div>
 
@@ -777,6 +792,7 @@
             globalDepositSettings.requireDeposits = s.payments_enabled || false;
             globalDepositSettings.defaultAmountFixed = (s.deposit_amount || 5000) / 100; // Convert cents to dollars
             globalDepositSettings.defaultType = s.deposit_type || 'fixed';
+            globalDepositSettings.payAheadEnabled = s.pay_ahead_enabled || false;
             console.log('[Deposits] Global settings loaded:', globalDepositSettings);
 
             // Update UI
@@ -792,7 +808,9 @@
     function updateGlobalDepositUI() {
       const toggle = document.getElementById('globalDepositToggle');
       const amountSection = document.getElementById('depositAmountSection');
+      const payAheadSection = document.getElementById('payAheadSection');
       const amountInput = document.getElementById('globalDepositAmount');
+      const payAheadToggle = document.getElementById('payAheadToggle');
 
       if (toggle) {
         toggle.checked = globalDepositSettings.requireDeposits;
@@ -800,8 +818,16 @@
       if (amountInput) {
         amountInput.value = globalDepositSettings.defaultAmountFixed;
       }
+      if (payAheadToggle) {
+        payAheadToggle.checked = globalDepositSettings.payAheadEnabled || false;
+      }
+      // When deposits ON: show amount section, hide pay ahead
+      // When deposits OFF: hide amount section, show pay ahead option
       if (amountSection) {
         amountSection.style.display = globalDepositSettings.requireDeposits ? 'block' : 'none';
+      }
+      if (payAheadSection) {
+        payAheadSection.style.display = globalDepositSettings.requireDeposits ? 'none' : 'block';
       }
     }
 
@@ -811,20 +837,29 @@
 
       const toggle = document.getElementById('globalDepositToggle');
       const amountInput = document.getElementById('globalDepositAmount');
+      const payAheadToggle = document.getElementById('payAheadToggle');
       const amountSection = document.getElementById('depositAmountSection');
+      const payAheadSection = document.getElementById('payAheadSection');
       const statusEl = document.getElementById('depositStatus');
 
       const paymentsEnabled = toggle?.checked || false;
       const depositAmount = parseInt(amountInput?.value) || 50;
+      const payAheadEnabled = payAheadToggle?.checked || false;
 
-      // Show/hide amount section based on toggle
+      // Show/hide sections based on toggle
+      // When deposits ON: show amount section, hide pay ahead
+      // When deposits OFF: hide amount section, show pay ahead option
       if (amountSection) {
         amountSection.style.display = paymentsEnabled ? 'block' : 'none';
+      }
+      if (payAheadSection) {
+        payAheadSection.style.display = paymentsEnabled ? 'none' : 'block';
       }
 
       // Update local state
       globalDepositSettings.requireDeposits = paymentsEnabled;
       globalDepositSettings.defaultAmountFixed = depositAmount;
+      globalDepositSettings.payAheadEnabled = payAheadEnabled;
 
       try {
         statusEl.textContent = 'Saving...';
@@ -838,7 +873,8 @@
             payments_enabled: paymentsEnabled,
             deposit_type: 'fixed',
             deposit_amount: depositAmount * 100, // Convert to cents
-            apply_to: 'both'
+            apply_to: 'both',
+            pay_ahead_enabled: payAheadEnabled
           })
         });
 

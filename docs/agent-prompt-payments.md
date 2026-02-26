@@ -9,6 +9,7 @@ The widget passes these dynamic variables to the agent:
 - `{{conversation_mode}}` - Either 'voice_call' or 'chat'
 - `{{language}}` - Current language code (e.g., 'en', 'es', 'ja')
 - `{{payments_enabled}}` - 'true' or 'false' whether deposits are required
+- `{{pay_ahead_enabled}}` - 'true' or 'false' whether pay-ahead option is available (when deposits OFF)
 - `{{deposit_applies_to}}` - 'packages', 'services', or 'both'
 - `{{deposit_type}}` - Either 'fixed' or 'percentage'
 - `{{deposit_amount}}` - The deposit amount (e.g., '$50' or '25%')
@@ -51,9 +52,9 @@ Collect all details INCLUDING email (required for payment):
 After collecting email, say a trigger phrase:
 "I've opened the payment form for you. Please enter your card details to complete your {{deposit_amount}} deposit."
 
-### MODE 2: Deposits OFF ({{payments_enabled}} is 'false')
+### MODE 2: Deposits OFF + Pay Ahead ENABLED ({{payments_enabled}} is 'false' AND {{pay_ahead_enabled}} is 'true')
 
-When deposits are not required, offer the customer a CHOICE to pay ahead or pay at visit.
+When deposits are not required but pay-ahead is enabled, offer the customer a CHOICE.
 
 **STEP 1: Offer Payment Option**
 After customer expresses intent to book:
@@ -65,6 +66,10 @@ For VOICE: Wait for verbal response.
 
 If PAY AT VISIT: "Perfect! I'll book your appointment and you can pay when you arrive."
 If PAY NOW: Continue to collect details and then trigger payment.
+
+### MODE 3: Deposits OFF + Pay Ahead DISABLED ({{payments_enabled}} is 'false' AND {{pay_ahead_enabled}} is 'false')
+
+When both are off, there is NO payment flow. Simply book the appointment without mentioning payment. Do NOT offer to pay ahead or mention deposits.
 
 **STEP 2: Collect Booking Details + Email**
 Same as above - collect all details including email.
