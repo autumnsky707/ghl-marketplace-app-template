@@ -75,7 +75,7 @@ router.get("/settings/:locationId", async (req: Request, res: Response) => {
       auto_require_amount: 0,
       deposit_type: "fixed",
       deposit_amount: 0, // No default - business must set their own amount
-      unpaid_policy: "hold_24h",
+      unpaid_policy: "dont_confirm",
     };
 
     // Add test mode flag for widget to show banner
@@ -125,7 +125,7 @@ router.post("/settings", async (req: Request, res: Response) => {
         auto_require_amount: auto_require_amount ?? 0,
         deposit_type: deposit_type ?? "fixed",
         deposit_amount: deposit_amount ?? 0, // No default - business must configure
-        unpaid_policy: unpaid_policy ?? "hold_24h",
+        unpaid_policy: unpaid_policy ?? "dont_confirm",
         pay_ahead_enabled: pay_ahead_enabled ?? false,
         updated_at: new Date().toISOString(),
       },
@@ -537,7 +537,7 @@ router.get("/deposit-settings", async (req: Request, res: Response) => {
       defaultType: 'fixed',
       defaultAmountFixed: 50,
       defaultAmountPercent: 25,
-      notPaidAction: 'hold_24h'
+      notPaidAction: 'dont_confirm'
     };
 
     return res.json({ success: true, settings });
