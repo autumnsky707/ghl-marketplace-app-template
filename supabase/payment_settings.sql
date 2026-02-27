@@ -10,8 +10,9 @@ CREATE TABLE IF NOT EXISTS payment_settings (
   auto_require_above BOOLEAN DEFAULT FALSE,
   auto_require_amount INTEGER DEFAULT 0,
   deposit_type TEXT DEFAULT 'fixed' CHECK (deposit_type IN ('fixed', 'percentage')),
-  deposit_amount INTEGER DEFAULT 5000,
+  deposit_amount INTEGER DEFAULT 0,
   unpaid_policy TEXT DEFAULT 'hold_24h' CHECK (unpaid_policy IN ('hold_24h', 'keep_unpaid', 'dont_confirm')),
+  pay_ahead_enabled BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -67,3 +68,9 @@ CREATE POLICY "Service role has full access to package_deposit_overrides"
   ON package_deposit_overrides FOR ALL USING (true) WITH CHECK (true);
 
 COMMENT ON TABLE package_deposit_overrides IS 'Per-package deposit settings that override global settings';
+
+-- ========================================
+-- MIGRATION: Add pay_ahead_enabled column
+-- Run this if you already have the payment_settings table
+-- ========================================
+-- ALTER TABLE payment_settings ADD COLUMN IF NOT EXISTS pay_ahead_enabled BOOLEAN DEFAULT FALSE;
