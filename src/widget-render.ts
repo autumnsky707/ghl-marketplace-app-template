@@ -1542,7 +1542,7 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
                 setTyping(false);
                 // Skip if this is the first message (already shown in greeting)
                 const isFirstMessage = m.message === firstMsg ||
-                  m.message.includes("Hi! I'm") && m.message.includes("spa concierge");
+                  m.message.includes("BookNexa AI") && m.message.includes("Coordinator");
                 if (!isFirstMessage) {
                   addMessage(m.message, false);
                   // Process agent message for deposit confirmation and payment triggers
@@ -1632,7 +1632,7 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
               setTyping(false);
               // Skip if this is the first message (already spoken as greeting)
               const isFirstMessage = m.message === firstMsg ||
-                m.message.includes("Hi! I'm") && m.message.includes("spa concierge");
+                m.message.includes("BookNexa AI") && m.message.includes("Coordinator");
               if (!isFirstMessage) {
                 addMessage(m.message, false);
                 // Process agent message for deposit confirmation and payment triggers
