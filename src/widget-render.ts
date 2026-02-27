@@ -5,8 +5,18 @@
  */
 import { Request, Response } from "express";
 
-// ElevenLabs Agent IDs (REAL production agents from settings page)
-const ELEVENLABS_AGENTS: Record<string, string> = {
+// Demo location ID - when widget loads with this locationId, use demo agents + test Stripe keys
+const DEMO_LOCATION_ID = 'NNFCwckEhjBk90UtMRSp';
+
+// DEMO Agents (for demo page at booknexaai.com/spa-demo - no tools, no real bookings)
+const DEMO_AGENTS: Record<string, string> = {
+  sophia: 'agent_8301kg12s1dseervxwb829hkbdhq',
+  amelia: 'agent_8201kg12x2jjfcxa1rgdkkt9ttrz',
+  kai: 'agent_7501kg1305q7f80b32ptrpqx0ta5'
+};
+
+// LIVE Agents (for settings page at booknexaai.com/spawidget-settings-page - tools connected, real bookings)
+const LIVE_AGENTS: Record<string, string> = {
   sophia: 'agent_2101k847qgn3ehss6c9gkg4cpj5t',
   amelia: 'agent_8301kg0zx5gaegdt87vgzmh6mx11',
   kai: 'agent_0101kg0ze2c5f7v8xwgwxe83pjwj'
@@ -98,6 +108,7 @@ interface WidgetOptions {
   theme?: string;
   widgetType?: string;
   agentName?: string;
+  locationId?: string;
 }
 
 function generateWidgetHTML(options: WidgetOptions): string {
@@ -105,16 +116,24 @@ function generateWidgetHTML(options: WidgetOptions): string {
     agentId,
     theme = 'sage',
     widgetType = 'concierge',
-    agentName = 'Sophia'
+    agentName = 'Sophia',
+    locationId = ''
   } = options;
+
+  // Determine if this is demo mode based on locationId
+  const isDemo = locationId === DEMO_LOCATION_ID;
+  console.log(`[Widget] Mode: ${isDemo ? 'DEMO' : 'LIVE'}, locationId: ${locationId}`);
 
   // Normalize theme key (handle both "sage" and "sage-zen" formats)
   const themeKey = theme.split('-')[0].toLowerCase();
   const t = THEMES[themeKey] || THEMES['sage'];
 
   const agentKey = agentName.toLowerCase();
-  const elevenLabsId = ELEVENLABS_AGENTS[agentKey] || ELEVENLABS_AGENTS.sophia;
+  // Use demo or live agents based on locationId
+  const agentSet = isDemo ? DEMO_AGENTS : LIVE_AGENTS;
+  const elevenLabsId = agentSet[agentKey] || agentSet.sophia;
   const greeting = AGENT_GREETINGS[agentKey] || AGENT_GREETINGS.sophia;
+  console.log(`[Widget] Using ${isDemo ? 'DEMO' : 'LIVE'} agent: ${elevenLabsId}`);
 
   // Generate language list with 8 defaults FIRST in correct order, then rest hidden
   const defaultLangs = DEFAULT_LANG_CODES.map(code => LANGUAGES.find(l => l.code === code)!);
@@ -2023,7 +2042,7 @@ function generateClassicWidget({ t, agentName, elevenLabsId, greeting, langListH
 }
 
 export async function widgetRenderHandler(req: Request, res: Response): Promise<void> {
-  const { agentId, theme = 'sage', widget = 'concierge', agent = 'sophia' } = req.query;
+  const { agentId, theme = 'sage', widget = 'concierge', agent = 'sophia', locationId = '' } = req.query;
 
   if (!agentId) {
     res.status(400).send('Missing agentId parameter');
@@ -2034,7 +2053,8 @@ export async function widgetRenderHandler(req: Request, res: Response): Promise<
     agentId: agentId as string,
     theme: theme as string,
     widgetType: widget as string,
-    agentName: (agent as string).charAt(0).toUpperCase() + (agent as string).slice(1).toLowerCase()
+    agentName: (agent as string).charAt(0).toUpperCase() + (agent as string).slice(1).toLowerCase(),
+    locationId: locationId as string
   });
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
