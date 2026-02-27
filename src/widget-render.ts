@@ -1349,9 +1349,14 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
             onMessage: (m) => {
               if (m.source === 'ai') {
                 setTyping(false);
-                addMessage(m.message, false);
-                // Process agent message for deposit confirmation and payment triggers
-                processAgentMessage(m.message);
+                // Skip if this is the first message (already shown in greeting)
+                const isFirstMessage = m.message === firstMsg ||
+                  m.message.includes("Hi! I'm") && m.message.includes("spa concierge");
+                if (!isFirstMessage) {
+                  addMessage(m.message, false);
+                  // Process agent message for deposit confirmation and payment triggers
+                  processAgentMessage(m.message);
+                }
               } else if (m.source === 'user') {
                 // Track user messages for email detection
                 processUserMessage(m.message);
@@ -1414,9 +1419,14 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
           onMessage: (m) => {
             if (m.source === 'ai') {
               setTyping(false);
-              addMessage(m.message, false);
-              // Process agent message for deposit confirmation and payment triggers
-              processAgentMessage(m.message);
+              // Skip if this is the first message (already spoken as greeting)
+              const isFirstMessage = m.message === firstMsg ||
+                m.message.includes("Hi! I'm") && m.message.includes("spa concierge");
+              if (!isFirstMessage) {
+                addMessage(m.message, false);
+                // Process agent message for deposit confirmation and payment triggers
+                processAgentMessage(m.message);
+              }
             }
             else if (m.source === 'user') {
               addMessage(m.message, true);
