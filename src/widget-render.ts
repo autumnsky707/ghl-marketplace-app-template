@@ -742,14 +742,14 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
 
     // Translated UI text
     const UI_TEXT = {
-      en: { role: 'Your AI Spa Concierge', tapToSpeak: 'Tap to speak with', chatWith: 'Chat with', online: 'Online now', greeting: "Hi! I'm {agent}, your AI spa concierge. How can I help you today?", placeholder: 'Type a message...', footer: 'Confidential consultations with licensed providers', or: 'or', chips: [{label: 'Book Appt', msg: "I'd like to book an appointment"}, {label: 'Services', msg: 'What services do you offer?'}, {label: 'Packages', msg: 'Tell me about your packages'}, {label: 'Pricing', msg: 'What are your prices?'}], services: ['Scheduling appointments', 'Spa treatment questions', 'Pricing & packages', 'Treatment options', 'Membership info', 'Hours & availability'] },
-      es: { role: 'Tu Concierge de Spa IA', tapToSpeak: 'Toca para hablar con', chatWith: 'Chatea con', online: 'En línea', greeting: "¡Hola! Soy {agent}, tu concierge de spa IA. ¿Cómo puedo ayudarte hoy?", placeholder: 'Escribe un mensaje...', footer: 'Consultas confidenciales con proveedores licenciados', or: 'o', chips: [{label: 'Reservar', msg: 'Me gustaría reservar una cita'}, {label: 'Servicios', msg: '¿Qué servicios ofrecen?'}, {label: 'Paquetes', msg: 'Cuéntame sobre sus paquetes'}, {label: 'Precios', msg: '¿Cuáles son sus precios?'}], services: ['Programar citas', 'Preguntas sobre tratamientos', 'Precios y paquetes', 'Opciones de tratamiento', 'Info de membresía', 'Horarios y disponibilidad'] },
-      ja: { role: 'AIスパコンシェルジュ', tapToSpeak: 'タップして話す', chatWith: 'チャット', online: 'オンライン', greeting: "こんにちは！{agent}です。AIスパコンシェルジュです。今日はどのようにお手伝いできますか？", placeholder: 'メッセージを入力...', footer: '資格を持つプロバイダーとの機密相談', or: 'または', chips: [{label: '予約', msg: '予約をしたいです'}, {label: 'サービス', msg: 'どんなサービスがありますか？'}, {label: 'パッケージ', msg: 'パッケージについて教えてください'}, {label: '料金', msg: '料金はいくらですか？'}], services: ['予約のスケジュール', 'スパトリートメントの質問', '料金とパッケージ', 'トリートメントオプション', '会員情報', '営業時間と空き状況'] },
-      zh: { role: '您的AI水疗礼宾', tapToSpeak: '点击与之交谈', chatWith: '与之聊天', online: '在线', greeting: "您好！我是{agent}，您的AI水疗礼宾。今天我能为您做些什么？", placeholder: '输入消息...', footer: '与持证提供者进行保密咨询', or: '或', chips: [{label: '预约', msg: '我想预约'}, {label: '服务', msg: '你们提供什么服务？'}, {label: '套餐', msg: '介绍一下你们的套餐'}, {label: '价格', msg: '价格是多少？'}], services: ['预约安排', '水疗护理问题', '价格和套餐', '护理选项', '会员信息', '营业时间'] },
-      fr: { role: 'Votre Concierge Spa IA', tapToSpeak: 'Appuyez pour parler à', chatWith: 'Discuter avec', online: 'En ligne', greeting: "Bonjour ! Je suis {agent}, votre concierge spa IA. Comment puis-je vous aider aujourd'hui ?", placeholder: 'Tapez un message...', footer: 'Consultations confidentielles avec des prestataires agréés', or: 'ou', chips: [{label: 'Réserver', msg: 'Je voudrais prendre rendez-vous'}, {label: 'Services', msg: 'Quels services proposez-vous ?'}, {label: 'Forfaits', msg: 'Parlez-moi de vos forfaits'}, {label: 'Tarifs', msg: 'Quels sont vos tarifs ?'}], services: ['Prise de rendez-vous', 'Questions sur les soins', 'Tarifs et forfaits', 'Options de soins', 'Info adhésion', 'Horaires et disponibilité'] },
-      de: { role: 'Ihr KI-Spa-Concierge', tapToSpeak: 'Tippen um zu sprechen mit', chatWith: 'Chatten mit', online: 'Online', greeting: "Hallo! Ich bin {agent}, Ihr KI-Spa-Concierge. Wie kann ich Ihnen heute helfen?", placeholder: 'Nachricht eingeben...', footer: 'Vertrauliche Beratungen mit lizenzierten Anbietern', or: 'oder', chips: [{label: 'Buchen', msg: 'Ich möchte einen Termin buchen'}, {label: 'Services', msg: 'Welche Services bieten Sie an?'}, {label: 'Pakete', msg: 'Erzählen Sie mir von Ihren Paketen'}, {label: 'Preise', msg: 'Was sind Ihre Preise?'}], services: ['Terminplanung', 'Spa-Behandlungsfragen', 'Preise & Pakete', 'Behandlungsoptionen', 'Mitgliedschaftsinfo', 'Öffnungszeiten'] },
-      ko: { role: 'AI 스파 컨시어지', tapToSpeak: '탭하여 대화하기', chatWith: '채팅하기', online: '온라인', greeting: "안녕하세요! 저는 {agent}, AI 스파 컨시어지입니다. 오늘 어떻게 도와드릴까요?", placeholder: '메시지 입력...', footer: '면허를 가진 전문가와의 기밀 상담', or: '또는', chips: [{label: '예약', msg: '예약하고 싶습니다'}, {label: '서비스', msg: '어떤 서비스가 있나요?'}, {label: '패키지', msg: '패키지에 대해 알려주세요'}, {label: '가격', msg: '가격이 어떻게 되나요?'}], services: ['예약 일정', '스파 트리트먼트 질문', '가격 및 패키지', '트리트먼트 옵션', '멤버십 정보', '영업시간 및 예약가능'] },
-      'pt-BR': { role: 'Seu Concierge de Spa IA', tapToSpeak: 'Toque para falar com', chatWith: 'Conversar com', online: 'Online', greeting: "Olá! Sou {agent}, seu concierge de spa IA. Como posso ajudá-lo hoje?", placeholder: 'Digite uma mensagem...', footer: 'Consultas confidenciais com profissionais licenciados', or: 'ou', chips: [{label: 'Agendar', msg: 'Gostaria de agendar um horário'}, {label: 'Serviços', msg: 'Quais serviços vocês oferecem?'}, {label: 'Pacotes', msg: 'Fale sobre seus pacotes'}, {label: 'Preços', msg: 'Quais são os preços?'}], services: ['Agendamento', 'Dúvidas sobre tratamentos', 'Preços e pacotes', 'Opções de tratamento', 'Info de associação', 'Horários e disponibilidade'] }
+      en: { role: 'Your AI Spa Concierge', tapToSpeak: 'Tap to speak with', chatWith: 'Chat with', online: 'Online now', greeting: "Hi! I'm {agent}, your AI spa concierge. How can I help you today?", placeholder: 'Type a message...', footer: 'Confidential consultations with licensed providers', or: 'or', chips: [{label: 'Book Appt', msg: "I'd like to book an appointment"}, {label: 'Services', msg: 'What services do you offer?'}, {label: 'Packages', msg: 'Tell me about your packages'}, {label: 'Pricing', msg: 'What are your prices?'}], services: ['Scheduling appointments', 'Spa treatment questions', 'Pricing & packages', 'Treatment options', 'Membership info', 'Hours & availability'], paymentChips: { yesDeposit: 'Yes, proceed', noDeposit: 'No thanks', payNow: 'Pay Now', payAtVisit: 'Pay at Visit', tryAgain: 'Try Again', cancel: 'Cancel', yesProceedMsg: "Yes, I'd like to proceed with the deposit", noDepositMsg: "No, I'll pass on the deposit", payNowMsg: "I'd like to pay now to secure my booking", payAtVisitMsg: "I'll pay when I arrive" } },
+      es: { role: 'Tu Concierge de Spa IA', tapToSpeak: 'Toca para hablar con', chatWith: 'Chatea con', online: 'En línea', greeting: "¡Hola! Soy {agent}, tu concierge de spa IA. ¿Cómo puedo ayudarte hoy?", placeholder: 'Escribe un mensaje...', footer: 'Consultas confidenciales con proveedores licenciados', or: 'o', chips: [{label: 'Reservar', msg: 'Me gustaría reservar una cita'}, {label: 'Servicios', msg: '¿Qué servicios ofrecen?'}, {label: 'Paquetes', msg: 'Cuéntame sobre sus paquetes'}, {label: 'Precios', msg: '¿Cuáles son sus precios?'}], services: ['Programar citas', 'Preguntas sobre tratamientos', 'Precios y paquetes', 'Opciones de tratamiento', 'Info de membresía', 'Horarios y disponibilidad'], paymentChips: { yesDeposit: 'Sí, continuar', noDeposit: 'No gracias', payNow: 'Pagar ahora', payAtVisit: 'Pagar en la visita', tryAgain: 'Intentar de nuevo', cancel: 'Cancelar', yesProceedMsg: "Sí, me gustaría continuar con el depósito", noDepositMsg: "No, prefiero no pagar el depósito", payNowMsg: "Me gustaría pagar ahora para asegurar mi reserva", payAtVisitMsg: "Pagaré cuando llegue" } },
+      ja: { role: 'AIスパコンシェルジュ', tapToSpeak: 'タップして話す', chatWith: 'チャット', online: 'オンライン', greeting: "こんにちは！{agent}です。AIスパコンシェルジュです。今日はどのようにお手伝いできますか？", placeholder: 'メッセージを入力...', footer: '資格を持つプロバイダーとの機密相談', or: 'または', chips: [{label: '予約', msg: '予約をしたいです'}, {label: 'サービス', msg: 'どんなサービスがありますか？'}, {label: 'パッケージ', msg: 'パッケージについて教えてください'}, {label: '料金', msg: '料金はいくらですか？'}], services: ['予約のスケジュール', 'スパトリートメントの質問', '料金とパッケージ', 'トリートメントオプション', '会員情報', '営業時間と空き状況'], paymentChips: { yesDeposit: 'はい、続けます', noDeposit: 'いいえ、結構です', payNow: '今すぐ支払う', payAtVisit: '来店時に支払う', tryAgain: '再試行', cancel: 'キャンセル', yesProceedMsg: "はい、デポジットを支払って予約を確定したいです", noDepositMsg: "いいえ、デポジットは遠慮します", payNowMsg: "予約を確保するために今すぐ支払いたいです", payAtVisitMsg: "来店時に支払います" } },
+      zh: { role: '您的AI水疗礼宾', tapToSpeak: '点击与之交谈', chatWith: '与之聊天', online: '在线', greeting: "您好！我是{agent}，您的AI水疗礼宾。今天我能为您做些什么？", placeholder: '输入消息...', footer: '与持证提供者进行保密咨询', or: '或', chips: [{label: '预约', msg: '我想预约'}, {label: '服务', msg: '你们提供什么服务？'}, {label: '套餐', msg: '介绍一下你们的套餐'}, {label: '价格', msg: '价格是多少？'}], services: ['预约安排', '水疗护理问题', '价格和套餐', '护理选项', '会员信息', '营业时间'], paymentChips: { yesDeposit: '是的，继续', noDeposit: '不用了，谢谢', payNow: '现在支付', payAtVisit: '到店支付', tryAgain: '重试', cancel: '取消', yesProceedMsg: "是的，我想支付押金并确认预约", noDepositMsg: "不，我不想支付押金", payNowMsg: "我想现在支付以确保我的预约", payAtVisitMsg: "我到店时再支付" } },
+      fr: { role: 'Votre Concierge Spa IA', tapToSpeak: 'Appuyez pour parler à', chatWith: 'Discuter avec', online: 'En ligne', greeting: "Bonjour ! Je suis {agent}, votre concierge spa IA. Comment puis-je vous aider aujourd'hui ?", placeholder: 'Tapez un message...', footer: 'Consultations confidentielles avec des prestataires agréés', or: 'ou', chips: [{label: 'Réserver', msg: 'Je voudrais prendre rendez-vous'}, {label: 'Services', msg: 'Quels services proposez-vous ?'}, {label: 'Forfaits', msg: 'Parlez-moi de vos forfaits'}, {label: 'Tarifs', msg: 'Quels sont vos tarifs ?'}], services: ['Prise de rendez-vous', 'Questions sur les soins', 'Tarifs et forfaits', 'Options de soins', 'Info adhésion', 'Horaires et disponibilité'], paymentChips: { yesDeposit: 'Oui, continuer', noDeposit: 'Non merci', payNow: 'Payer maintenant', payAtVisit: 'Payer sur place', tryAgain: 'Réessayer', cancel: 'Annuler', yesProceedMsg: "Oui, je voudrais procéder avec l'acompte", noDepositMsg: "Non, je préfère ne pas payer l'acompte", payNowMsg: "Je voudrais payer maintenant pour sécuriser ma réservation", payAtVisitMsg: "Je paierai sur place" } },
+      de: { role: 'Ihr KI-Spa-Concierge', tapToSpeak: 'Tippen um zu sprechen mit', chatWith: 'Chatten mit', online: 'Online', greeting: "Hallo! Ich bin {agent}, Ihr KI-Spa-Concierge. Wie kann ich Ihnen heute helfen?", placeholder: 'Nachricht eingeben...', footer: 'Vertrauliche Beratungen mit lizenzierten Anbietern', or: 'oder', chips: [{label: 'Buchen', msg: 'Ich möchte einen Termin buchen'}, {label: 'Services', msg: 'Welche Services bieten Sie an?'}, {label: 'Pakete', msg: 'Erzählen Sie mir von Ihren Paketen'}, {label: 'Preise', msg: 'Was sind Ihre Preise?'}], services: ['Terminplanung', 'Spa-Behandlungsfragen', 'Preise & Pakete', 'Behandlungsoptionen', 'Mitgliedschaftsinfo', 'Öffnungszeiten'], paymentChips: { yesDeposit: 'Ja, fortfahren', noDeposit: 'Nein danke', payNow: 'Jetzt bezahlen', payAtVisit: 'Vor Ort bezahlen', tryAgain: 'Erneut versuchen', cancel: 'Abbrechen', yesProceedMsg: "Ja, ich möchte mit der Anzahlung fortfahren", noDepositMsg: "Nein, ich verzichte auf die Anzahlung", payNowMsg: "Ich möchte jetzt bezahlen, um meine Buchung zu sichern", payAtVisitMsg: "Ich bezahle vor Ort" } },
+      ko: { role: 'AI 스파 컨시어지', tapToSpeak: '탭하여 대화하기', chatWith: '채팅하기', online: '온라인', greeting: "안녕하세요! 저는 {agent}, AI 스파 컨시어지입니다. 오늘 어떻게 도와드릴까요?", placeholder: '메시지 입력...', footer: '면허를 가진 전문가와의 기밀 상담', or: '또는', chips: [{label: '예약', msg: '예약하고 싶습니다'}, {label: '서비스', msg: '어떤 서비스가 있나요?'}, {label: '패키지', msg: '패키지에 대해 알려주세요'}, {label: '가격', msg: '가격이 어떻게 되나요?'}], services: ['예약 일정', '스파 트리트먼트 질문', '가격 및 패키지', '트리트먼트 옵션', '멤버십 정보', '영업시간 및 예약가능'], paymentChips: { yesDeposit: '네, 진행합니다', noDeposit: '아니요, 괜찮습니다', payNow: '지금 결제', payAtVisit: '방문 시 결제', tryAgain: '다시 시도', cancel: '취소', yesProceedMsg: "네, 보증금을 내고 예약을 확정하고 싶습니다", noDepositMsg: "아니요, 보증금은 괜찮습니다", payNowMsg: "예약을 확정하기 위해 지금 결제하고 싶습니다", payAtVisitMsg: "방문할 때 결제하겠습니다" } },
+      'pt-BR': { role: 'Seu Concierge de Spa IA', tapToSpeak: 'Toque para falar com', chatWith: 'Conversar com', online: 'Online', greeting: "Olá! Sou {agent}, seu concierge de spa IA. Como posso ajudá-lo hoje?", placeholder: 'Digite uma mensagem...', footer: 'Consultas confidenciais com profissionais licenciados', or: 'ou', chips: [{label: 'Agendar', msg: 'Gostaria de agendar um horário'}, {label: 'Serviços', msg: 'Quais serviços vocês oferecem?'}, {label: 'Pacotes', msg: 'Fale sobre seus pacotes'}, {label: 'Preços', msg: 'Quais são os preços?'}], services: ['Agendamento', 'Dúvidas sobre tratamentos', 'Preços e pacotes', 'Opções de tratamento', 'Info de associação', 'Horários e disponibilidade'], paymentChips: { yesDeposit: 'Sim, continuar', noDeposit: 'Não, obrigado', payNow: 'Pagar agora', payAtVisit: 'Pagar na visita', tryAgain: 'Tentar novamente', cancel: 'Cancelar', yesProceedMsg: "Sim, gostaria de prosseguir com o depósito", noDepositMsg: "Não, prefiro não pagar o depósito", payNowMsg: "Gostaria de pagar agora para garantir minha reserva", payAtVisitMsg: "Pagarei quando chegar" } }
     };
 
     function getUI(lang) { return UI_TEXT[lang] || UI_TEXT['en']; }
@@ -993,10 +993,12 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
     function showDepositConfirmChips() {
       const chipsEl = document.getElementById('chips');
       const depositDisplay = formatDepositAmount();
+      const ui = getUI(currentLang);
+      const pc = ui.paymentChips;
 
       chipsEl.innerHTML = \`
-        <button class="chip deposit-chip" data-action="yes" style="background: linear-gradient(135deg, var(--c), var(--cd)); color: #fff; border: none;">Yes, proceed</button>
-        <button class="chip deposit-chip" data-action="no" style="border-color: #dc3545; color: #dc3545;">No thanks</button>
+        <button class="chip deposit-chip" data-action="yes" style="background: linear-gradient(135deg, var(--c), var(--cd)); color: #fff; border: none;">\${pc.yesDeposit}</button>
+        <button class="chip deposit-chip" data-action="no" style="border-color: #dc3545; color: #dc3545;">\${pc.noDeposit}</button>
       \`;
       chipsEl.style.display = 'flex';
 
@@ -1006,10 +1008,10 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
           const action = chip.dataset.action;
           if (action === 'yes') {
             depositConfirmed = true;
-            sendMessage("Yes, I'd like to proceed with the deposit");
+            sendMessage(pc.yesProceedMsg);
             console.log('[Payment] Customer confirmed deposit');
           } else {
-            sendMessage("No, I'll pay in person instead");
+            sendMessage(pc.noDepositMsg);
             console.log('[Payment] Customer declined deposit');
           }
           // Reset chips to default after selection
@@ -1037,10 +1039,12 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
     // This gives customer the OPTION to pay ahead or pay later
     function showPaymentOptionChips() {
       const chipsEl = document.getElementById('chips');
+      const ui = getUI(currentLang);
+      const pc = ui.paymentChips;
 
       chipsEl.innerHTML = \`
-        <button class="chip payment-option-chip" data-action="pay-now" style="background: linear-gradient(135deg, var(--c), var(--cd)); color: #fff; border: none;">Pay Now</button>
-        <button class="chip payment-option-chip" data-action="pay-later" style="border-color: var(--c); color: var(--cd);">Pay at Visit</button>
+        <button class="chip payment-option-chip" data-action="pay-now" style="background: linear-gradient(135deg, var(--c), var(--cd)); color: #fff; border: none;">\${pc.payNow}</button>
+        <button class="chip payment-option-chip" data-action="pay-later" style="border-color: var(--c); color: var(--cd);">\${pc.payAtVisit}</button>
       \`;
       chipsEl.style.display = 'flex';
 
@@ -1050,11 +1054,11 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
           const action = chip.dataset.action;
           if (action === 'pay-now') {
             customerWantsToPayAhead = true;
-            sendMessage("I'd like to pay now to secure my booking");
+            sendMessage(pc.payNowMsg);
             console.log('[Payment] Customer chose to pay ahead');
           } else {
             customerWantsToPayAhead = false;
-            sendMessage("I'll pay when I arrive");
+            sendMessage(pc.payAtVisitMsg);
             console.log('[Payment] Customer chose to pay at visit');
           }
           resetDefaultChips();
@@ -1224,13 +1228,12 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
 
       if (shouldTrigger) {
         console.log('[Payment] Agent triggered optional payment');
-        // Use a default amount for optional payments (e.g., service price or fixed amount)
-        // This should ideally be passed from the agent with service price
-        const defaultPaymentAmount = 5000; // $50 default, can be overridden
+        // Use deposit amount from business settings (set in Supabase)
+        const depositAmountFromSettings = paymentSettings?.deposit_amount || 0;
 
         // Check for explicit amount: [COLLECT_PAYMENT:12000]
         const amountMatch = message.match(/\[COLLECT_PAYMENT:(\d+)\]/i);
-        const paymentAmount = amountMatch ? parseInt(amountMatch[1]) : defaultPaymentAmount;
+        const paymentAmount = amountMatch ? parseInt(amountMatch[1]) : depositAmountFromSettings;
 
         if (customerEmail) {
           showPaymentForm(paymentAmount, customerEmail, { triggeredBy: 'agent', payAhead: true });
@@ -1338,8 +1341,8 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
               deposit_applies_to: paymentSettings?.apply_to || 'both',
               deposit_type: paymentSettings?.deposit_type || 'fixed',
               deposit_amount: paymentSettings?.deposit_type === 'percentage'
-                ? (paymentSettings?.deposit_amount || 50) + '%'
-                : '$' + ((paymentSettings?.deposit_amount || 5000) / 100).toFixed(0),
+                ? (paymentSettings?.deposit_amount || 0) + '%'
+                : '$' + ((paymentSettings?.deposit_amount || 0) / 100).toFixed(0),
               deposit_threshold_enabled: paymentSettings?.auto_require_above ? 'true' : 'false',
               deposit_threshold_amount: '$' + ((paymentSettings?.auto_require_amount || 0) / 100).toFixed(0)
             },
@@ -1394,8 +1397,8 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
             deposit_applies_to: paymentSettings?.apply_to || 'both',
             deposit_type: paymentSettings?.deposit_type || 'fixed',
             deposit_amount: paymentSettings?.deposit_type === 'percentage'
-              ? (paymentSettings?.deposit_amount || 50) + '%'
-              : '$' + ((paymentSettings?.deposit_amount || 5000) / 100).toFixed(0),
+              ? (paymentSettings?.deposit_amount || 0) + '%'
+              : '$' + ((paymentSettings?.deposit_amount || 0) / 100).toFixed(0),
             deposit_threshold_enabled: paymentSettings?.auto_require_above ? 'true' : 'false',
             deposit_threshold_amount: '$' + ((paymentSettings?.auto_require_amount || 0) / 100).toFixed(0)
           },
@@ -1581,8 +1584,29 @@ function generateBannerWidget({ t, agentName, elevenLabsId, greeting, langListHT
     function getFirstMessage(lang) { return FIRST_MESSAGES[lang] || FIRST_MESSAGES['en']; }
     let conversation = null;
     let currentLang = new URLSearchParams(window.location.search).get('language') || 'en';
+    const locationId = new URLSearchParams(window.location.search).get('locationId') || '';
     const widget = document.getElementById('widget');
     const callBtn = document.getElementById('callBtn');
+
+    // Payment settings from Supabase
+    let paymentSettings = null;
+    const API_BASE = 'https://booknexaai-oauth.onrender.com';
+
+    // Fetch payment settings on load
+    async function loadPaymentSettings() {
+      if (!locationId) return;
+      try {
+        const resp = await fetch(API_BASE + '/api/payments/settings/' + locationId);
+        const data = await resp.json();
+        if (data.success) {
+          paymentSettings = data.settings;
+          console.log('[Banner] Payment settings loaded:', paymentSettings);
+        }
+      } catch (e) {
+        console.error('[Banner] Failed to load payment settings:', e);
+      }
+    }
+    loadPaymentSettings();
 
     async function toggleCall() {
       if (conversation) {
@@ -1600,9 +1624,18 @@ function generateBannerWidget({ t, agentName, elevenLabsId, greeting, langListHT
             agent: { language: currentLang, firstMessage: firstMsg }
           },
           dynamicVariables: {
-            locationId: new URLSearchParams(window.location.search).get('locationId') || '',
+            locationId: locationId,
             conversation_mode: 'voice_call',
-            language: currentLang
+            language: currentLang,
+            payments_enabled: paymentSettings?.payments_enabled ? 'true' : 'false',
+            pay_ahead_enabled: paymentSettings?.pay_ahead_enabled ? 'true' : 'false',
+            deposit_applies_to: paymentSettings?.apply_to || 'both',
+            deposit_type: paymentSettings?.deposit_type || 'fixed',
+            deposit_amount: paymentSettings?.deposit_type === 'percentage'
+              ? (paymentSettings?.deposit_amount || 0) + '%'
+              : '$' + ((paymentSettings?.deposit_amount || 0) / 100).toFixed(0),
+            deposit_threshold_enabled: paymentSettings?.auto_require_above ? 'true' : 'false',
+            deposit_threshold_amount: '$' + ((paymentSettings?.auto_require_amount || 0) / 100).toFixed(0)
           },
           onConnect: () => {
             widget.classList.add('speaking');
@@ -1724,8 +1757,29 @@ function generateClassicWidget({ t, agentName, elevenLabsId, greeting, langListH
     function getFirstMessage(lang) { return FIRST_MESSAGES[lang] || FIRST_MESSAGES['en']; }
     let conversation = null;
     let currentLang = new URLSearchParams(window.location.search).get('language') || 'en';
+    const locationId = new URLSearchParams(window.location.search).get('locationId') || '';
     const widget = document.getElementById('widget');
     const callBtn = document.getElementById('callBtn');
+
+    // Payment settings from Supabase
+    let paymentSettings = null;
+    const API_BASE = 'https://booknexaai-oauth.onrender.com';
+
+    // Fetch payment settings on load
+    async function loadPaymentSettings() {
+      if (!locationId) return;
+      try {
+        const resp = await fetch(API_BASE + '/api/payments/settings/' + locationId);
+        const data = await resp.json();
+        if (data.success) {
+          paymentSettings = data.settings;
+          console.log('[Classic] Payment settings loaded:', paymentSettings);
+        }
+      } catch (e) {
+        console.error('[Classic] Failed to load payment settings:', e);
+      }
+    }
+    loadPaymentSettings();
 
     async function toggleCall() {
       if (conversation) {
@@ -1742,9 +1796,18 @@ function generateClassicWidget({ t, agentName, elevenLabsId, greeting, langListH
             agent: { language: currentLang, firstMessage: firstMsg }
           },
           dynamicVariables: {
-            locationId: new URLSearchParams(window.location.search).get('locationId') || '',
+            locationId: locationId,
             conversation_mode: 'voice_call',
-            language: currentLang
+            language: currentLang,
+            payments_enabled: paymentSettings?.payments_enabled ? 'true' : 'false',
+            pay_ahead_enabled: paymentSettings?.pay_ahead_enabled ? 'true' : 'false',
+            deposit_applies_to: paymentSettings?.apply_to || 'both',
+            deposit_type: paymentSettings?.deposit_type || 'fixed',
+            deposit_amount: paymentSettings?.deposit_type === 'percentage'
+              ? (paymentSettings?.deposit_amount || 0) + '%'
+              : '$' + ((paymentSettings?.deposit_amount || 0) / 100).toFixed(0),
+            deposit_threshold_enabled: paymentSettings?.auto_require_above ? 'true' : 'false',
+            deposit_threshold_amount: '$' + ((paymentSettings?.auto_require_amount || 0) / 100).toFixed(0)
           },
           onConnect: () => widget.classList.add('speaking'),
           onDisconnect: () => { widget.classList.remove('speaking'); conversation = null; }

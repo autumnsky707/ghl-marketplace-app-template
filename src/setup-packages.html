@@ -790,7 +790,7 @@
           if (data && data.success && data.settings) {
             const s = data.settings;
             globalDepositSettings.requireDeposits = s.payments_enabled || false;
-            globalDepositSettings.defaultAmountFixed = (s.deposit_amount || 5000) / 100; // Convert cents to dollars
+            globalDepositSettings.defaultAmountFixed = (s.deposit_amount || 0) / 100; // Convert cents to dollars
             globalDepositSettings.defaultType = s.deposit_type || 'fixed';
             globalDepositSettings.payAheadEnabled = s.pay_ahead_enabled || false;
             console.log('[Deposits] Global settings loaded:', globalDepositSettings);

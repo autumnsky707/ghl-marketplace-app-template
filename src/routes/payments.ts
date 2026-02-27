@@ -66,13 +66,15 @@ router.get("/settings/:locationId", async (req: Request, res: Response) => {
     }
 
     // Return default settings if none exist
+    // NOTE: deposit_amount defaults to 0 - business MUST configure their own amount
     const settings = data || {
       payments_enabled: false,
+      pay_ahead_enabled: false,
       apply_to: "both",
       auto_require_above: false,
       auto_require_amount: 0,
       deposit_type: "fixed",
-      deposit_amount: 5000, // $50.00 in cents
+      deposit_amount: 0, // No default - business must set their own amount
       unpaid_policy: "hold_24h",
     };
 
@@ -122,7 +124,7 @@ router.post("/settings", async (req: Request, res: Response) => {
         auto_require_above: auto_require_above ?? false,
         auto_require_amount: auto_require_amount ?? 0,
         deposit_type: deposit_type ?? "fixed",
-        deposit_amount: deposit_amount ?? 5000,
+        deposit_amount: deposit_amount ?? 0, // No default - business must configure
         unpaid_policy: unpaid_policy ?? "hold_24h",
         pay_ahead_enabled: pay_ahead_enabled ?? false,
         updated_at: new Date().toISOString(),
@@ -524,7 +526,7 @@ router.get("/deposit-settings", async (req: Request, res: Response) => {
       autoThresholdEnabled: data.auto_require_above,
       autoThresholdAmount: (data.auto_require_amount || 0) / 100, // Convert cents to dollars
       defaultType: data.deposit_type,
-      defaultAmountFixed: data.deposit_type === 'fixed' ? (data.deposit_amount || 5000) / 100 : 50,
+      defaultAmountFixed: data.deposit_type === 'fixed' ? (data.deposit_amount || 0) / 100 : 0,
       defaultAmountPercent: data.deposit_type === 'percentage' ? data.deposit_amount : 25,
       notPaidAction: data.unpaid_policy
     } : {
