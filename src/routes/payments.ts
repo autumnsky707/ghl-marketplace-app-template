@@ -54,7 +54,7 @@ router.get("/settings/:locationId", async (req: Request, res: Response) => {
     const { data, error } = await supabase
       .from("payment_settings")
       .select(
-        "payments_enabled, apply_to, auto_require_above, auto_require_amount, deposit_type, deposit_amount, unpaid_policy"
+        "payments_enabled, pay_ahead_enabled, apply_to, auto_require_above, auto_require_amount, deposit_type, deposit_amount, unpaid_policy"
       )
       .eq("location_id", locationId)
       .single();
