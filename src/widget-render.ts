@@ -780,7 +780,7 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       document.querySelector('.call-label').innerHTML = ui.tapToSpeak + ' <span>' + agent + '</span>';
       document.getElementById('chatToggle').innerHTML = '<svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg> ' + ui.chatWith + ' <span>' + agent + '</span>';
       document.querySelector('.ch-st').innerHTML = '<span class="dot-on"></span> ' + ui.online;
-      document.getElementById('greetingMsg').textContent = ui.greeting.replace('{agent}', agent);
+      document.getElementById('greetingMsg').textContent = getFirstMessage(lang);
       document.getElementById('chatInput').placeholder = ui.placeholder;
       document.querySelector('.v10-foot p').textContent = ui.footer;
       document.querySelector('.sep-t').textContent = ui.or;
