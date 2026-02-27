@@ -1035,6 +1035,130 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       });
     }
 
+    // ══════════════════════════════════════════════════════
+    // CHIP SYSTEM - Full implementation from backup demo
+    // ══════════════════════════════════════════════════════
+
+    // Remove <think>...</think> tags from agent responses
+    function stripThinkTags(text) {
+      if (!text) return '';
+      let stripped = text;
+
+      // 1. Remove complete <think>...</think> pairs (non-greedy, multiline)
+      stripped = stripped.replace(/<think>[\\s\\S]*?<\\/think>/gi, '');
+
+      // 2. Remove any standalone </think> tags (orphaned closing tags)
+      stripped = stripped.replace(/<\\/think>/gi, '');
+
+      // 3. Remove any standalone <think> tags and everything after them
+      //    (in case the closing tag was cut off)
+      stripped = stripped.replace(/<think>[\\s\\S]*/gi, '');
+
+      // 4. Clean up any resulting double spaces or leading/trailing whitespace
+      stripped = stripped.replace(/\\s+/g, ' ').trim();
+
+      return stripped;
+    }
+
+    // Fix ALL spacing issues in text (letter-digit, sentence, hyphen spacing)
+    function fixAllSpacing(text) {
+      if (!text) return '';
+
+      let result = text
+        // Fix missing space after comma (e.g., "treatment,60" → "treatment, 60")
+        .replace(/,([^\\s])/g, ', \$1')
+        // Fix lowercase followed by uppercase (e.g., "minsAesthetics" → "mins Aesthetics")
+        .replace(/([a-z])([A-Z])/g, '\$1 \$2')
+        // Fix letter followed by digit (e.g., "a60" → "a 60", "Monday2" → "Monday 2")
+        .replace(/([a-zA-Z])(\\d)/g, '\$1 \$2')
+        // Fix digit followed by lowercase letter EXCEPT ordinal suffixes
+        .replace(/(\\d)([a-z])/g, function(match, digit, letter, offset, fullString) {
+          const remaining = fullString.substring(offset + 1);
+          if (remaining.match(/^(st|nd|rd|th)\\b/i)) {
+            return match; // Don't add space - it's an ordinal
+          }
+          return digit + ' ' + letter;
+        })
+        // Fix missing space after period - but NOT in emails/URLs
+        .replace(/\\.([A-Za-z])/g, function(match, letter, offset, fullString) {
+          const before = fullString.substring(Math.max(0, offset - 20), offset);
+          const after = fullString.substring(offset + 1, offset + 10);
+          if (before.includes('@')) return match;
+          if (after.match(/^(com|org|net|edu|gov|io|co|ai|uk|us|ca)\\b/i)) return match;
+          if (before.includes('://') || before.includes('www.')) return match;
+          if (letter === letter.toLowerCase()) return match;
+          return '. ' + letter;
+        })
+        // Fix hyphen spacing between word and number
+        .replace(/([a-zA-Z])-(\\d)/g, '\$1 - \$2')
+        .replace(/(\\d)-([a-zA-Z])/g, '\$1 - \$2')
+        // Fix ordinal suffix spacing - remove any accidental space before st/nd/rd/th
+        .replace(/(\\d)\\s+(st|nd|rd|th)\\b/gi, '\$1\$2')
+        // Fix double spaces
+        .replace(/  +/g, ' ');
+
+      return result;
+    }
+
+    // Parse [chips: Option1, Option2, ...] tags from agent message
+    // Returns { text, chips } where chips is an array of options
+    function parseChipsFromMessage(text) {
+      console.log('[Chips] parseChipsFromMessage input:', text.substring(0, 100));
+      const chipMatch = text.match(/\\[chips?:\\s*([^\\]]+)\\]/i);
+      if (chipMatch) {
+        const chips = chipMatch[1].split(',').map(c => c.trim()).filter(c => c);
+        const cleanText = text.replace(/\\[chips?:[^\\]]+\\]/gi, '').trim();
+        console.log('[Chips] Found chips:', chips);
+        console.log('[Chips] Clean text:', cleanText.substring(0, 50));
+        return { text: cleanText, chips };
+      }
+      console.log('[Chips] No chips found in message');
+      return { text, chips: [] };
+    }
+
+    // Render dynamic chips from agent response
+    function renderDynamicChips(chips) {
+      const chipsEl = document.getElementById('chips');
+      if (!chipsEl) {
+        console.error('[Chips] No chips container found');
+        return;
+      }
+
+      // Clear existing chips
+      chipsEl.innerHTML = '';
+
+      if (!chips || chips.length === 0) {
+        chipsEl.style.display = 'none';
+        return;
+      }
+
+      // Show the container with flex layout
+      chipsEl.style.display = 'flex';
+      chipsEl.style.flexWrap = 'wrap';
+      chipsEl.style.gap = '6px';
+
+      chips.forEach(chipText => {
+        const chip = document.createElement('button');
+        chip.className = 'chip dynamic-chip';
+
+        // Fix ALL spacing issues in chip label
+        const fixedChipText = fixAllSpacing(stripThinkTags(chipText));
+        chip.textContent = fixedChipText;
+        chip.setAttribute('data-msg', chipText); // Keep original for sending to agent
+
+        chip.addEventListener('click', () => {
+          console.log('[Chips] Chip clicked:', chipText);
+          sendMessage(chipText);
+          // Hide chips after selection
+          chipsEl.style.display = 'none';
+        });
+
+        chipsEl.appendChild(chip);
+      });
+
+      console.log('[Chips] Rendered', chips.length, 'chips');
+    }
+
     // Show "Pay Now" / "Pay at Visit" chips when deposits are OFF
     // This gives customer the OPTION to pay ahead or pay later
     function showPaymentOptionChips() {
@@ -1302,7 +1426,23 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
     function addMessage(text, isUser) {
       const msg = document.createElement('div');
       msg.className = 'msg ' + (isUser ? 'u' : 'a');
-      msg.textContent = text;
+
+      // For agent messages, parse and display dynamic chips
+      if (!isUser) {
+        // First strip any <think> tags, then parse chips
+        const cleanedText = stripThinkTags(text);
+        const parsed = parseChipsFromMessage(cleanedText);
+        // Fix spacing in the displayed message
+        msg.textContent = fixAllSpacing(parsed.text);
+        // Show dynamic chips if present
+        if (parsed.chips && parsed.chips.length > 0) {
+          // Delay slightly to ensure message is displayed first
+          setTimeout(() => renderDynamicChips(parsed.chips), 100);
+        }
+      } else {
+        msg.textContent = text;
+      }
+
       msgs.insertBefore(msg, typing);
       msgs.scrollTop = msgs.scrollHeight;
     }
