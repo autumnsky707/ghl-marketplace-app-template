@@ -663,7 +663,7 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
               <button class="ch-x" id="chatClose">×</button>
             </div>
             <div class="msgs" id="msgs">
-              <div class="msg a" id="greetingMsg">Hi! I'm ${agentName}, your AI spa concierge. How can I help you today?</div>
+              <div class="msg a" id="greetingMsg"></div>
               <div class="typing" id="typing"><div class="td"></div><div class="td"></div><div class="td"></div></div>
             </div>
             <!-- Payment Form (hidden by default) -->
@@ -1403,8 +1403,16 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       }
     });
 
-    // Initialize payment system
-    loadPaymentSettings();
+    // Initialize payment system - wait for settings to load
+    let settingsLoaded = false;
+    loadPaymentSettings().then(() => {
+      settingsLoaded = true;
+      console.log('[Payment] Settings ready for session:', {
+        payments_enabled: paymentSettings?.payments_enabled,
+        pay_ahead_enabled: paymentSettings?.pay_ahead_enabled,
+        deposit_amount: paymentSettings?.deposit_amount
+      });
+    });
 
     // Payment button click handler
     document.getElementById('payBtn').addEventListener('click', submitPayment);
@@ -1465,6 +1473,30 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       // Use text-only chat session (separate from voice)
       if (!chatSession) {
         try {
+          // Wait for payment settings to load before starting session
+          if (!settingsLoaded) {
+            console.log('[Payment] Waiting for settings to load...');
+            await new Promise(resolve => {
+              const checkSettings = setInterval(() => {
+                if (settingsLoaded) {
+                  clearInterval(checkSettings);
+                  resolve();
+                }
+              }, 100);
+              // Timeout after 3 seconds
+              setTimeout(() => {
+                clearInterval(checkSettings);
+                resolve();
+              }, 3000);
+            });
+          }
+          console.log('[Payment] Starting session with dynamicVariables:', {
+            payments_enabled: paymentSettings?.payments_enabled ? 'true' : 'false',
+            pay_ahead_enabled: paymentSettings?.pay_ahead_enabled ? 'true' : 'false',
+            deposit_amount: paymentSettings?.deposit_type === 'percentage'
+              ? (paymentSettings?.deposit_amount || 0) + '%'
+              : '$' + ((paymentSettings?.deposit_amount || 0) / 100).toFixed(0)
+          });
           const firstMsg = getFirstMessage(currentLang);
           chatSession = await Conversation.startSession({
             agentId: AGENT_ID,
@@ -1526,7 +1558,27 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
         return;
       }
       try {
+        // Wait for payment settings to load before starting session
+        if (!settingsLoaded) {
+          console.log('[Payment] Waiting for settings to load for voice...');
+          await new Promise(resolve => {
+            const checkSettings = setInterval(() => {
+              if (settingsLoaded) {
+                clearInterval(checkSettings);
+                resolve();
+              }
+            }, 100);
+            setTimeout(() => { clearInterval(checkSettings); resolve(); }, 3000);
+          });
+        }
         console.log('Starting voice with language:', currentLang);
+        console.log('[Payment] Voice session dynamicVariables:', {
+          payments_enabled: paymentSettings?.payments_enabled ? 'true' : 'false',
+          pay_ahead_enabled: paymentSettings?.pay_ahead_enabled ? 'true' : 'false',
+          deposit_amount: paymentSettings?.deposit_type === 'percentage'
+            ? (paymentSettings?.deposit_amount || 0) + '%'
+            : '$' + ((paymentSettings?.deposit_amount || 0) / 100).toFixed(0)
+        });
         const firstMsg = getFirstMessage(currentLang);
         conversation = await Conversation.startSession({
           agentId: AGENT_ID,
