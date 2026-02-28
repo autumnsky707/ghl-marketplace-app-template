@@ -648,6 +648,29 @@
     <div class="divider"></div>
 
     <div class="section">
+      <h2>Business Settings</h2>
+      <div class="info-box">
+        <p>Configure your business contact info and current promotions. These are passed to the AI concierge so she can provide accurate information to customers.</p>
+      </div>
+
+      <div class="form-group">
+        <label for="spaPhoneInput">Spa Phone Number</label>
+        <input type="tel" id="spaPhoneInput" placeholder="(555) 123-4567" onchange="saveBusinessSettings()">
+        <p style="font-size: 12px; color: #666; margin-top: 4px;">When a customer asks to speak with someone, the AI will provide this number.</p>
+      </div>
+
+      <div class="form-group">
+        <label for="currentPromotionsInput">Current Promotions</label>
+        <textarea id="currentPromotionsInput" rows="3" placeholder="Example: 20% off first-time guests, Free add-on massage with any package" onchange="saveBusinessSettings()"></textarea>
+        <p style="font-size: 12px; color: #666; margin-top: 4px;">List your current specials or promotions. The AI will share these when customers ask about deals.</p>
+      </div>
+
+      <div id="businessSettingsStatus" style="font-size: 13px; color: #666; margin-top: 8px;"></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="section">
       <h2>Deposit Settings</h2>
       <div class="info-box">
         <p>Configure deposit requirements for bookings. When enabled, customers must pay a deposit to confirm their appointment.</p>
@@ -778,6 +801,93 @@
 
     // Per-package deposit overrides (keyed by package ID)
     let packageDepositOverrides = {};
+
+    // ══════════════════════════════════════════════════════
+    // BUSINESS SETTINGS STATE
+    // ══════════════════════════════════════════════════════
+    let businessSettings = {
+      spaPhone: '',
+      currentPromotions: ''
+    };
+
+    // Load business settings from the same payment_settings endpoint
+    async function loadBusinessSettings() {
+      if (!locationId) return;
+
+      try {
+        const response = await fetch(`${API_BASE}/api/payments/settings/${locationId}`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.success && data.settings) {
+            businessSettings.spaPhone = data.settings.spa_phone || '';
+            businessSettings.currentPromotions = data.settings.current_promotions || '';
+            console.log('[Business] Settings loaded:', businessSettings);
+            updateBusinessSettingsUI();
+          }
+        }
+      } catch (error) {
+        console.error('[Business] Error loading settings:', error);
+      }
+    }
+
+    // Update the business settings UI with loaded values
+    function updateBusinessSettingsUI() {
+      const phoneInput = document.getElementById('spaPhoneInput');
+      const promotionsInput = document.getElementById('currentPromotionsInput');
+
+      if (phoneInput) {
+        phoneInput.value = businessSettings.spaPhone || '';
+      }
+      if (promotionsInput) {
+        promotionsInput.value = businessSettings.currentPromotions || '';
+      }
+    }
+
+    // Save business settings to Supabase
+    async function saveBusinessSettings() {
+      if (!locationId) return;
+
+      const phoneInput = document.getElementById('spaPhoneInput');
+      const promotionsInput = document.getElementById('currentPromotionsInput');
+      const statusEl = document.getElementById('businessSettingsStatus');
+
+      const spaPhone = phoneInput?.value?.trim() || '';
+      const currentPromotions = promotionsInput?.value?.trim() || '';
+
+      // Update local state
+      businessSettings.spaPhone = spaPhone;
+      businessSettings.currentPromotions = currentPromotions;
+
+      try {
+        statusEl.textContent = 'Saving...';
+        statusEl.style.color = '#666';
+
+        const response = await fetch(`${API_BASE}/api/payments/settings`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            locationId: locationId,
+            spa_phone: spaPhone,
+            current_promotions: currentPromotions
+          })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          statusEl.textContent = 'Settings saved!';
+          statusEl.style.color = '#28a745';
+          setTimeout(() => { statusEl.textContent = ''; }, 2000);
+        } else {
+          statusEl.textContent = 'Failed to save: ' + (data.error || 'Unknown error');
+          statusEl.style.color = '#dc3545';
+        }
+      } catch (error) {
+        console.error('[Business] Error saving settings:', error);
+        statusEl.textContent = 'Failed to save settings';
+        statusEl.style.color = '#dc3545';
+      }
+    }
 
     // Load global deposit settings from Supabase
     async function loadGlobalDepositSettings() {
@@ -1138,7 +1248,8 @@
 
     async function initializePage() {
       // Page is authenticated, load data
-      // Load deposit settings first so they're available when packages render
+      // Load all settings first so they're available when packages render
+      await loadBusinessSettings();
       await loadGlobalDepositSettings();
       await loadPackageDepositOverrides();
 

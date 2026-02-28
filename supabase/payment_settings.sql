@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS payment_settings (
   deposit_amount INTEGER DEFAULT 0,
   unpaid_policy TEXT DEFAULT 'hold_24h' CHECK (unpaid_policy IN ('hold_24h', 'keep_unpaid', 'dont_confirm')),
   pay_ahead_enabled BOOLEAN DEFAULT FALSE,
+  spa_phone TEXT,
+  current_promotions TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -41,6 +43,8 @@ COMMENT ON COLUMN payment_settings.auto_require_amount IS 'Threshold amount in c
 COMMENT ON COLUMN payment_settings.deposit_type IS 'fixed = flat amount, percentage = % of service price';
 COMMENT ON COLUMN payment_settings.deposit_amount IS 'Deposit amount: cents if fixed, whole number if percentage';
 COMMENT ON COLUMN payment_settings.unpaid_policy IS 'What happens if deposit not paid: hold_24h, keep_unpaid, dont_confirm';
+COMMENT ON COLUMN payment_settings.spa_phone IS 'Spa phone number for customers to call - passed to AI agent';
+COMMENT ON COLUMN payment_settings.current_promotions IS 'Current promotional offers text - passed to AI agent for context';
 
 -- ========================================
 -- Per-Package Deposit Overrides Table
@@ -74,3 +78,10 @@ COMMENT ON TABLE package_deposit_overrides IS 'Per-package deposit settings that
 -- Run this if you already have the payment_settings table
 -- ========================================
 -- ALTER TABLE payment_settings ADD COLUMN IF NOT EXISTS pay_ahead_enabled BOOLEAN DEFAULT FALSE;
+
+-- ========================================
+-- MIGRATION: Add spa_phone and current_promotions columns
+-- Run this if you already have the payment_settings table
+-- ========================================
+ALTER TABLE payment_settings ADD COLUMN IF NOT EXISTS spa_phone TEXT;
+ALTER TABLE payment_settings ADD COLUMN IF NOT EXISTS current_promotions TEXT;

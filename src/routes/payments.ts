@@ -54,7 +54,7 @@ router.get("/settings/:locationId", async (req: Request, res: Response) => {
     const { data, error } = await supabase
       .from("payment_settings")
       .select(
-        "payments_enabled, pay_ahead_enabled, apply_to, auto_require_above, auto_require_amount, deposit_type, deposit_amount, unpaid_policy"
+        "payments_enabled, pay_ahead_enabled, apply_to, auto_require_above, auto_require_amount, deposit_type, deposit_amount, unpaid_policy, spa_phone, current_promotions"
       )
       .eq("location_id", locationId)
       .single();
@@ -76,6 +76,8 @@ router.get("/settings/:locationId", async (req: Request, res: Response) => {
       deposit_type: "fixed",
       deposit_amount: 0, // No default - business must set their own amount
       unpaid_policy: "dont_confirm",
+      spa_phone: null,
+      current_promotions: null,
     };
 
     // Add test mode flag for widget to show banner
@@ -109,6 +111,8 @@ router.post("/settings", async (req: Request, res: Response) => {
     deposit_amount,
     unpaid_policy,
     pay_ahead_enabled,
+    spa_phone,
+    current_promotions,
   } = req.body;
 
   if (!locationId) {
@@ -127,6 +131,8 @@ router.post("/settings", async (req: Request, res: Response) => {
         deposit_amount: deposit_amount ?? 0, // No default - business must configure
         unpaid_policy: unpaid_policy ?? "dont_confirm",
         pay_ahead_enabled: pay_ahead_enabled ?? false,
+        spa_phone: spa_phone ?? null,
+        current_promotions: current_promotions ?? null,
         updated_at: new Date().toISOString(),
       },
       { onConflict: "location_id" }
@@ -528,7 +534,9 @@ router.get("/deposit-settings", async (req: Request, res: Response) => {
       defaultType: data.deposit_type,
       defaultAmountFixed: data.deposit_type === 'fixed' ? (data.deposit_amount || 0) / 100 : 0,
       defaultAmountPercent: data.deposit_type === 'percentage' ? data.deposit_amount : 25,
-      notPaidAction: data.unpaid_policy
+      notPaidAction: data.unpaid_policy,
+      spaPhone: data.spa_phone,
+      currentPromotions: data.current_promotions
     } : {
       requireDeposits: false,
       applyTo: 'both',
@@ -537,7 +545,9 @@ router.get("/deposit-settings", async (req: Request, res: Response) => {
       defaultType: 'fixed',
       defaultAmountFixed: 50,
       defaultAmountPercent: 25,
-      notPaidAction: 'dont_confirm'
+      notPaidAction: 'dont_confirm',
+      spaPhone: null,
+      currentPromotions: null
     };
 
     return res.json({ success: true, settings });
