@@ -2576,7 +2576,8 @@ router.post("/book", async (req: Request, res: Response) => {
           const servicesStr = bgPackagePlan.slots.map((slot, idx) => `${idx + 1}. ${slot.service}`).join(", ");
           let packageBookingNote = `Package: ${bgPkg.package_name} | Services (in order): ${servicesStr}`;
           if (bgTherapistPreference && ["male", "female"].includes(bgTherapistPreference.toLowerCase())) {
-            packageBookingNote += ` | Massage therapist preference: ${bgTherapistPreference.toLowerCase()}`;
+            const bgHasMassage = bgPackagePlan.slots.some((slot: any) => isMassageService(slot.service));
+            packageBookingNote += ` | ${bgHasMassage ? "Massage therapist" : "Therapist"} preference: ${bgTherapistPreference.toLowerCase()}`;
           }
           if (bgNotes) {
             packageBookingNote += ` | Customer notes: ${bgNotes}`;
@@ -7134,6 +7135,10 @@ router.post("/book-group", async (req: Request, res: Response) => {
         console.log(`[GroupBook] BACKGROUND: Clean description: ${groupDescription}`);
 
         // Detailed internal note for Notes API
+        // Use "massage therapist" only when booking includes a massage service
+        const hasMassage = services.some(s => isMassageService(s));
+        const therapistLabel = hasMassage ? "massage therapist" : "therapist";
+
         const prefsStr = people.map((p: any) => {
           const pref = p.therapist_preference?.toLowerCase();
           const isStrict = p.strict_gender === true;
@@ -7141,17 +7146,17 @@ router.post("/book-group", async (req: Request, res: Response) => {
           if (pref === 'female') {
             return isStrict
               ? `${p.name} - all female service providers requested`
-              : `${p.name} - female massage therapist`;
+              : `${p.name} - female ${therapistLabel}`;
           } else if (pref === 'male') {
             return isStrict
               ? `${p.name} - all male service providers requested`
-              : `${p.name} - male massage therapist`;
+              : `${p.name} - male ${therapistLabel}`;
           } else {
-            return `${p.name} - no preference for massage therapist gender`;
+            return `${p.name} - no preference for ${therapistLabel} gender`;
           }
         }).join(', ');
 
-        const groupInternalNote = `Group booking (${people.length} people): ${namesStr} | Package: ${bookingName} | Services: ${servicesStr} | Massage therapist preference: ${prefsStr}`;
+        const groupInternalNote = `Group booking (${people.length} people): ${namesStr} | Package: ${bookingName} | Services: ${servicesStr} | Therapist preference: ${prefsStr}`;
         console.log(`[GroupBook] BACKGROUND: Internal note: ${groupInternalNote}`);
 
         const bookingResults: PersonBookingResult[] = [];
