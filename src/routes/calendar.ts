@@ -6354,19 +6354,29 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       console.log(`[GroupCheck] Package lookup: ${pkg ? pkg.package_name : 'NOT FOUND'}, services: ${pkg?.services?.join(', ') || 'N/A'}`);
 
       if (!pkg) {
-        console.log(`[GroupCheck] VALIDATION FAILED: Package "${package_name}" not found`);
-        const allPackages = await getPackages(resolvedLocationId);
-        return res.status(404).json({
-          success: false,
-          error: `Package "${package_name}" not found`,
-          available_packages: allPackages.map(p => p.package_name),
-          message: `I couldn't find a package called "${package_name}". Would you like me to tell you about our available packages?`,
-        });
+        // Fallback: treat package_name as a service name (agent may send service name in package_name field)
+        console.log(`[GroupCheck] Package not found, trying as service: "${package_name}"`);
+        const syncedCals = await getSyncedCalendarsForService(resolvedLocationId, package_name);
+        if (syncedCals.length > 0) {
+          services = [package_name];
+          bookingName = package_name;
+          isServiceBooking = true;
+          console.log(`[GroupCheck] Found as service: ${package_name} (${syncedCals.length} calendars available)`);
+        } else {
+          console.log(`[GroupCheck] VALIDATION FAILED: Package/service "${package_name}" not found`);
+          const allPackages = await getPackages(resolvedLocationId);
+          return res.status(404).json({
+            success: false,
+            error: `Package "${package_name}" not found`,
+            available_packages: allPackages.map(p => p.package_name),
+            message: `I couldn't find a package called "${package_name}". Would you like me to tell you about our available packages?`,
+          });
+        }
+      } else {
+        services = pkg.services;
+        bookingName = pkg.package_name;
+        console.log(`[GroupCheck] Package: ${pkg.package_name} with ${pkg.services.length} services`);
       }
-
-      services = pkg.services;
-      bookingName = pkg.package_name;
-      console.log(`[GroupCheck] Package: ${pkg.package_name} with ${pkg.services.length} services`);
     }
 
     console.log(`[GroupCheck] Booking: ${bookingName} (${isServiceBooking ? 'service' : 'package'}) with ${services.length} service(s)`);
@@ -6913,21 +6923,31 @@ router.post("/book-group", async (req: Request, res: Response) => {
       console.log(`[GroupBook] Package lookup: ${pkg ? pkg.package_name : 'NOT FOUND'}, services: ${pkg?.services?.join(', ') || 'N/A'}`);
 
       if (!pkg) {
-        console.log(`[GroupBook] VALIDATION FAILED: Package "${package_name}" not found`);
-        const allPackages = await getPackages(resolvedLocationId);
-        return res.status(404).json({
-          success: false,
-          error: `Package "${package_name}" not found`,
-          available_packages: allPackages.map(p => p.package_name),
-          message: `I couldn't find a package called "${package_name}". Would you like me to tell you about our available packages?`,
-          retry_same_package: false,
-          agent_instructions: "DO NOT improvise or switch packages. Tell the customer the package was not found and offer to list available packages.",
-        });
+        // Fallback: treat package_name as a service name (agent may send service name in package_name field)
+        console.log(`[GroupBook] Package not found, trying as service: "${package_name}"`);
+        const syncedCals = await getSyncedCalendarsForService(resolvedLocationId, package_name);
+        if (syncedCals.length > 0) {
+          services = [package_name];
+          bookingName = package_name;
+          isServiceBooking = true;
+          console.log(`[GroupBook] Found as service: ${package_name} (${syncedCals.length} calendars available)`);
+        } else {
+          console.log(`[GroupBook] VALIDATION FAILED: Package/service "${package_name}" not found`);
+          const allPackages = await getPackages(resolvedLocationId);
+          return res.status(404).json({
+            success: false,
+            error: `Package "${package_name}" not found`,
+            available_packages: allPackages.map(p => p.package_name),
+            message: `I couldn't find a package called "${package_name}". Would you like me to tell you about our available packages?`,
+            retry_same_package: false,
+            agent_instructions: "DO NOT improvise or switch packages. Tell the customer the package was not found and offer to list available packages.",
+          });
+        }
+      } else {
+        services = pkg.services;
+        bookingName = pkg.package_name;
+        console.log(`[GroupBook] Package: ${pkg.package_name} with ${pkg.services.length} services`);
       }
-
-      services = pkg.services;
-      bookingName = pkg.package_name;
-      console.log(`[GroupBook] Package: ${pkg.package_name} with ${pkg.services.length} services`);
     }
 
     console.log(`[GroupBook] Booking: ${bookingName} with ${services.length} service(s) for ${people.length} people`);
