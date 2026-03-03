@@ -987,7 +987,7 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
 
     // Calculate deposit amount based on settings and real booking total
     function calculateDeposit(totalCents, bookingType) {
-      if (!paymentSettings?.payments_enabled) return 0;
+      if (!paymentSettings?.payments_enabled && !paymentSettings?.deposits_required) return 0;
 
       // Check apply_to setting
       if (paymentSettings.apply_to === 'packages' && bookingType !== 'package') return 0;
@@ -1597,11 +1597,18 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
             onAgentToolResponse: (toolResponse) => {
               try {
                 const resp = typeof toolResponse === 'string' ? JSON.parse(toolResponse) : toolResponse;
-                if (resp && resp.total_price_cents) currentBookingTotal = resp.total_price_cents;
+                if (resp && resp.total_price_cents) {
+                  currentBookingTotal = resp.total_price_cents;
+                } else if (resp && resp.total_price && !currentBookingTotal) {
+                  currentBookingTotal = Math.round(resp.total_price * 100);
+                }
                 if (resp && resp.unit_price) currentBookingPrice = Math.round(resp.unit_price * 100);
                 if (resp && resp.num_people) currentBookingGroupSize = resp.num_people;
                 if (resp && resp.is_service_booking !== undefined) {
                   currentBookingType = resp.is_service_booking ? 'service' : 'package';
+                }
+                if (resp && resp.package_name && !currentBookingType) {
+                  currentBookingType = 'package';
                 }
                 if (currentBookingPrice && currentBookingGroupSize && !currentBookingTotal) {
                   currentBookingTotal = currentBookingPrice * currentBookingGroupSize;
@@ -1705,11 +1712,18 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
           onAgentToolResponse: (toolResponse) => {
               try {
                 const resp = typeof toolResponse === 'string' ? JSON.parse(toolResponse) : toolResponse;
-                if (resp && resp.total_price_cents) currentBookingTotal = resp.total_price_cents;
+                if (resp && resp.total_price_cents) {
+                  currentBookingTotal = resp.total_price_cents;
+                } else if (resp && resp.total_price && !currentBookingTotal) {
+                  currentBookingTotal = Math.round(resp.total_price * 100);
+                }
                 if (resp && resp.unit_price) currentBookingPrice = Math.round(resp.unit_price * 100);
                 if (resp && resp.num_people) currentBookingGroupSize = resp.num_people;
                 if (resp && resp.is_service_booking !== undefined) {
                   currentBookingType = resp.is_service_booking ? 'service' : 'package';
+                }
+                if (resp && resp.package_name && !currentBookingType) {
+                  currentBookingType = 'package';
                 }
                 if (currentBookingPrice && currentBookingGroupSize && !currentBookingTotal) {
                   currentBookingTotal = currentBookingPrice * currentBookingGroupSize;
