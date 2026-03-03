@@ -1548,21 +1548,23 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     if (genderPreference === "male" || genderPreference === "female") {
       console.log(`[Calendar] Filtering by therapist_preference: ${genderPreference}`);
 
-      // For each calendar, get only team members with matching gender
-      const genderFilteredCalendars: typeof calendarsToCheck = [];
+      // For each calendar, get only team members with matching gender (parallel)
+      const genderResults = await Promise.all(
+        calendarsToCheck.map(cal =>
+          getTeamMembersByGender(resolvedLocationId, cal.calendar_id, genderPreference)
+            .then(members => ({ cal, members }))
+        )
+      );
 
-      for (const cal of calendarsToCheck) {
-        const genderMembers = await getTeamMembersByGender(resolvedLocationId, cal.calendar_id, genderPreference);
-        if (genderMembers.length > 0) {
-          // Add each matching team member as a separate entry (so we can pass their userId)
-          for (const member of genderMembers) {
-            genderFilteredCalendars.push({
-              calendar_id: cal.calendar_id,
-              calendar_name: cal.calendar_name,
-              staff_name: member.user_name,
-              staff_id: member.user_id,
-            });
-          }
+      const genderFilteredCalendars: typeof calendarsToCheck = [];
+      for (const { cal, members } of genderResults) {
+        for (const member of members) {
+          genderFilteredCalendars.push({
+            calendar_id: cal.calendar_id,
+            calendar_name: cal.calendar_name,
+            staff_name: member.user_name,
+            staff_id: member.user_id,
+          });
         }
       }
 
@@ -4982,12 +4984,23 @@ async function prefetchPackageData(
   const serviceStaffMap: Map<string, StaffEntryWithGender[]> = new Map();
   const userIdToName: Map<string, string> = new Map();
 
-  for (const service of services) {
-    const syncedCals = await getSyncedCalendarsForService(locationId, service);
-    const staffEntries: StaffEntryWithGender[] = [];
+  // Fetch all services in parallel
+  const serviceCalResults = await Promise.all(
+    services.map(service =>
+      getSyncedCalendarsForService(locationId, service).then(cals => ({ service, cals }))
+    )
+  );
 
-    for (const cal of syncedCals) {
-      const members = await getSyncedTeamMembers(locationId, cal.calendar_id);
+  for (const { service, cals: syncedCals } of serviceCalResults) {
+    // Fetch all team members for this service's calendars in parallel
+    const calMemberResults = await Promise.all(
+      syncedCals.map(cal =>
+        getSyncedTeamMembers(locationId, cal.calendar_id).then(members => ({ cal, members }))
+      )
+    );
+
+    const staffEntries: StaffEntryWithGender[] = [];
+    for (const { cal, members } of calMemberResults) {
       const duration = cal.slot_duration || 60;
       const buffer = cal.slot_buffer || DEFAULT_BUFFER_MINUTES;
 
