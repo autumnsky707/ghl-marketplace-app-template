@@ -51,11 +51,10 @@ router.get("/settings/:locationId", async (req: Request, res: Response) => {
   const { locationId } = req.params;
 
   try {
+    // Use SELECT * so new columns (like deposits_required) are automatically included
     const { data, error } = await supabase
       .from("payment_settings")
-      .select(
-        "payments_enabled, pay_ahead_enabled, apply_to, auto_require_above, auto_require_amount, deposit_type, deposit_amount, unpaid_policy, spa_phone, current_promotions"
-      )
+      .select("*")
       .eq("location_id", locationId)
       .single();
 
@@ -65,20 +64,37 @@ router.get("/settings/:locationId", async (req: Request, res: Response) => {
       return res.status(500).json({ success: false, error: "Database error" });
     }
 
-    // Return default settings if none exist
+    // Build settings from data, stripping sensitive fields (stripe_account_id)
     // NOTE: deposit_amount defaults to 0 - business MUST configure their own amount
-    const settings = data || {
+    const defaults = {
       payments_enabled: false,
+      deposits_required: false,
       pay_ahead_enabled: false,
       apply_to: "both",
       auto_require_above: false,
       auto_require_amount: 0,
       deposit_type: "fixed",
-      deposit_amount: 0, // No default - business must set their own amount
+      deposit_amount: 0,
       unpaid_policy: "dont_confirm",
       spa_phone: null,
       current_promotions: null,
     };
+
+    const settings = data
+      ? {
+          payments_enabled: data.payments_enabled ?? false,
+          deposits_required: data.deposits_required ?? false,
+          pay_ahead_enabled: data.pay_ahead_enabled ?? false,
+          apply_to: data.apply_to ?? "both",
+          auto_require_above: data.auto_require_above ?? false,
+          auto_require_amount: data.auto_require_amount ?? 0,
+          deposit_type: data.deposit_type ?? "fixed",
+          deposit_amount: data.deposit_amount ?? 0,
+          unpaid_policy: data.unpaid_policy ?? "dont_confirm",
+          spa_phone: data.spa_phone ?? null,
+          current_promotions: data.current_promotions ?? null,
+        }
+      : defaults;
 
     // Add test mode flag for widget to show banner
     const { isTestMode } = getStripeConfig(locationId);
@@ -104,6 +120,7 @@ router.post("/settings", async (req: Request, res: Response) => {
   const {
     locationId,
     payments_enabled,
+    deposits_required,
     apply_to,
     auto_require_above,
     auto_require_amount,
@@ -124,11 +141,12 @@ router.post("/settings", async (req: Request, res: Response) => {
       {
         location_id: locationId,
         payments_enabled: payments_enabled ?? false,
+        deposits_required: deposits_required ?? false,
         apply_to: apply_to ?? "both",
         auto_require_above: auto_require_above ?? false,
         auto_require_amount: auto_require_amount ?? 0,
         deposit_type: deposit_type ?? "fixed",
-        deposit_amount: deposit_amount ?? 0, // No default - business must configure
+        deposit_amount: deposit_amount ?? 0,
         unpaid_policy: unpaid_policy ?? "dont_confirm",
         pay_ahead_enabled: pay_ahead_enabled ?? false,
         spa_phone: spa_phone ?? null,
@@ -268,11 +286,12 @@ router.get("/stripe/connect/callback", async (req: Request, res: Response) => {
 
     console.log(`[Stripe] Connected account ${stripeAccountId} for location ${locationId}`);
 
-    // Save to Supabase
+    // Save to Supabase — also set payments_enabled since Stripe is now connected
     const { error: dbError } = await supabase.from("payment_settings").upsert(
       {
         location_id: locationId,
         stripe_account_id: stripeAccountId,
+        payments_enabled: true,
         updated_at: new Date().toISOString(),
       },
       { onConflict: "location_id" }
@@ -525,9 +544,11 @@ router.get("/deposit-settings", async (req: Request, res: Response) => {
       return res.status(500).json({ success: false, error: "Database error" });
     }
 
-    // Map to format expected by setup page
+    // Map to format expected by setup page / settings panel
+    // Use deposits_required column (separate from payments_enabled which tracks Stripe connection)
     const settings = data ? {
-      requireDeposits: data.payments_enabled,
+      requireDeposits: data.deposits_required ?? data.payments_enabled ?? false,
+      payAheadEnabled: data.pay_ahead_enabled ?? false,
       applyTo: data.apply_to,
       autoThresholdEnabled: data.auto_require_above,
       autoThresholdAmount: (data.auto_require_amount || 0) / 100, // Convert cents to dollars
@@ -539,6 +560,7 @@ router.get("/deposit-settings", async (req: Request, res: Response) => {
       currentPromotions: data.current_promotions
     } : {
       requireDeposits: false,
+      payAheadEnabled: false,
       applyTo: 'both',
       autoThresholdEnabled: false,
       autoThresholdAmount: 100,
@@ -553,6 +575,66 @@ router.get("/deposit-settings", async (req: Request, res: Response) => {
     return res.json({ success: true, settings });
   } catch (error: any) {
     console.error("[Deposits] Error:", error.message);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/payments/deposit-settings
+ * Save global deposit settings from the settings panel / demo page
+ * Maps frontend depositSettings object to payment_settings DB columns
+ */
+router.post("/deposit-settings", async (req: Request, res: Response) => {
+  const { locationId, settings } = req.body;
+
+  if (!locationId || !settings) {
+    return res.status(400).json({ success: false, error: "Missing locationId or settings" });
+  }
+
+  try {
+    // Map frontend deposit settings to database columns
+    const depositAmount = settings.defaultType === 'fixed'
+      ? Math.round((settings.defaultAmountFixed || 0) * 100) // dollars → cents
+      : (settings.defaultAmountPercent || 0); // percentage stored as-is
+
+    const updateData: Record<string, any> = {
+      location_id: locationId,
+      deposits_required: !!settings.requireDeposits,
+      pay_ahead_enabled: !!settings.payAheadEnabled,
+      auto_require_above: !!settings.autoThresholdEnabled,
+      auto_require_amount: Math.round((settings.autoThresholdAmount || 0) * 100), // dollars → cents
+      deposit_type: settings.defaultType || 'fixed',
+      deposit_amount: depositAmount,
+      updated_at: new Date().toISOString(),
+    };
+
+    // Also save phone and promotions if provided
+    if (settings.spaPhone !== undefined) {
+      updateData.spa_phone = settings.spaPhone;
+    }
+    if (settings.currentPromotions !== undefined) {
+      updateData.current_promotions = settings.currentPromotions;
+    }
+
+    const { error } = await supabase
+      .from("payment_settings")
+      .upsert(updateData, { onConflict: "location_id" });
+
+    if (error) {
+      console.error("[Deposits] Error saving settings:", error);
+      return res.status(500).json({ success: false, error: "Database error" });
+    }
+
+    console.log(`[Deposits] Settings saved for location: ${locationId}`, {
+      deposits_required: updateData.deposits_required,
+      deposit_type: updateData.deposit_type,
+      deposit_amount: updateData.deposit_amount,
+      pay_ahead_enabled: updateData.pay_ahead_enabled,
+    });
+
+    return res.json({ success: true });
+  } catch (error: any) {
+    console.error("[Deposits] Save error:", error.message);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
