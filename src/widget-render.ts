@@ -880,7 +880,7 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
 
     // Show payment form with amount - creates intent immediately
     async function showPaymentForm(amountCents, customerEmail, bookingDetails) {
-      if (!paymentSettings?.payments_enabled) return;
+      if (!paymentSettings?.payments_enabled && !paymentSettings?.deposits_required) return;
 
       currentBookingDetails = bookingDetails;
       currentPaymentAmount = amountCents;
@@ -1294,7 +1294,7 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
     // Check agent messages for deposit confirmation prompt
     // When agent asks about deposit requirement, show Yes/No chips
     function checkDepositConfirmation(message) {
-      if (!paymentSettings?.payments_enabled) return false;
+      if (!paymentSettings?.deposits_required && !paymentSettings?.payments_enabled) return false;
 
       const lowerMsg = message.toLowerCase();
 
@@ -1324,7 +1324,7 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
     // Format: [COLLECT_DEPOSIT:5000:service] or [COLLECT_DEPOSIT:15000:package]
     // Payment form only shows AFTER email is collected
     function checkPaymentTrigger(message) {
-      if (!paymentSettings?.payments_enabled) return;
+      if (!paymentSettings?.deposits_required && !paymentSettings?.payments_enabled) return;
       if (!depositConfirmed) return; // Must confirm deposit first
 
       const lowerMsg = message.toLowerCase();
