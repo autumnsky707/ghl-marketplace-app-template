@@ -40,6 +40,7 @@ export interface SyncedCalendar {
   slot_duration: number;
   slot_buffer: number;
   open_hours: any;
+  price: number | null;  // Price in dollars (e.g., 150.00)
   is_active: boolean;
   raw_data?: any;
   synced_at?: string;

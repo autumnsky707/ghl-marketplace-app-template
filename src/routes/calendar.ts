@@ -31,6 +31,7 @@ import {
   upsertPackage,
   deletePackage,
   isInstallationActive,
+  updateCalendarPrices,
 } from "../db";
 import { syncLocation } from "../sync";
 import {
@@ -1022,6 +1023,7 @@ router.post("/location-info", async (req: Request, res: Response) => {
       name: c.calendar_name,
       duration: c.slot_duration || 60,
       calendar_id: c.calendar_id,
+      price: c.price || null,
     }));
 
     // Get packages
@@ -1106,6 +1108,36 @@ router.post("/location-info", async (req: Request, res: Response) => {
 
   } catch (error: any) {
     console.error("[LocationInfo] Error:", error?.message);
+    return res.status(500).json({ success: false, error: error?.message });
+  }
+});
+
+/**
+ * POST /api/calendar/service-prices
+ * Save per-service prices from settings panel admin.
+ *
+ * Body: { locationId, prices: [{ calendar_id, price }] }
+ */
+router.post("/service-prices", async (req: Request, res: Response) => {
+  try {
+    const { locationId, location_id, prices } = req.body;
+    const resolvedLocationId = locationId || location_id;
+
+    if (!resolvedLocationId) {
+      return res.status(400).json({ success: false, error: "Missing required field: locationId" });
+    }
+    if (!prices || !Array.isArray(prices)) {
+      return res.status(400).json({ success: false, error: "Missing required field: prices (array)" });
+    }
+
+    const success = await updateCalendarPrices(resolvedLocationId, prices);
+    if (!success) {
+      return res.status(500).json({ success: false, error: "Failed to update prices" });
+    }
+
+    return res.json({ success: true, message: `Updated prices for ${prices.length} services` });
+  } catch (error: any) {
+    console.error("[ServicePrices] Error:", error?.message);
     return res.status(500).json({ success: false, error: error?.message });
   }
 });
@@ -1988,10 +2020,22 @@ router.post("/check-availability", async (req: Request, res: Response) => {
       console.log(`[Check] ═══════════════════════════════════════════════════════`);
     }
 
+    // Look up service price if available
+    let servicePrice: number | null = null;
+    if (serviceToCheck) {
+      const svcCals = await getSyncedCalendarsForService(resolvedLocationId, serviceToCheck);
+      if (svcCals.length > 0 && svcCals[0].price) {
+        servicePrice = svcCals[0].price;
+      }
+    }
+
     console.log(`[Calendar] Returning ${resultSlots.length} slots: ${resultSlots.map(s => `${s.label} ${s.time}`).join(", ")}`);
     return res.json({
       success: true,
       service: serviceToCheck || null,
+      unit_price: servicePrice,
+      total_price: servicePrice,
+      total_price_cents: servicePrice ? Math.round(servicePrice * 100) : null,
       today: todayFormatted,
       currentTime: currentTimeFormatted,
       timezone: tz,
@@ -3204,6 +3248,15 @@ router.post("/book", async (req: Request, res: Response) => {
     console.log(`[Book] End: ${endISO}`);
     console.log(`[Book] Service: ${serviceName || "(none)"}`);
 
+    // Look up service price
+    let singleServicePrice: number | null = null;
+    if (serviceName) {
+      const svcCals = await getSyncedCalendarsForService(locationId, serviceName);
+      if (svcCals.length > 0 && svcCals[0].price) {
+        singleServicePrice = svcCals[0].price;
+      }
+    }
+
     return res.json({
       success: true,
       appointmentId,
@@ -3213,6 +3266,9 @@ router.post("/book", async (req: Request, res: Response) => {
       buffer_end: bufferEndISO,
       duration_minutes: durationMinutes,
       buffer_minutes: slotBuffer,
+      unit_price: singleServicePrice,
+      total_price: singleServicePrice,
+      total_price_cents: singleServicePrice ? Math.round(singleServicePrice * 100) : null,
       data: appointmentResp.data,
     });
   } catch (error: any) {
@@ -6540,12 +6596,29 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       message = `I found ${formattedOptions.length} openings for your group of ${people.length}! Which works best? [chips: ${optionLabels}]`;
     }
 
+    // Look up unit price for the booking (service price or package price)
+    let unitPrice: number | null = null;
+    if (isServiceBooking) {
+      const svcCals = await getSyncedCalendarsForService(resolvedLocationId, bookingName);
+      if (svcCals.length > 0 && svcCals[0].price) {
+        unitPrice = svcCals[0].price;
+      }
+    } else {
+      const pkg = await getPackageByName(resolvedLocationId, bookingName);
+      if (pkg?.price) {
+        unitPrice = pkg.price;
+      }
+    }
+
     const response = {
       success: true,
       package_name: bookingName,  // Works for both packages and services
       service_name: isServiceBooking ? bookingName : undefined,
       is_service_booking: isServiceBooking,
       num_people: people.length,
+      unit_price: unitPrice,
+      total_price: unitPrice ? unitPrice * people.length : null,
+      total_price_cents: unitPrice ? Math.round(unitPrice * people.length * 100) : null,
       date: groupResult.results[0]?.date,
       today: todayStr,
       currentTime: localNowLuxon.toFormat("h:mm a"),
@@ -7090,6 +7163,20 @@ router.post("/book-group", async (req: Request, res: Response) => {
       ? allNames.join(" and ")
       : allNames.slice(0, -1).join(", ") + ", and " + allNames[allNames.length - 1];
 
+    // Look up unit price for the booking (service price or package price)
+    let bookingUnitPrice: number | null = null;
+    if (isServiceBooking) {
+      const svcCals = await getSyncedCalendarsForService(resolvedLocationId, bookingName);
+      if (svcCals.length > 0 && svcCals[0].price) {
+        bookingUnitPrice = svcCals[0].price;
+      }
+    } else {
+      const pkgForPrice = await getPackageByName(resolvedLocationId, bookingName);
+      if (pkgForPrice?.price) {
+        bookingUnitPrice = pkgForPrice.price;
+      }
+    }
+
     // RESPOND IMMEDIATELY — before booking to avoid ElevenLabs timeout
     // FIX: Make response format very clear for the agent to parse as success
     const immediateResponse = {
@@ -7101,6 +7188,9 @@ router.post("/book-group", async (req: Request, res: Response) => {
       booking_name: bookingName,
       is_service_booking: isServiceBooking,
       num_people: people.length,
+      unit_price: bookingUnitPrice,
+      total_price: bookingUnitPrice ? bookingUnitPrice * people.length : null,
+      total_price_cents: bookingUnitPrice ? Math.round(bookingUnitPrice * people.length * 100) : null,
       people_booked: allNames,
       date: availDate,
       date_formatted: dateFmt,

@@ -1006,6 +1006,31 @@ export async function deletePackage(id: string): Promise<boolean> {
 }
 
 /**
+ * Update prices for synced calendars (services).
+ * Called from settings panel admin to save per-service prices.
+ */
+export async function updateCalendarPrices(
+  locationId: string,
+  prices: Array<{ calendar_id: string; price: number | null }>
+): Promise<boolean> {
+  for (const { calendar_id, price } of prices) {
+    const { error } = await supabase
+      .from(SYNCED_CALENDARS_TABLE)
+      .update({ price })
+      .eq("location_id", locationId)
+      .eq("calendar_id", calendar_id);
+
+    if (error) {
+      console.error(`[DB] updateCalendarPrices error for calendar ${calendar_id}:`, error);
+      return false;
+    }
+  }
+
+  console.log(`[DB] Updated prices for ${prices.length} calendars in ${locationId}`);
+  return true;
+}
+
+/**
  * Hard delete a package by ID.
  */
 export async function hardDeletePackage(id: string): Promise<boolean> {
