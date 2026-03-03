@@ -810,6 +810,12 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
     let pendingBookingDetails = null;
     let customerWantsToPayAhead = false; // For when deposits are OFF but customer chooses to pay
 
+    // Booking context for real price tracking
+    let currentBookingPrice = null;      // price per person in cents
+    let currentBookingType = null;       // 'service' or 'package'
+    let currentBookingGroupSize = 1;     // number of people
+    let currentBookingTotal = null;      // total in cents (price × groupSize)
+
     // Initialize UI with current language
     updateWidgetLanguage(currentLang);
 
@@ -979,8 +985,8 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       }
     }
 
-    // Calculate deposit amount based on settings
-    function calculateDeposit(servicePrice, bookingType) {
+    // Calculate deposit amount based on settings and real booking total
+    function calculateDeposit(totalCents, bookingType) {
       if (!paymentSettings?.payments_enabled) return 0;
 
       // Check apply_to setting
@@ -988,15 +994,25 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       if (paymentSettings.apply_to === 'services' && bookingType !== 'service') return 0;
 
       // Check auto-require threshold
-      if (paymentSettings.auto_require_above && servicePrice < paymentSettings.auto_require_amount) {
+      if (paymentSettings.auto_require_above && totalCents && totalCents < paymentSettings.auto_require_amount) {
         return 0;
       }
 
       // Calculate amount
       if (paymentSettings.deposit_type === 'percentage') {
-        return Math.round(servicePrice * (paymentSettings.deposit_amount / 100));
+        if (totalCents) {
+          return Math.round(totalCents * (paymentSettings.deposit_amount / 100));
+        }
+        return 0; // No price available — can't calculate percentage
       }
-      return paymentSettings.deposit_amount;
+      return paymentSettings.deposit_amount; // Fixed = flat per booking
+    }
+
+    function resetBookingContext() {
+      currentBookingPrice = null;
+      currentBookingType = null;
+      currentBookingGroupSize = 1;
+      currentBookingTotal = null;
     }
 
     // Format deposit amount for display
@@ -1239,21 +1255,38 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       if (emailMatch) {
         customerEmail = emailMatch[0];
         console.log('[Payment] Email detected:', customerEmail);
+        console.log('[Payment] Booking context:', { currentBookingTotal, currentBookingType, currentBookingGroupSize });
 
-        // If deposit was confirmed (required deposits ON) and we have email, show payment form
+        // Case 1: Deposit confirmed + pending amount already set by trigger keywords
         if (depositConfirmed && pendingDepositAmount) {
-          console.log('[Payment] Email collected, showing payment form (deposit required)');
+          console.log('[Payment] Email collected + deposit confirmed + pending amount → showing payment form');
           showPaymentForm(pendingDepositAmount, customerEmail, pendingBookingDetails);
           pendingDepositAmount = null;
           pendingBookingDetails = null;
         }
+        // Case 2: Deposit confirmed but agent never used trigger keywords — calculate deposit from real total
+        else if (depositConfirmed && !pendingDepositAmount && paymentSettings?.payments_enabled) {
+          const depositAmount = calculateDeposit(currentBookingTotal, currentBookingType || 'service');
+          if (depositAmount > 0) {
+            console.log('[Payment] Auto-calculated deposit amount (cents):', depositAmount);
+            showPaymentForm(depositAmount, customerEmail, { triggeredBy: 'email_collected_auto' });
+          }
+        }
 
-        // If customer wants to pay ahead (deposits OFF) and we have email, show payment form
+        // Case 3: Pay-ahead chosen + pending amount
         if (customerWantsToPayAhead && pendingDepositAmount) {
-          console.log('[Payment] Email collected, showing payment form (pay ahead)');
+          console.log('[Payment] Email collected + pay ahead chosen + pending amount → showing payment form');
           showPaymentForm(pendingDepositAmount, customerEmail, pendingBookingDetails);
           pendingDepositAmount = null;
           pendingBookingDetails = null;
+        }
+        // Case 4: Pay-ahead chosen but no pending amount — use full booking total
+        else if (customerWantsToPayAhead && !pendingDepositAmount && paymentSettings?.pay_ahead_enabled) {
+          const paymentAmount = currentBookingTotal || 0;
+          if (paymentAmount > 0) {
+            console.log('[Payment] Pay-ahead amount (cents):', paymentAmount);
+            showPaymentForm(paymentAmount, customerEmail, { triggeredBy: 'email_collected_auto', payAhead: true });
+          }
         }
       }
     }
@@ -1334,15 +1367,17 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
       const shouldTrigger = triggerPhrases.some(phrase => lowerMsg.includes(phrase.toLowerCase()));
 
       if (shouldTrigger) {
-        console.log('[Payment] Agent triggered payment (default amount)');
-        const depositAmount = paymentSettings.deposit_amount;
+        console.log('[Payment] Agent triggered payment (keyword match)');
+        const depositAmount = calculateDeposit(currentBookingTotal, currentBookingType || 'service');
 
-        if (customerEmail) {
-          showPaymentForm(depositAmount, customerEmail, { triggeredBy: 'agent', message });
-        } else {
-          pendingDepositAmount = depositAmount;
-          pendingBookingDetails = { triggeredBy: 'agent', message };
-          console.log('[Payment] Waiting for email before showing payment form');
+        if (depositAmount > 0) {
+          if (customerEmail) {
+            showPaymentForm(depositAmount, customerEmail, { triggeredBy: 'agent', message });
+          } else {
+            pendingDepositAmount = depositAmount;
+            pendingBookingDetails = { triggeredBy: 'agent', message };
+            console.log('[Payment] Waiting for email before showing payment form');
+          }
         }
       }
     }
@@ -1371,19 +1406,25 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
 
       if (shouldTrigger) {
         console.log('[Payment] Agent triggered optional payment');
-        // Use deposit amount from business settings (set in Supabase)
-        const depositAmountFromSettings = paymentSettings?.deposit_amount || 0;
 
         // Check for explicit amount: [COLLECT_PAYMENT:12000]
         const amountMatch = message.match(/\[COLLECT_PAYMENT:(\d+)\]/i);
-        const paymentAmount = amountMatch ? parseInt(amountMatch[1]) : depositAmountFromSettings;
-
-        if (customerEmail) {
-          showPaymentForm(paymentAmount, customerEmail, { triggeredBy: 'agent', payAhead: true });
+        let paymentAmount;
+        if (amountMatch) {
+          paymentAmount = parseInt(amountMatch[1]);
         } else {
-          pendingDepositAmount = paymentAmount;
-          pendingBookingDetails = { triggeredBy: 'agent', payAhead: true };
-          console.log('[Payment] Waiting for email before showing payment form (pay ahead)');
+          // Pay-ahead = full booking total
+          paymentAmount = currentBookingTotal || 0;
+        }
+
+        if (paymentAmount > 0) {
+          if (customerEmail) {
+            showPaymentForm(paymentAmount, customerEmail, { triggeredBy: 'agent', payAhead: true });
+          } else {
+            pendingDepositAmount = paymentAmount;
+            pendingBookingDetails = { triggeredBy: 'agent', payAhead: true };
+            console.log('[Payment] Waiting for email before showing payment form (pay ahead)');
+          }
         }
       }
     }
@@ -1553,6 +1594,21 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
                 processUserMessage(m.message);
               }
             },
+            onAgentToolResponse: (toolResponse) => {
+              try {
+                const resp = typeof toolResponse === 'string' ? JSON.parse(toolResponse) : toolResponse;
+                if (resp && resp.total_price_cents) currentBookingTotal = resp.total_price_cents;
+                if (resp && resp.unit_price) currentBookingPrice = Math.round(resp.unit_price * 100);
+                if (resp && resp.num_people) currentBookingGroupSize = resp.num_people;
+                if (resp && resp.is_service_booking !== undefined) {
+                  currentBookingType = resp.is_service_booking ? 'service' : 'package';
+                }
+                if (currentBookingPrice && currentBookingGroupSize && !currentBookingTotal) {
+                  currentBookingTotal = currentBookingPrice * currentBookingGroupSize;
+                }
+                console.log('[Booking] Tool response price:', { currentBookingTotal, currentBookingPrice, currentBookingGroupSize, currentBookingType });
+              } catch (e) {}
+            },
             onError: () => setTyping(false),
             onDisconnect: () => { chatSession = null; }
           });
@@ -1646,6 +1702,20 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
               processUserMessage(m.message);
             }
           },
+          onAgentToolResponse: (toolResponse) => {
+              try {
+                const resp = typeof toolResponse === 'string' ? JSON.parse(toolResponse) : toolResponse;
+                if (resp && resp.total_price_cents) currentBookingTotal = resp.total_price_cents;
+                if (resp && resp.unit_price) currentBookingPrice = Math.round(resp.unit_price * 100);
+                if (resp && resp.num_people) currentBookingGroupSize = resp.num_people;
+                if (resp && resp.is_service_booking !== undefined) {
+                  currentBookingType = resp.is_service_booking ? 'service' : 'package';
+                }
+                if (currentBookingPrice && currentBookingGroupSize && !currentBookingTotal) {
+                  currentBookingTotal = currentBookingPrice * currentBookingGroupSize;
+                }
+              } catch (e) {}
+            },
           onError: () => { widget.classList.remove('speaking'); }
         });
       } catch (e) { console.error(e); }
