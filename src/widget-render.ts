@@ -1263,14 +1263,16 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
           showPaymentForm(pendingDepositAmount, customerEmail, pendingBookingDetails);
           pendingDepositAmount = null;
           pendingBookingDetails = null;
+          return;
         }
         // Case 2: Deposit confirmed but agent never used trigger keywords — calculate deposit from real total
-        else if (depositConfirmed && !pendingDepositAmount && paymentSettings?.payments_enabled) {
+        if (depositConfirmed && !pendingDepositAmount && paymentSettings?.deposits_required) {
           const depositAmount = calculateDeposit(currentBookingTotal, currentBookingType || 'service');
           if (depositAmount > 0) {
             console.log('[Payment] Auto-calculated deposit amount (cents):', depositAmount);
             showPaymentForm(depositAmount, customerEmail, { triggeredBy: 'email_collected_auto' });
           }
+          return;
         }
 
         // Case 3: Pay-ahead chosen + pending amount
@@ -1279,13 +1281,28 @@ function generateConciergeWidget({ t, agentName, elevenLabsId, greeting, langLis
           showPaymentForm(pendingDepositAmount, customerEmail, pendingBookingDetails);
           pendingDepositAmount = null;
           pendingBookingDetails = null;
+          return;
         }
         // Case 4: Pay-ahead chosen but no pending amount — use full booking total
-        else if (customerWantsToPayAhead && !pendingDepositAmount && paymentSettings?.pay_ahead_enabled) {
+        if (customerWantsToPayAhead && !pendingDepositAmount && paymentSettings?.pay_ahead_enabled) {
           const paymentAmount = currentBookingTotal || 0;
           if (paymentAmount > 0) {
             console.log('[Payment] Pay-ahead amount (cents):', paymentAmount);
             showPaymentForm(paymentAmount, customerEmail, { triggeredBy: 'email_collected_auto', payAhead: true });
+          }
+          return;
+        }
+
+        // Case 5: Pay-ahead enabled but customer hasn't been asked yet
+        if (paymentSettings?.pay_ahead_enabled && !paymentSettings?.deposits_required && !customerWantsToPayAhead) {
+          return;
+        }
+
+        // Case 6: Payments enabled (but deposits not required and pay-ahead not enabled)
+        if (paymentSettings?.payments_enabled && !paymentSettings?.deposits_required && !paymentSettings?.pay_ahead_enabled) {
+          const paymentAmount = calculateDeposit(currentBookingTotal, currentBookingType || 'service');
+          if (paymentAmount > 0) {
+            showPaymentForm(paymentAmount, customerEmail, { triggeredBy: 'email_collected_payments_enabled' });
           }
         }
       }
