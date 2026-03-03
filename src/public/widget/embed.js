@@ -16,6 +16,7 @@
       var widget = el.getAttribute('data-widget') || 'concierge';
       var agent = el.getAttribute('data-agent') || 'sophia';
       var locationId = el.getAttribute('data-location-id') || '';
+      var colors = el.getAttribute('data-colors') || '';
 
       if (!agentId) {
         console.error('[BookNexa] Missing data-booknexa-widget value');
@@ -27,6 +28,9 @@
         '&widget=' + encodeURIComponent(widget) +
         '&agent=' + encodeURIComponent(agent) +
         '&locationId=' + encodeURIComponent(locationId);
+      if (colors) {
+        src += '&colors=' + encodeURIComponent(colors);
+      }
 
       var iframe = document.createElement('iframe');
       iframe.src = src;
