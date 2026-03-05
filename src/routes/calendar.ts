@@ -972,6 +972,8 @@ router.post("/business-info", async (req: Request, res: Response) => {
         calendar_id: c.calendar_id,
         calendar_name: c.calendar_name,
         calendar_type: c.calendar_type,
+        slot_duration: c.slot_duration || 60,
+        price: c.price || null,
       }))
     });
 
