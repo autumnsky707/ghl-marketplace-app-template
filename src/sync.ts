@@ -8,6 +8,7 @@ import {
   clearSyncedData,
   getLocationsNeedingSync,
   getExistingGenders,
+  getExistingPrices,
 } from "./db";
 import { GHLCalendarResponse } from "./types";
 
@@ -125,12 +126,13 @@ export async function syncLocation(
       }
     }
 
-    // Preserve existing gender values before clearing
+    // Preserve existing gender and price values BEFORE clearing
     const existingGenders = await getExistingGenders(locationId);
+    const existingPrices = await getExistingPrices(locationId);
 
-    // Clear old data and insert new (with preserved genders)
+    // Clear old data and insert new (with preserved genders + prices)
     await clearSyncedData(locationId);
-    const { calendarsCount, teamMembersCount } = await upsertSyncedCalendars(locationId, calendars, userDetailsMap, existingGenders);
+    const { calendarsCount, teamMembersCount } = await upsertSyncedCalendars(locationId, calendars, userDetailsMap, existingGenders, existingPrices);
 
     console.log(`[Sync] Sync complete for ${locationId}: ${calendarsCount} calendars, ${teamMembersCount} team members`);
 

@@ -698,6 +698,34 @@ export async function getExistingGenders(
 }
 
 /**
+ * Fetch existing prices from synced_calendars before a clear+re-sync.
+ * Must be called BEFORE clearSyncedData so prices aren't lost.
+ */
+export async function getExistingPrices(
+  locationId: string
+): Promise<Map<string, number>> {
+  const { data, error } = await supabase
+    .from(SYNCED_CALENDARS_TABLE)
+    .select("calendar_id, price")
+    .eq("location_id", locationId);
+
+  if (error || !data) {
+    console.error("[DB] getExistingPrices error:", error);
+    return new Map();
+  }
+
+  const priceMap = new Map<string, number>();
+  for (const row of data) {
+    if (row.price != null) {
+      priceMap.set(row.calendar_id, row.price);
+    }
+  }
+
+  console.log(`[DB] Preserved ${priceMap.size} price values for ${locationId}`);
+  return priceMap;
+}
+
+/**
  * Clear all synced data for a location.
  */
 export async function clearSyncedData(locationId: string): Promise<void> {
@@ -720,28 +748,31 @@ export async function upsertSyncedCalendars(
   locationId: string,
   calendars: GHLCalendar[],
   userDetailsMap?: Map<string, { name: string; email: string }>,
-  existingGenders?: Map<string, "male" | "female" | null>
+  existingGenders?: Map<string, "male" | "female" | null>,
+  existingPrices?: Map<string, number>
 ): Promise<{ calendarsCount: number; teamMembersCount: number }> {
   let calendarsCount = 0;
   let teamMembersCount = 0;
 
-  // Fetch existing prices so we can preserve them during upsert
-  const existingPrices = new Map<string, number | null>();
-  const { data: existingCals } = await supabase
-    .from(SYNCED_CALENDARS_TABLE)
-    .select("calendar_id, price")
-    .eq("location_id", locationId);
-  if (existingCals) {
-    for (const ec of existingCals) {
-      if (ec.price != null) {
-        existingPrices.set(ec.calendar_id, ec.price);
+  // Use prices passed in (fetched BEFORE clearSyncedData), or fetch now as fallback
+  const priceMap = existingPrices || new Map<string, number>();
+  if (!existingPrices) {
+    const { data: existingCals } = await supabase
+      .from(SYNCED_CALENDARS_TABLE)
+      .select("calendar_id, price")
+      .eq("location_id", locationId);
+    if (existingCals) {
+      for (const ec of existingCals) {
+        if (ec.price != null) {
+          priceMap.set(ec.calendar_id, ec.price);
+        }
       }
     }
   }
 
   for (const cal of calendars) {
     // Upsert calendar — preserve existing price if one is saved
-    const preservedPrice = existingPrices.has(cal.id) ? existingPrices.get(cal.id)! : null;
+    const preservedPrice = priceMap.has(cal.id) ? priceMap.get(cal.id)! : null;
     const calendarRow: Partial<SyncedCalendar> = {
       location_id: locationId,
       calendar_id: cal.id,
