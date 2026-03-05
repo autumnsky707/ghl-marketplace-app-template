@@ -142,10 +142,9 @@ app.get("/authorize-handler", async (req: Request, res: Response) => {
 
     console.log(`[OAuth] Installation complete for ${locationId}`);
 
-    // Redirect to package setup page so client can configure their packages
-    // After setup, they can go to the settings panel
-    const setupUrl = `https://booknexaai-oauth.onrender.com/setup/packages?locationId=${encodeURIComponent(locationId)}&connected=true`;
-    return res.redirect(setupUrl);
+    // Redirect to the unified settings panel after OAuth connection
+    const settingsUrl = `https://booknexaai.com/spawidget-settings-page?locationId=${encodeURIComponent(locationId)}&connected=true`;
+    return res.redirect(settingsUrl);
   } catch (error: any) {
     console.error("[OAuth] Authorization failed:", error?.response?.data || error.message);
     return res.redirect(`${SETTINGS_PANEL_URL}?error=connection_failed`);
@@ -449,11 +448,6 @@ app.post("/webhooks/ghl", async (req: Request, res: Response) => {
 // Serve frontend
 app.get("/", function (req, res) {
   res.sendFile(path + "index.html");
-});
-
-// Setup page (packages and staff) - also serves as settings page
-app.get("/setup/packages", function (req, res) {
-  res.sendFile(__dirname + "/setup-packages.html");
 });
 
 app.listen(port, () => {

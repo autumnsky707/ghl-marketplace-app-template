@@ -725,8 +725,23 @@ export async function upsertSyncedCalendars(
   let calendarsCount = 0;
   let teamMembersCount = 0;
 
+  // Fetch existing prices so we can preserve them during upsert
+  const existingPrices = new Map<string, number | null>();
+  const { data: existingCals } = await supabase
+    .from(SYNCED_CALENDARS_TABLE)
+    .select("calendar_id, price")
+    .eq("location_id", locationId);
+  if (existingCals) {
+    for (const ec of existingCals) {
+      if (ec.price != null) {
+        existingPrices.set(ec.calendar_id, ec.price);
+      }
+    }
+  }
+
   for (const cal of calendars) {
-    // Upsert calendar
+    // Upsert calendar — preserve existing price if one is saved
+    const preservedPrice = existingPrices.has(cal.id) ? existingPrices.get(cal.id)! : null;
     const calendarRow: Partial<SyncedCalendar> = {
       location_id: locationId,
       calendar_id: cal.id,
@@ -735,6 +750,7 @@ export async function upsertSyncedCalendars(
       slot_duration: cal.slotDuration || 60,
       slot_buffer: cal.slotBuffer || 0,
       open_hours: cal.openHours || null,
+      price: preservedPrice,
       is_active: cal.isActive !== false,
       raw_data: cal,
       synced_at: new Date().toISOString(),
