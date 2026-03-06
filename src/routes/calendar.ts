@@ -6617,6 +6617,12 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       }
     }
 
+    // Add slot_assignments to each option so agent can pass it back to book_group
+    const formattedOptionsWithAssignments = formattedOptions.map(opt => ({
+      ...opt,
+      slot_assignments: JSON.stringify(opt.results),
+    }));
+
     const response = {
       success: true,
       package_name: bookingName,  // Works for both packages and services
@@ -6631,7 +6637,8 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
       currentTime: localNowLuxon.toFormat("h:mm a"),
       timezone: tz,
       group_slots: groupResult.results,
-      available_options: formattedOptions, // NEW: All options with labels
+      slot_assignments: JSON.stringify(groupResult.results), // Pre-verified slots — pass to book_group
+      available_options: formattedOptionsWithAssignments, // All options with slot_assignments
       message,
     };
 
@@ -6692,7 +6699,8 @@ router.post("/check-group-availability", async (req: Request, res: Response) => 
  *   person_6_therapist_preference?: "male" | "female",
  *   time_preference?: "morning" | "afternoon",
  *   selected_date?: string,
- *   requested_time?: string
+ *   requested_time?: string,
+ *   slot_assignments?: string  // Pre-verified JSON from check_group_availability — skips re-checking
  * }
  */
 router.post("/book-group", async (req: Request, res: Response) => {
@@ -6762,6 +6770,7 @@ router.post("/book-group", async (req: Request, res: Response) => {
       time_preference,
       selected_date,
       requested_time,
+      slot_assignments,  // Pre-verified slots from check_group_availability (JSON string)
       notes,
       address,  // Optional: room/meeting location
       room,     // Alias for address
@@ -7060,43 +7069,70 @@ router.post("/book-group", async (req: Request, res: Response) => {
     // Get GHL client
     const client = await ghl.requests(resolvedLocationId);
 
-    // Step 1: Find availability for the whole group
-    console.log("[GroupBook] ═══════════════════════════════════════════════════════");
-    console.log("[GroupBook] Step 1: Calling findGroupPackageAvailability with:");
-    console.log(`[GroupBook]   locationId: ${resolvedLocationId}`);
-    console.log(`[GroupBook]   services: ${services.join(', ')}`);
-    console.log(`[GroupBook]   timePreference: ${time_preference || '(none)'}`);
-    console.log(`[GroupBook]   selectedDate: ${parsedDate || '(soonest)'}`);
-    console.log(`[GroupBook]   timezone: ${tz}`);
-    console.log(`[GroupBook]   people: ${JSON.stringify(people.map((p: any) => ({ name: p.name, pref: p.therapist_preference })))}`);
-    console.log(`[GroupBook]   requestedTime: ${requested_time || '(none)'}`);
-    console.log("[GroupBook] ═══════════════════════════════════════════════════════");
+    // Step 1: Find availability — use pre-verified slot_assignments if provided
+    let groupAvailability: { success: boolean; results: GroupSlotResult[]; error?: string };
 
-    const groupAvailability = await findGroupPackageAvailability(
-      resolvedLocationId,
-      services,
-      time_preference || "",
-      parsedDate,
-      tz,
-      installation,
-      localNow,
-      people.map((p: any) => ({
-        name: p.name,
-        therapist_preference: p.therapist_preference || p.gender_preference,
-        strict_gender: p.strict_gender || false,
-      })),
-      requested_time
-    );
+    if (slot_assignments) {
+      // PRE-VERIFIED SLOTS: Skip re-checking availability — use slots from check_group_availability
+      console.log("[GroupBook] ═══════════════════════════════════════════════════════");
+      console.log("[GroupBook] Step 1: Using PRE-VERIFIED slot_assignments (skipping availability re-check)");
+      try {
+        const parsed = typeof slot_assignments === 'string' ? JSON.parse(slot_assignments) : slot_assignments;
+        console.log(`[GroupBook] Parsed ${parsed.length} person slot assignments`);
+        for (const p of parsed) {
+          console.log(`[GroupBook]   ${p.person_name}: ${p.slots.length} service(s) on ${p.date}`);
+          for (const s of p.slots) {
+            console.log(`[GroupBook]     - ${s.service} @ ${s.startTime} (cal: ${s.calendar_id}, staff: ${s.staff_user_id || 'none'})`);
+          }
+        }
+        groupAvailability = { success: true, results: parsed };
+      } catch (parseErr: any) {
+        console.error("[GroupBook] Failed to parse slot_assignments:", parseErr.message);
+        console.log("[GroupBook] Falling back to re-checking availability...");
+        groupAvailability = { success: false, results: [], error: "Invalid slot_assignments" };
+      }
+      console.log("[GroupBook] ═══════════════════════════════════════════════════════");
+    }
 
-    // Log the result
-    console.log(`[GroupBook] findGroupPackageAvailability returned: success=${groupAvailability.success}`);
-    if (!groupAvailability.success) {
-      console.log(`[GroupBook] FAILED: ${groupAvailability.error}`);
-      console.log(`[GroupBook] Partial results: ${JSON.stringify(groupAvailability.results, null, 2)}`);
+    if (!slot_assignments || !groupAvailability!.success) {
+      // NO PRE-VERIFIED SLOTS (or parse failed): Re-check availability (legacy behavior)
+      console.log("[GroupBook] ═══════════════════════════════════════════════════════");
+      console.log("[GroupBook] Step 1: Calling findGroupPackageAvailability with:");
+      console.log(`[GroupBook]   locationId: ${resolvedLocationId}`);
+      console.log(`[GroupBook]   services: ${services.join(', ')}`);
+      console.log(`[GroupBook]   timePreference: ${time_preference || '(none)'}`);
+      console.log(`[GroupBook]   selectedDate: ${parsedDate || '(soonest)'}`);
+      console.log(`[GroupBook]   timezone: ${tz}`);
+      console.log(`[GroupBook]   people: ${JSON.stringify(people.map((p: any) => ({ name: p.name, pref: p.therapist_preference })))}`);
+      console.log(`[GroupBook]   requestedTime: ${requested_time || '(none)'}`);
+      console.log("[GroupBook] ═══════════════════════════════════════════════════════");
+
+      groupAvailability = await findGroupPackageAvailability(
+        resolvedLocationId,
+        services,
+        time_preference || "",
+        parsedDate,
+        tz,
+        installation,
+        localNow,
+        people.map((p: any) => ({
+          name: p.name,
+          therapist_preference: p.therapist_preference || p.gender_preference,
+          strict_gender: p.strict_gender || false,
+        })),
+        requested_time
+      );
+
+      console.log(`[GroupBook] findGroupPackageAvailability returned: success=${groupAvailability.success}`);
+    }
+
+    if (!groupAvailability!.success) {
+      console.log(`[GroupBook] FAILED: ${groupAvailability!.error}`);
+      console.log(`[GroupBook] Partial results: ${JSON.stringify(groupAvailability!.results, null, 2)}`);
       const bookingType = isServiceBooking ? "service" : "package";
       return res.json({
         success: false,
-        error: groupAvailability.error,
+        error: groupAvailability!.error,
         // IMPORTANT: Clear instructions for agent - do NOT switch packages/services, offer different dates
         package_name: package_name || null,
         service_name: service_name || null,
