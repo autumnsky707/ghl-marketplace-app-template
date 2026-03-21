@@ -1225,7 +1225,7 @@ router.post("/service-mappings", async (req: Request, res: Response) => {
 router.post("/check-availability", async (req: Request, res: Response) => {
   console.log('[Check] Request body:', JSON.stringify(req.body, null, 2));
   try {
-    let {
+    const {
       locationId,
       location_id,
       type,
@@ -1283,35 +1283,30 @@ router.post("/check-availability", async (req: Request, res: Response) => {
     console.log(`[Check] service_name field: "${service_name || '(not provided)'}"`);
     console.log(`[Check] service_type field: "${service_type || '(not provided)'}"`);
 
-    // ========== FIX: Route by checking name against known packages in database ==========
-    // Instead of guessing based on which field the name arrived in, check if the
-    // incoming name matches any known package for this location. If it does → package.
-    // If it doesn't → service. This works regardless of which field the agent used.
-    const incomingName = (package_name && package_name.trim()) || (service_name && service_name.trim()) || (service_type && service_type.trim()) || '';
+    // ========== FIX: SERVICE NAME TAKES PRIORITY OVER PACKAGE NAME ==========
+    // If service_name or service_type is provided, ALWAYS route to service path.
+    // This prevents accidental package routing when agent asks for a single service.
+    // Only route to package path if package_name is provided WITHOUT any service name.
+    const hasServiceName = (service_name && service_name.trim()) || (service_type && service_type.trim());
+    const hasPackageName = package_name && package_name.trim();
 
     let effectiveType: string;
-    if (incomingName) {
-      // Check if the name matches a known package in the database
-      const matchedPackage = await getPackageByName(resolvedLocationId, incomingName);
-      if (matchedPackage) {
-        effectiveType = "package";
-        // Ensure package_name is set for downstream code
-        if (!package_name || !package_name.trim()) {
-          package_name = incomingName;
-        }
-        console.log(`[Check] "${incomingName}" matched known package "${matchedPackage.package_name}" → PACKAGE path`);
-      } else {
-        effectiveType = "service";
-        // Ensure service_name is set for downstream code
-        if (!service_name || !service_name.trim()) {
-          service_name = incomingName;
-        }
-        console.log(`[Check] "${incomingName}" did not match any known package → SERVICE path`);
+    if (hasServiceName) {
+      // Service name provided - always use service path (single service booking)
+      effectiveType = "service";
+      if (hasPackageName) {
+        console.log(`[Check] WARNING: Both service_name="${service_name || service_type}" and package_name="${package_name}" provided. Using SERVICE path (service takes priority).`);
+      }
+    } else if (hasPackageName) {
+      // Only package name provided (no service name) - use package path
+      effectiveType = "package";
+      if (type !== "package") {
+        console.log(`[Package] Routing via package_name fallback: "${package_name}" (type field was: "${type || "undefined"}")`);
       }
     } else {
-      // No name provided at all - use type field or default to service
+      // Neither service nor package name provided - use type field or default to service
       effectiveType = type || "service";
-      console.log(`[Check] No name provided. Using type field: "${effectiveType}"`);
+      console.log(`[Check] No service_name or package_name provided. Using type field: "${effectiveType}"`);
     }
 
     // ========== PACKAGE AVAILABILITY ==========
